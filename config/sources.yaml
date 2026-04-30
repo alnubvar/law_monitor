@@ -1,0 +1,252 @@
+- name: Правительство РФ - документы
+  url: http://government.ru/docs/
+  level: federal
+  region: federal
+  source_type: html_listing
+  enabled: true
+  parser: government
+  verify_ssl: true
+  request_timeout: 30
+  request_headers:
+    User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0 Safari/537.36
+    Accept-Language: ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7
+  max_items: 60
+  deny_patterns:
+    - "archive"
+    - "search"
+  allow_patterns:
+    - "/docs/"
+    - ".pdf"
+    - ".doc"
+    - ".docx"
+  description: Федеральные документы и постановления Правительства РФ.
+
+- name: Правительство РФ - новости
+  url: http://government.ru/news/
+  level: federal
+  region: federal
+  source_type: html_listing
+  enabled: true
+  parser: government
+  verify_ssl: true
+  request_timeout: 30
+  request_headers:
+    User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0 Safari/537.36
+    Accept-Language: ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7
+  max_items: 40
+  deny_patterns:
+    - "dt.since"
+    - "dt.till"
+    - "page="
+  allow_patterns:
+    - "/news/"
+  description: Федеральные новости и анонсы решений Правительства РФ.
+
+- name: Regulation.gov.ru
+  url: https://regulation.gov.ru/
+  level: federal
+  region: federal
+  source_type: html_listing
+  enabled: true
+  parser: generic_html
+  verify_ssl: true
+  request_timeout: 30
+  request_headers:
+    User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0 Safari/537.36
+    Accept-Language: ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7
+  max_items: 20
+  deny_patterns:
+    - "search"
+    - "archive"
+  allow_patterns:
+    - "regulation"
+    - "project"
+    - "document"
+  description: Федеральный портал проектов нормативных актов и общественных обсуждений.
+
+- name: Минсельхоз Краснодарского края - субсидирование и финансирование
+  url: https://msh.krasnodar.ru/documents/subsidirovanie-i-finansirovanie1
+  level: regional
+  region: krasnodar
+  source_type: html_listing
+  enabled: true
+  parser: generic_html
+  verify_ssl: false
+  request_timeout: 30
+  request_headers:
+    User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0 Safari/537.36
+    Accept-Language: ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7
+  max_items: 30
+  deny_patterns:
+    - "/news"
+    - "/department"
+    - "/contacts"
+    - "/activity"
+    - "/serv"
+  allow_patterns:
+    - "subsid"
+    - "finans"
+    - "document"
+    - ".pdf"
+    - ".doc"
+    - ".docx"
+  description: Региональные документы по субсидированию и финансированию АПК Краснодарского края.
+
+- name: Минсельхоз Ростовской области - господдержка
+  url: https://mcx.donland.ru/activity/35217/
+  level: regional
+  region: rostov
+  source_type: html_listing
+  enabled: true
+  parser: generic_html
+  verify_ssl: true
+  request_timeout: 30
+  request_headers:
+    User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0 Safari/537.36
+    Accept-Language: ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7
+    Referer: https://mcx.donland.ru/
+  max_items: 30
+  deny_patterns:
+    - "/request/"
+    - "/presscenter/"
+    - "/documents/all/"
+  allow_patterns:
+    - "/activity/"
+    - "support"
+    - "subsid"
+    - ".pdf"
+    - ".doc"
+    - ".docx"
+  description: Региональные материалы по господдержке АПК Ростовской области.
+
+- name: Минсельхоз Ставропольского края - господдержка
+  url: https://mshsk.ru/gospodderzhka/
+  level: regional
+  region: stavropol
+  source_type: html_listing
+  enabled: true
+  parser: generic_html
+  verify_ssl: false
+  request_timeout: 30
+  request_headers:
+    User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0 Safari/537.36
+    Accept-Language: ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7
+  max_items: 30
+  allow_patterns:
+    - "gospod"
+    - "subsid"
+    - ".pdf"
+    - ".doc"
+    - ".docx"
+  description: Региональные меры государственной поддержки АПК Ставропольского края.
+
+- name: Право Ростовской области
+  url: https://pravo.donland.ru/
+  level: regional
+  region: rostov
+  source_type: html_listing
+  enabled: true
+  parser: regional_law
+  verify_ssl: false
+  request_timeout: 30
+  request_headers:
+    User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0 Safari/537.36
+    Accept-Language: ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7
+  max_items: 25
+  deny_patterns:
+    - "/news/"
+  allow_patterns:
+    - "/doc/"
+    - "/fd/"
+    - ".pdf"
+    - ".doc"
+    - ".docx"
+  description: Официальный портал правовой информации Ростовской области.
+
+- name: Право Ставропольского края
+  url: https://pravo.stavregion.ru/
+  level: regional
+  region: stavropol
+  source_type: html_listing
+  enabled: true
+  parser: regional_law
+  verify_ssl: false
+  request_timeout: 30
+  request_headers:
+    User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0 Safari/537.36
+    Accept-Language: ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7
+  max_items: 25
+  allow_patterns:
+    - "document"
+    - "pravo"
+    - ".pdf"
+    - ".doc"
+    - ".docx"
+  description: Официальный правовой портал Ставропольского края.
+
+- name: Нормативные акты Краснодарского края
+  url: https://admkrai.krasnodar.ru/content/1291/
+  level: regional
+  region: krasnodar
+  source_type: html_listing
+  enabled: true
+  parser: regional_law
+  verify_ssl: false
+  request_timeout: 30
+  request_headers:
+    User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0 Safari/537.36
+    Accept-Language: ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7
+  max_items: 30
+  allow_patterns:
+    - "content/1291"
+    - "document"
+    - ".pdf"
+    - ".doc"
+    - ".docx"
+  description: Раздел с нормативными правовыми актами Краснодарского края.
+
+- name: ГИСП - меры поддержки АПК
+  url: https://gisp.gov.ru/nmp/main/1?recommended=0&searchstr=%D0%90%D0%9F%D0%9A
+  level: support_measures
+  region: federal
+  source_type: html_listing
+  enabled: true
+  parser: generic_html
+  verify_ssl: false
+  request_timeout: 30
+  request_headers:
+    User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0 Safari/537.36
+    Accept-Language: ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7
+  max_items: 20
+  deny_patterns:
+    - "recommended="
+    - "page="
+  allow_patterns:
+    - "nmp"
+    - "support"
+    - "measure"
+    - "apk"
+  description: Объявленные меры поддержки и отборы по тематике АПК.
+
+- name: ZOL.ru - зерновые новости
+  url: https://www.zol.ru/news/grain/
+  level: news
+  region: federal
+  source_type: html_listing
+  enabled: true
+  parser: generic_html
+  verify_ssl: true
+  request_timeout: 30
+  request_headers:
+    User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0 Safari/537.36
+    Accept-Language: ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7
+  max_items: 40
+  deny_patterns:
+    - "archive"
+    - "page="
+    - "comments"
+  allow_patterns:
+    - "/n/"
+    - "/news/"
+    - "grain"
+  description: Новостной источник для ранних сигналов по рынку зерновых и АПК.
