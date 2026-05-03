@@ -10,6 +10,7 @@ from app.pipeline.collect import run_collect
 from app.pipeline.diagnostics import run_diagnostics
 from app.pipeline.digest import run_demo_report, run_digest
 from app.pipeline.run import run_pipeline
+from app.pipeline.smoke import run_smoke_check
 from app.scheduler import run_scheduler, send_test_notification
 from app.storage import init_db
 
@@ -118,6 +119,17 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Опционально ограничить диагностику последними N днями.",
+    )
+
+    smoke_parser = subparsers.add_parser(
+        "smoke-check",
+        help="Безопасная production smoke-проверка без collect и без Telegram send.",
+    )
+    smoke_parser.add_argument(
+        "--days",
+        type=int,
+        default=7,
+        help="Период для dry-run report.",
     )
 
     demo_report_parser = subparsers.add_parser(
@@ -241,6 +253,11 @@ def main() -> int:
     if args.command == "diagnostics":
         print(run_diagnostics(days=args.days))
         return 0
+
+    if args.command == "smoke-check":
+        result = run_smoke_check(report_days=args.days)
+        print(result.render_text())
+        return result.exit_code
 
     if args.command == "demo-report":
         output_path = run_demo_report(days=args.days, output_path=args.output)
