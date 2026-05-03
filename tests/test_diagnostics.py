@@ -64,6 +64,28 @@ class DiagnosticsSmokeTest(unittest.TestCase):
         self.assertIn("Total documents: 0", output)
         self.assertIn("No documents found in the selected period.", output)
 
+    def test_diagnostics_days_output_contains_period_and_filter(self) -> None:
+        db_path = self._db_path("diagnostics_days.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=1,
+            source_name="ГИСП - меры поддержки АПК",
+            title="Льготное кредитование АПК",
+            action_level="requires_attention",
+            page_type="measure_card",
+        )
+        document.published_at = None
+        save_document(document, db_path)
+
+        output = run_diagnostics(db_path=db_path, days=7)
+
+        self.assertIn("Period: last 7 days", output)
+        self.assertIn("Date filter: collected_at", output)
+        self.assertIn(
+            "Warning: many documents have no published_at; --days uses collected_at as fallback.",
+            output,
+        )
+
     def test_diagnostics_correctly_counts_action_levels(self) -> None:
         db_path = self._db_path("diagnostics_counts.db")
         init_db(db_path)
@@ -100,11 +122,56 @@ class DiagnosticsSmokeTest(unittest.TestCase):
         self.assertIn("- requires_attention: 1", output)
         self.assertIn("- watchlist: 1", output)
         self.assertIn("- irrelevant: 1", output)
-        self.assertIn("ГИСП - меры поддержки АПК: total=2", output)
-        self.assertIn("missing_published_at=1", output)
-        self.assertIn("missing_summary=1", output)
+        self.assertIn("- ГИСП - меры поддержки АПК", output)
+        self.assertIn("total=2; RA=1; WL=1; BG=0; IRR=0", output)
+        self.assertIn("missing published_at=1", output)
+        self.assertIn("missing summary=1", output)
         self.assertIn("measure_card=2", output)
-        self.assertIn("Top noisy sources:", output)
+        self.assertIn("Low-signal sources:", output)
+
+    def test_source_lines_are_multiline_and_not_glued(self) -> None:
+        db_path = self._db_path("diagnostics_multiline.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=1,
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            title="Раздел субсидий",
+            action_level="watchlist",
+            page_type="reference_page",
+        )
+        save_document(document, db_path)
+
+        output = run_diagnostics(db_path=db_path)
+
+        self.assertIn("- Минсельхоз Краснодарского края - субсидирование и финансирование", output)
+        self.assertIn("registry/results=", output)
+        self.assertNotIn("missineference_page", output)
+        self.assertNotIn("irrelev-", output)
+        self.assertNotIn("registr-", output)
+
+    def test_low_signal_score_does_not_count_plain_watchlist_as_noise(self) -> None:
+        db_path = self._db_path("diagnostics_noise.db")
+        init_db(db_path)
+        watchlist_document = self._doc(
+            doc_id=1,
+            source_name="ZOL.ru - зерновые новости",
+            title="Производство сельхозпродукции в РФ выросло",
+            action_level="watchlist",
+            page_type="news_background",
+        )
+        irrelevant_document = self._doc(
+            doc_id=2,
+            source_name="ZOL.ru - зерновые новости",
+            title="Навигация",
+            action_level="irrelevant",
+            page_type="navigation",
+        )
+        save_document(watchlist_document, db_path)
+        save_document(irrelevant_document, db_path)
+
+        output = run_diagnostics(db_path=db_path)
+
+        self.assertIn("ZOL.ru - зерновые новости: low_signal=1/2 (50%)", output)
 
     def test_demo_report_generation_does_not_require_telegram_or_env(self) -> None:
         db_path = self._db_path("demo_report.db")
