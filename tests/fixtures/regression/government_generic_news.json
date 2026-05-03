@@ -1,0 +1,14 @@
+{
+  "id": "government_generic_news",
+  "source_name": "Правительство РФ - новости",
+  "source_role": "strategy",
+  "title": "Новости",
+  "url": "http://government.ru/news/",
+  "raw_text": "Правительство России. Раздел новостей и публикаций.",
+  "level": "federal",
+  "region": "federal",
+  "expected_action_level": "irrelevant",
+  "expected_page_type": "navigation",
+  "expected_source_role": "strategy",
+  "expected_not_action_level": "requires_attention"
+}

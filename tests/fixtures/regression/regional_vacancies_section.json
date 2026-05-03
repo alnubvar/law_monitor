@@ -1,0 +1,15 @@
+{
+  "id": "regional_vacancies_section",
+  "source_name": "Нормативные акты Краснодарского края",
+  "source_role": "regional_npa",
+  "title": "Вакансии",
+  "url": "https://admkrai.krasnodar.ru/content/1254/",
+  "raw_text": "Госслужба Вакансии Раздел с конкурсами на замещение должностей государственной службы.",
+  "level": "regional",
+  "region": "krasnodar",
+  "expected_action_level": "irrelevant",
+  "expected_page_type": "section_page",
+  "expected_source_role": "regional_npa",
+  "expected_business_signal_contains": "служебная страница",
+  "expected_not_action_level": "requires_attention"
+}

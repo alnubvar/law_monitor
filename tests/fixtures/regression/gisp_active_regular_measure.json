@@ -1,0 +1,14 @@
+{
+  "id": "gisp_active_regular_measure",
+  "source_name": "ГИСП - меры поддержки АПК",
+  "source_role": "active_support_measures",
+  "title": "Льготное кредитование АПК",
+  "url": "https://gisp.gov.ru/nmp/measure/9564204",
+  "raw_text": "Активная мера поддержки. На регулярной основе. НПА 22-68850-00258-Р. Льготное кредитование АПК.",
+  "level": "support_measures",
+  "region": "federal",
+  "expected_action_level": "requires_attention",
+  "expected_page_type": "measure_card",
+  "expected_source_role": "active_support_measures",
+  "expected_business_signal_contains": "Активная федеральная мера поддержки"
+}

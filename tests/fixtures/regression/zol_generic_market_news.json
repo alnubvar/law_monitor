@@ -1,0 +1,15 @@
+{
+  "id": "zol_generic_market_news",
+  "source_name": "ZOL.ru - зерновые новости",
+  "source_role": "news_signals",
+  "title": "В Австралии ожидается снижение урожайности",
+  "url": "https://www.zol.ru/n/41399",
+  "raw_text": "Рыночный обзор по зерну и погодным условиям без сигналов господдержки или регулирования.",
+  "level": "news",
+  "region": "federal",
+  "expected_action_level": "background",
+  "expected_page_type": "news_background",
+  "expected_source_role": "news_signals",
+  "expected_business_signal_contains": "Рыночный или отраслевой фон",
+  "expected_not_action_level": "requires_attention"
+}

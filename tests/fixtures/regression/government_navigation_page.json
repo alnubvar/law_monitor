@@ -1,0 +1,14 @@
+{
+  "id": "government_navigation_page",
+  "source_name": "Правительство РФ - документы",
+  "source_role": "strategy",
+  "title": "Карта сайта",
+  "url": "http://government.ru/sitemap/",
+  "raw_text": "Правительство России Работа Правительства Сельское хозяйство Следующая новость Предыдущая новость",
+  "level": "federal",
+  "region": "federal",
+  "expected_action_level": "irrelevant",
+  "expected_page_type": "navigation",
+  "expected_source_role": "strategy",
+  "expected_not_action_level": "requires_attention"
+}

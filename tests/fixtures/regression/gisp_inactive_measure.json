@@ -1,0 +1,15 @@
+{
+  "id": "gisp_inactive_measure",
+  "source_name": "ГИСП - меры поддержки АПК",
+  "source_role": "active_support_measures",
+  "title": "Субсидии на возмещение затрат",
+  "url": "https://gisp.gov.ru/nmp/measure/8130026",
+  "raw_text": "Не активная мера поддержки. Прием заявок до 30.06.2026. Конкурсный отбор проводился ранее.",
+  "level": "support_measures",
+  "region": "federal",
+  "expected_action_level": "watchlist",
+  "expected_page_type": "measure_card",
+  "expected_source_role": "active_support_measures",
+  "expected_business_signal_contains": "Неактивная мера поддержки",
+  "expected_not_action_level": "requires_attention"
+}

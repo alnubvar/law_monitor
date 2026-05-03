@@ -1,0 +1,15 @@
+{
+  "id": "gisp_non_target_measure",
+  "source_name": "ГИСП - меры поддержки АПК",
+  "source_role": "active_support_measures",
+  "title": "Льготные заёмное финансирование РФРП Ульяновской области по программе \"Финансирование АПК\".",
+  "url": "https://gisp.gov.ru/nmp/measure/12446930",
+  "raw_text": "Активная мера поддержки. На регулярной основе. Региональная программа Ульяновской области.",
+  "level": "support_measures",
+  "region": "federal",
+  "expected_action_level": "watchlist",
+  "expected_page_type": "measure_card",
+  "expected_source_role": "active_support_measures",
+  "expected_business_signal_contains": "вне целевой географии",
+  "expected_not_action_level": "requires_attention"
+}

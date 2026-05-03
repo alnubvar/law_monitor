@@ -1,0 +1,14 @@
+{
+  "id": "government_strategy_signal",
+  "source_name": "Правительство РФ - документы",
+  "source_role": "strategy",
+  "title": "Постановление о государственной поддержке АПК",
+  "url": "http://government.ru/docs/60001/",
+  "raw_text": "Проект постановления уточняет порядок предоставления субсидий сельскому хозяйству.",
+  "level": "federal",
+  "region": "federal",
+  "expected_action_level": "watchlist",
+  "expected_page_type": "new_rule",
+  "expected_source_role": "strategy",
+  "expected_business_signal_contains": "Стратегический федеральный сигнал"
+}
