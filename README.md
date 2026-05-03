@@ -157,6 +157,25 @@ python main.py notify-test
 python -m unittest discover -s tests -v
 ```
 
+## Deployment / 24/7 Run
+
+Для production-подготовки без изменения бизнес-логики добавлены:
+
+- `python main.py smoke-check`
+- Windows-first scripts в `scripts/`
+- deployment guide: [docs/deployment.md](docs/deployment.md)
+
+Быстрые команды:
+
+```powershell
+.\scripts\run_smoke_check.ps1
+.\scripts\run_scheduler_once.ps1
+.\scripts\run_scheduler.ps1
+.\scripts\backup_sqlite.ps1
+```
+
+Рекомендуемый текущий MVP-вариант: Windows host + SQLite + Task Scheduler + регулярный `run-scheduler --once`.
+
 ## Demo Report
 
 Для репозитория можно безопасно собрать коммитируемый пример:
