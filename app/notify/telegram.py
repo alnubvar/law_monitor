@@ -8,19 +8,12 @@ import requests
 
 from app import config
 from app.models import RawDocument
-from app.reports.markdown_report import classify_document_bucket
+from app.notify.telegram_formatter import build_digest_message
 
 logger = logging.getLogger(__name__)
 
 TELEGRAM_SEND_ATTEMPTS = 3
 TELEGRAM_RETRY_BACKOFF_SECONDS = 1.0
-TELEGRAM_REQUIRES_ATTENTION_LIMIT = 10
-TELEGRAM_WATCHLIST_LIMIT = 5
-TELEGRAM_WATCHLIST_BUCKETS = {
-    "support_reference",
-    "target_watchlist",
-    "industry_background",
-}
 
 
 def is_configured() -> bool:
@@ -119,48 +112,4 @@ def send_digest(documents: Sequence[RawDocument]) -> bool:
         logger.info("No documents for Telegram digest. Skipping.")
         return False
 
-    requires_attention: list[RawDocument] = []
-    watchlist: list[RawDocument] = []
-    for document in documents:
-        if document.support_status == "inactive":
-            continue
-        if document.application_status == "closed":
-            continue
-        if document.page_type == "reference_page":
-            continue
-        bucket = classify_document_bucket(document)
-        if document.action_level == "requires_attention" and bucket == "requires_attention":
-            requires_attention.append(document)
-            continue
-        if bucket in TELEGRAM_WATCHLIST_BUCKETS:
-            watchlist.append(document)
-
-    lines: list[str] = []
-    if requires_attention:
-        lines.append("🚨 Требует внимания:")
-        for document in requires_attention[:TELEGRAM_REQUIRES_ATTENTION_LIMIT]:
-            lines.append(f"- {document.title}")
-            details: list[str] = []
-            if document.support_status and document.support_status != "unknown":
-                details.append(f"статус: {document.support_status}")
-            if document.application_status and document.application_status != "unknown":
-                details.append(f"режим: {document.application_status}")
-            if details:
-                lines.append(f"  {'; '.join(details)}")
-            if document.deadline_text:
-                lines.append(f"  Срок: {document.deadline_text}")
-            if document.business_signal:
-                lines.append(f"  Сигнал: {document.business_signal}")
-            lines.append(f"  {document.url}")
-
-    if watchlist:
-        if lines:
-            lines.append("")
-        lines.append("📊 На наблюдении:")
-        for document in watchlist[:TELEGRAM_WATCHLIST_LIMIT]:
-            lines.append(f"- {document.title}")
-
-    if not lines:
-        lines.append("Новых документов для уведомления не найдено.")
-
-    return send_message("\n".join(lines))
+    return send_message(build_digest_message(documents))
