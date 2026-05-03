@@ -33,6 +33,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             region=region,
             title=title,
             url=url,
+            published_at=now,
             content_hash=f"hash-{doc_id}",
             raw_text="text",
             is_relevant=True,
@@ -219,12 +220,36 @@ class ReportGenerationSmokeTest(unittest.TestCase):
 
         self.assertIn("## Сводка", markdown)
         self.assertIn("Total documents: 4", markdown)
+        self.assertIn("Published date coverage: 4/4", markdown)
         self.assertIn("Visible documents: 2", markdown)
         self.assertIn("Requires attention count: 1", markdown)
         self.assertIn("Watchlist count: 1", markdown)
         self.assertIn("Support reference count: 1", markdown)
         self.assertIn("Скрыто как background/irrelevant: 2", markdown)
         self.assertIn("Что требует реакции сегодня: Льготное кредитование АПК", markdown)
+
+    def test_report_does_not_fail_when_published_at_is_none(self) -> None:
+        document = self._doc(
+            doc_id=1,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Производство сельхозпродукции в РФ выросло",
+            url="https://www.zol.ru/n/rf",
+            action_level="watchlist",
+            page_type="news_background",
+            summary="Федеральный фон по АПК.",
+        )
+        document.published_at = None
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-03",
+            period_days=7,
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn("Published date coverage: 0/1", markdown)
 
     def test_global_background_is_hidden_from_telegram_digest(self) -> None:
         from app.notify import telegram

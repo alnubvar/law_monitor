@@ -8,6 +8,7 @@ import requests
 from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 
 from app.config import DEFAULT_REQUEST_HEADERS, REQUEST_TIMEOUT
+from app.extractors.date_extractor import extract_published_at_from_html
 from app.extractors.site_extractors import (
     extract_government_content,
     extract_zol_content,
@@ -48,6 +49,7 @@ def _read_limited_text(response: requests.Response, max_bytes: int = MAX_HTML_BY
 def extract_text_from_html(
     url: str,
     *,
+    source_name: str | None = None,
     headers: Mapping[str, str] | None = None,
     timeout: int | None = None,
     verify_ssl: bool = True,
@@ -71,12 +73,27 @@ def extract_text_from_html(
 
     text_body = _read_limited_text(response)
     lowered_url = url.lower()
+    extracted_published_at = extract_published_at_from_html(
+        text_body,
+        source_name or "",
+        response.url,
+    )
+    published_at_value = None
+    if extracted_published_at is not None:
+        from datetime import datetime, time, timezone
+
+        published_at_value = datetime.combine(
+            extracted_published_at,
+            time.min,
+            tzinfo=timezone.utc,
+        )
 
     if "government.ru" in lowered_url:
         extracted = extract_government_content(text_body, response.url)
         return ExtractionResult(
             raw_text=extracted.text,
             document_type="xml" if _is_xml_like(content_type) else "html",
+            published_at=published_at_value,
             error=None
             if extracted.content_quality == "good"
             else f"content_quality={extracted.content_quality}",
@@ -86,6 +103,7 @@ def extract_text_from_html(
         return ExtractionResult(
             raw_text=extracted.text,
             document_type="xml" if _is_xml_like(content_type) else "html",
+            published_at=published_at_value,
             error=None
             if extracted.content_quality == "good"
             else f"content_quality={extracted.content_quality}",
@@ -109,4 +127,5 @@ def extract_text_from_html(
     return ExtractionResult(
         raw_text=text,
         document_type="xml" if _is_xml_like(content_type) else "html",
+        published_at=published_at_value,
     )

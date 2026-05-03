@@ -7,7 +7,7 @@ from typing import Iterable
 
 from app.config import DB_PATH
 from app.models import RawDocument
-from app.storage import init_db, list_documents
+from app.storage import backfill_missing_published_at, init_db, list_documents
 
 NOISY_PAGE_TYPES = {
     "reference_page",
@@ -38,6 +38,7 @@ class SourceDiagnosticsRow:
     measure_card_count: int
     noisy_count: int
     noisy_ratio: float
+    published_at_coverage: str
 
 
 @dataclass(slots=True)
@@ -49,8 +50,11 @@ class DiagnosticsSnapshot:
     action_level_totals: dict[str, int]
     rows: list[SourceDiagnosticsRow]
     missing_published_at_total: int
+    published_at_present_total: int
+    published_at_coverage: str
     filtered_by: str
     warning: str | None
+    backfilled_count: int
 
 
 def build_diagnostics_snapshot(
@@ -72,6 +76,7 @@ def build_diagnostics_snapshot(
     missing_published_at_total = sum(
         1 for document in document_list if document.published_at is None
     )
+    published_at_present_total = len(document_list) - missing_published_at_total
 
     for source_name, source_documents in sorted(grouped.items()):
         requires_attention_count = sum(
@@ -129,6 +134,7 @@ def build_diagnostics_snapshot(
                 measure_card_count=measure_card_count,
                 noisy_count=noisy_count,
                 noisy_ratio=(noisy_count / total_documents) if total_documents else 0.0,
+                published_at_coverage=f"{total_documents - missing_published_at_count}/{total_documents}",
             )
         )
 
@@ -140,12 +146,15 @@ def build_diagnostics_snapshot(
         action_level_totals=action_level_totals,
         rows=rows,
         missing_published_at_total=missing_published_at_total,
-        filtered_by="collected_at",
+        published_at_present_total=published_at_present_total,
+        published_at_coverage=f"{published_at_present_total}/{len(document_list)}",
+        filtered_by="published_at with collected_at fallback",
         warning=(
-            "Warning: many documents have no published_at; --days uses collected_at as fallback."
+            "Warning: many documents have no published_at; --days uses published_at with collected_at fallback."
             if days is not None and missing_published_at_total > 0
             else None
         ),
+        backfilled_count=0,
     )
 
 
@@ -162,7 +171,10 @@ def format_diagnostics(snapshot: DiagnosticsSnapshot) -> str:
         f"Date filter: {snapshot.filtered_by}",
         f"Total documents: {snapshot.total_documents}",
         f"Sources: {snapshot.source_count}",
+        f"Published_at coverage: {snapshot.published_at_coverage}",
     ]
+    if snapshot.backfilled_count > 0:
+        lines.append(f"Published_at backfilled this run: {snapshot.backfilled_count}")
     if snapshot.warning:
         lines.append(snapshot.warning)
     lines.extend(
@@ -192,6 +204,7 @@ def format_diagnostics(snapshot: DiagnosticsSnapshot) -> str:
                 f"IRR={row.irrelevant_count}",
                 "  "
                 f"missing published_at={row.missing_published_at_count}; "
+                f"coverage={row.published_at_coverage}; "
                 f"missing summary={row.missing_summary_count}; "
                 f"missing raw_text={row.missing_raw_text_count}",
                 "  "
@@ -225,6 +238,8 @@ def run_diagnostics(
     resolved_db_path = Path(db_path) if db_path is not None else DB_PATH
     if not resolved_db_path.exists():
         init_db(resolved_db_path)
+    backfilled_count = backfill_missing_published_at(resolved_db_path)
     documents = list_documents(db_path=resolved_db_path, days=days)
     snapshot = build_diagnostics_snapshot(documents, days=days)
+    snapshot.backfilled_count = backfilled_count
     return format_diagnostics(snapshot)

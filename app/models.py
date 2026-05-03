@@ -62,6 +62,7 @@ class ExtractionResult(BaseModel):
     raw_text: str = ""
     local_file_path: str | None = None
     document_type: str = "unknown"
+    published_at: datetime | None = None
     needs_ocr: bool = False
     error: str | None = None
 

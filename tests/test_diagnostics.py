@@ -62,6 +62,7 @@ class DiagnosticsSmokeTest(unittest.TestCase):
         output = run_diagnostics(db_path=db_path)
 
         self.assertIn("Total documents: 0", output)
+        self.assertIn("Published_at coverage: 0/0", output)
         self.assertIn("No documents found in the selected period.", output)
 
     def test_diagnostics_days_output_contains_period_and_filter(self) -> None:
@@ -80,9 +81,9 @@ class DiagnosticsSmokeTest(unittest.TestCase):
         output = run_diagnostics(db_path=db_path, days=7)
 
         self.assertIn("Period: last 7 days", output)
-        self.assertIn("Date filter: collected_at", output)
+        self.assertIn("Date filter: published_at with collected_at fallback", output)
         self.assertIn(
-            "Warning: many documents have no published_at; --days uses collected_at as fallback.",
+            "Warning: many documents have no published_at; --days uses published_at with collected_at fallback.",
             output,
         )
 
@@ -122,9 +123,10 @@ class DiagnosticsSmokeTest(unittest.TestCase):
         self.assertIn("- requires_attention: 1", output)
         self.assertIn("- watchlist: 1", output)
         self.assertIn("- irrelevant: 1", output)
+        self.assertIn("Published_at coverage: 2/3", output)
         self.assertIn("- ГИСП - меры поддержки АПК", output)
         self.assertIn("total=2; RA=1; WL=1; BG=0; IRR=0", output)
-        self.assertIn("missing published_at=1", output)
+        self.assertIn("missing published_at=1; coverage=1/2", output)
         self.assertIn("missing summary=1", output)
         self.assertIn("measure_card=2", output)
         self.assertIn("Low-signal sources:", output)

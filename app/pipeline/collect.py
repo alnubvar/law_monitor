@@ -17,6 +17,7 @@ from app.sources.generic_html_source import GenericHTMLSource
 from app.sources.government_source import GovernmentSource
 from app.sources.regional_law_source import RegionalLawSource
 from app.storage import (
+    update_document_published_at_by_url,
     clear_source_errors,
     document_exists_by_hash,
     document_exists_by_url,
@@ -74,7 +75,11 @@ def extract_document(item: CollectedItem, source_config: SourceConfig) -> Extrac
         )
 
     if item.document_type == "xml":
-        return extract_text_from_html(item.url, **request_options)
+        return extract_text_from_html(
+            item.url,
+            source_name=source_config.name,
+            **request_options,
+        )
 
     if item.document_type == "unknown":
         return ExtractionResult(
@@ -83,7 +88,11 @@ def extract_document(item: CollectedItem, source_config: SourceConfig) -> Extrac
             error="Unsupported document type for MVP extractor",
         )
 
-    return extract_text_from_html(item.url, **request_options)
+    return extract_text_from_html(
+        item.url,
+        source_name=source_config.name,
+        **request_options,
+    )
 
 
 def run_collect(source_name: str | None = None, limit: int | None = None) -> int:
@@ -132,6 +141,11 @@ def run_collect(source_name: str | None = None, limit: int | None = None) -> int
                 )
             try:
                 if document_exists_by_url(item.url):
+                    if item.published_at is not None:
+                        update_document_published_at_by_url(
+                            item.url,
+                            item.published_at,
+                        )
                     logger.debug("Skip existing URL: %s", item.url)
                     source_skipped_existing += 1
                     continue
@@ -152,7 +166,7 @@ def run_collect(source_name: str | None = None, limit: int | None = None) -> int
                     region=item.region,
                     title=item.title,
                     url=item.url,
-                    published_at=item.published_at,
+                    published_at=item.published_at or extracted.published_at,
                     content_hash=content_hash,
                     raw_text=extracted.raw_text,
                     local_file_path=extracted.local_file_path,

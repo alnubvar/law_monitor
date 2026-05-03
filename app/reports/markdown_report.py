@@ -616,6 +616,9 @@ def _format_header_summary(
         for document in documents
         if document.action_level in {"background", "irrelevant"}
     )
+    published_with_date_count = sum(
+        1 for document in documents if document.published_at is not None
+    )
     period_text = (
         f"Последние {period_days} дн."
         if period_days is not None
@@ -627,6 +630,7 @@ def _format_header_summary(
         f"- Дата генерации: {generated_at.strftime('%Y-%m-%d %H:%M:%S')}",
         f"- Период: {period_text}",
         f"- Total documents: {len(documents)}",
+        f"- Published date coverage: {published_with_date_count}/{len(documents)}",
         f"- Visible documents: {report_view.total_visible}",
         f"- Requires attention count: {requires_attention_count}",
         f"- Watchlist count: {watchlist_count}",

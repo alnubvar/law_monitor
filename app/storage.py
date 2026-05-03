@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import DB_PATH, ensure_directories
+from app.extractors.date_extractor import infer_published_at
 from app.models import AnalysisResult, RawDocument, SourceErrorRecord
 
 logger = logging.getLogger(__name__)
@@ -211,6 +212,25 @@ def document_exists_by_url(url: str, db_path: Path | str = DB_PATH) -> bool:
     return row is not None
 
 
+def update_document_published_at_by_url(
+    url: str,
+    published_at: datetime,
+    db_path: Path | str = DB_PATH,
+) -> int:
+    with _connect_db(db_path) as connection:
+        cursor = connection.execute(
+            """
+            UPDATE documents
+            SET published_at = ?
+            WHERE url = ?
+              AND published_at IS NULL
+            """,
+            (_serialize_dt(published_at), url),
+        )
+        connection.commit()
+        return int(cursor.rowcount or 0)
+
+
 def document_exists_by_hash(content_hash: str, db_path: Path | str = DB_PATH) -> bool:
     with _connect_db(db_path) as connection:
         row = connection.execute(
@@ -354,7 +374,7 @@ def list_recent_documents(
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     query = """
         SELECT * FROM documents
-        WHERE collected_at >= ?
+        WHERE COALESCE(published_at, collected_at) >= ?
     """
     parameters: list[Any] = [_serialize_dt(cutoff)]
     if relevant_only:
@@ -378,6 +398,7 @@ def list_recent_documents(
                 WHEN 'low' THEN 1
                 ELSE 0
             END DESC,
+            COALESCE(published_at, collected_at) DESC,
             collected_at DESC
     """
     if limit is not None:
@@ -422,12 +443,54 @@ def list_documents(
     parameters: tuple[Any, ...] = ()
     if days is not None:
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-        query += " WHERE collected_at >= ?"
+        query += " WHERE COALESCE(published_at, collected_at) >= ?"
         parameters = (_serialize_dt(cutoff),)
     query += " ORDER BY source_name ASC, collected_at DESC"
     with _connect_db(db_path) as connection:
         rows = connection.execute(query, parameters).fetchall()
     return [_row_to_document(row) for row in rows]
+
+
+def backfill_missing_published_at(
+    db_path: Path | str = DB_PATH,
+    *,
+    limit: int | None = None,
+) -> int:
+    query = """
+        SELECT id, title, raw_text, source_name, url
+        FROM documents
+        WHERE published_at IS NULL
+        ORDER BY collected_at DESC
+    """
+    parameters: tuple[Any, ...] = ()
+    if limit is not None:
+        query += " LIMIT ?"
+        parameters = (limit,)
+
+    updated = 0
+    with _connect_db(db_path) as connection:
+        rows = connection.execute(query, parameters).fetchall()
+        for row in rows:
+            inferred = infer_published_at(
+                title=str(row["title"] or ""),
+                raw_text=str(row["raw_text"] or ""),
+                source_name=str(row["source_name"] or ""),
+                url=str(row["url"] or ""),
+            )
+            if inferred is None:
+                continue
+            connection.execute(
+                """
+                UPDATE documents
+                SET published_at = ?
+                WHERE id = ?
+                  AND published_at IS NULL
+                """,
+                (_serialize_dt(inferred), int(row["id"])),
+            )
+            updated += 1
+        connection.commit()
+    return updated
 
 
 def list_unnotified_requires_attention(

@@ -5,7 +5,12 @@ from pathlib import Path
 
 from app.config import DOCS_DIR, REPORTS_DIR, ensure_directories
 from app.reports.markdown_report import generate_markdown_report, save_markdown_report
-from app.storage import init_db, list_recent_documents, list_recent_source_errors
+from app.storage import (
+    backfill_missing_published_at,
+    init_db,
+    list_recent_documents,
+    list_recent_source_errors,
+)
 
 
 def run_digest(
@@ -27,6 +32,7 @@ def run_digest(
     ensure_directories()
     if db_path is None:
         init_db()
+        backfill_missing_published_at()
         documents = list_recent_documents(
             days=days,
             relevant_only=False,
@@ -35,6 +41,7 @@ def run_digest(
         source_errors = list_recent_source_errors(days=days)
     else:
         init_db(db_path)
+        backfill_missing_published_at(db_path)
         documents = list_recent_documents(
             db_path=db_path,
             days=days,

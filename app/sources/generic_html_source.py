@@ -6,6 +6,7 @@ from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
 
+from app.extractors.date_extractor import extract_published_at_from_link_tag
 from app.models import CollectedItem
 from app.sources.base import BaseSource
 
@@ -83,6 +84,7 @@ class GenericHTMLSource(BaseSource):
                     region=self.config.region,
                     title=title,
                     url=normalized_url,
+                    published_at=self._extract_published_at(link, normalized_url),
                     document_type=document_type,
                 )
             )
@@ -161,3 +163,15 @@ class GenericHTMLSource(BaseSource):
         if len(normalized) < 4 and normalized in {"rss", "pdf", "doc"}:
             return False
         return True
+
+    def _extract_published_at(self, link: Tag, normalized_url: str):
+        extracted = extract_published_at_from_link_tag(
+            link,
+            source_name=self.config.name,
+            url=normalized_url,
+        )
+        if extracted is None:
+            return None
+        from datetime import datetime, time, timezone
+
+        return datetime.combine(extracted, time.min, tzinfo=timezone.utc)
