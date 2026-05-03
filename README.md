@@ -1,61 +1,115 @@
 # AHSTEP GR Monitor MVP
 
-Production-like MVP для GR-мониторинга НПА, господдержки и отраслевых сигналов в АПК.
+Production-like MVP для GR-мониторинга НПА, мер поддержки и отраслевых сигналов в АПК.
 
-Система собирает документы из федеральных и региональных источников, извлекает текст, применяет rule-based анализ с `document facts`, присваивает `action_level`, формирует markdown-отчет и отправляет уведомления в Telegram.
+Система собирает документы из федеральных и региональных источников, извлекает текст, применяет rule-based анализ с `document facts`, присваивает `action_level`, формирует markdown-отчеты и отправляет уведомления в Telegram.
 
-## Что делает система
+## Current MVP Status
 
-- собирает документы и новости по АПК;
-- анализирует страницы мер поддержки, новостей, приказов, реестров и протоколов;
-- извлекает `document facts`:
-  - статус меры;
-  - режим подачи;
-  - `NPA` / номер акта;
-  - `deadline_text`;
-  - `terms_text`;
-  - `business_signal`;
-- относит документы к одному из уровней приоритета;
-- формирует ежедневный markdown-report;
-- отправляет Telegram-уведомления;
-- поддерживает scheduler для hourly/daily запуска.
+- `collect / analyze / report / notify / scheduler` работают;
+- rule-based `document facts` внедрены;
+- `action_level` стабилизирован до ограниченного набора реальных GR-сигналов;
+- hourly alert и daily digest работают раздельно;
+- Telegram через proxy поддерживается для РФ-сервера;
+- SQLite, file logging, markdown reporting и tests уже встроены.
+
+## Что Делает Система
+
+- собирает документы, новости, разделы мер поддержки и региональные НПА;
+- извлекает текст из `html / pdf / docx`;
+- классифицирует документы по business-значимости;
+- вытаскивает прикладные факты для GR-аналитика;
+- формирует daily markdown-report и Telegram digest;
+- хранит историю в SQLite.
 
 ## Архитектура
 
 - `collect`
-  - загрузка источников из `config/sources.yaml`
-  - сбор ссылок и первичных метаданных
-  - извлечение текста из `html/pdf/docx`
+  загрузка источников из `config/sources.yaml`, сбор ссылок и первичных метаданных.
 - `analyze`
-  - rule-based классификация документа
-  - извлечение `document facts`
-  - присвоение `action_level`
+  rule-based классификация, page type detection, `document facts`, `action_level`.
 - `report`
-  - bucket-based markdown report
-  - разделение на main GR, support/reference, background
+  bucket-based markdown report с разделением на main GR, support/reference и background.
 - `notify`
-  - Telegram notifications
-  - поддержка proxy только для Telegram API
+  Telegram notifications и безопасная отправка через proxy только для Telegram API.
 - `scheduler`
-  - hourly collect/analyze/notify
-  - daily report + digest
+  hourly collect/analyze/notify и daily report cycle.
 
-## Action Level
+## Business Logic
+
+Система не считает документ срочным только потому, что в нем встречаются слова вроде `субсидия` или `господдержка`.
+
+Для документов мер поддержки она дополнительно учитывает:
+
+- статус меры: `active / inactive / unknown`;
+- режим: `open / closed / regular / unknown`;
+- target geography;
+- page type: карточка меры, раздел, реестр, протокол, фон;
+- business signal: короткое объяснение, почему документ попал в конкретный bucket.
+
+## Document Facts
+
+Для analyzed-документов сохраняются:
+
+- `support_status`
+- `is_active`
+- `is_continuous`
+- `application_status`
+- `npa_number`
+- `deadline_text`
+- `terms_text`
+- `business_signal`
+- `risk_notes`
+
+`deadline_text` хранит только реальные дедлайны реакции: прием заявок, срок подачи, конкурсный отбор, срок обсуждения.  
+`terms_text` хранит условия меры: срок кредита, срок займа, размер поддержки и похожие параметры.
+
+## Action Levels
 
 - `requires_attention`
-  - документ требует реакции GR-команды
+  документ требует реакции GR-команды.
 - `watchlist`
-  - документ важен для наблюдения, но без срочного действия
+  документ важен для наблюдения, но без срочного действия.
 - `background`
-  - полезный фон, но без прямого GR-сигнала
+  полезный отраслевой или региональный фон без прямого action signal.
 - `irrelevant`
-  - нерелевантный или служебный документ
+  нерелевантный, служебный или шумовой документ.
 
-## Структура проекта
+## Source Diagnostics
+
+Добавлена отдельная диагностика качества источников:
+
+```bash
+python main.py diagnostics
+python main.py diagnostics --days 7
+```
+
+Диагностика показывает:
+
+- сколько документов пришло по каждому источнику;
+- распределение по `requires_attention / watchlist / background / irrelevant`;
+- сколько документов без `published_at`;
+- сколько документов без `summary` или `raw_text`;
+- сколько `reference_page / registry / measure_card`;
+- топ источников по шуму.
+
+## Telegram Behavior
+
+- `hourly alert`
+  отправляет только новые `requires_attention`, у которых `notified = 0`.
+- `daily digest`
+  отправляет visible-документы из основных report buckets.
+- `notified flag`
+  выставляется только после успешной отправки Telegram-сообщения.
+- global / market background по умолчанию в Telegram digest не показывается.
+- proxy используется только для Telegram API, а не для парсинга источников.
+
+## Структура Проекта
 
 ```text
 app/
 config/
+docs/
 tests/
 main.py
 pyproject.toml
@@ -79,60 +133,41 @@ python -m pip install -e .
 
 Заполните `.env` по образцу `.env.example`.
 
-## Быстрый запуск
+## Быстрый Запуск
 
 ```bash
 python main.py analyze --force
-python main.py report
+python main.py diagnostics
+python main.py report --days 7 --action-level requires_attention watchlist --max-items 30
 python main.py run-scheduler --once
 ```
 
-## Основные команды
-
-Инициализация БД:
+## Основные Команды
 
 ```bash
 python main.py init-db
-```
-
-Сбор документов:
-
-```bash
 python main.py collect
-```
-
-Переанализ документов:
-
-```bash
 python main.py analyze --force
-```
-
-Построение отчета:
-
-```bash
+python main.py diagnostics
 python main.py report --days 7 --action-level requires_attention watchlist --max-items 30
-```
-
-Один полный scheduler cycle:
-
-```bash
+python main.py demo-report
 python main.py run-scheduler --once
-```
-
-Проверка Telegram:
-
-```bash
 python main.py telegram-check
 python main.py notify-test
-```
-
-Запуск тестов:
-
-```bash
 python -m unittest discover -s tests -v
 ```
 
-## Telegram и Proxy
+## Demo Report
+
+Для репозитория можно безопасно собрать коммитируемый пример:
+
+```bash
+python main.py demo-report
+```
+
+По умолчанию он сохраняется в [docs/demo_report.md](docs/demo_report.md) и не требует Telegram или специальных env-переменных сверх доступа к локальной SQLite базе.
+
+## Telegram И Proxy
 
 Для серверов в РФ Telegram API может быть недоступен напрямую.
 
@@ -174,7 +209,7 @@ TELEGRAM_PROXY_URL=http://login:password@ip:port
 
 - виртуальные окружения;
 - локальные БД;
-- `data/`, `logs/`, отчеты;
+- `data/`, `logs/`, runtime-отчеты;
 - `.env`;
 - служебные IDE-файлы.
 
@@ -183,14 +218,15 @@ TELEGRAM_PROXY_URL=http://login:password@ip:port
 - `app/`
 - `tests/`
 - `config/`
+- `docs/demo_report.md`
 - `pyproject.toml`
 - `README.md`
 
-## Текущее состояние MVP
+## Roadmap
 
-- `collect / analyze / report / notify / scheduler` работают;
-- `document facts` внедрены;
-- `action_level` стабилизирован;
-- Telegram через proxy работает;
-- SQLite, logging и markdown-reporting работают;
-- тесты проходят.
+- source-specific parsers
+- published_at and deadline quality
+- OCR для плохих PDF / сканов
+- PostgreSQL для production deployment
+- LLM summaries поверх очищенного source text
+- RAG / archive search по историческим документам

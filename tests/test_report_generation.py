@@ -162,6 +162,70 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertIn("Льготное кредитование АПК направлено", markdown)
         self.assertNotIn("Дополнительные длинные детали для проверки сокращения summary в отчете.", markdown)
 
+    def test_report_header_contains_key_counters(self) -> None:
+        requires_attention_document = self._doc(
+            doc_id=1,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Льготное кредитование АПК",
+            url="https://gisp.gov.ru/nmp/measure/9564204",
+            action_level="requires_attention",
+            page_type="measure_card",
+            summary="Активная федеральная мера поддержки.",
+        )
+        watchlist_document = self._doc(
+            doc_id=2,
+            source_name="Минсельхоз Ставропольского края - господдержка",
+            region="stavropol",
+            title="Анкета получателя мер государственной поддержки",
+            url="https://mshsk.ru/anketa.docx",
+            action_level="watchlist",
+            page_type="reference_page",
+            summary="Справочный документ.",
+        )
+        background_document = self._doc(
+            doc_id=3,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Производство сельхозпродукции в РФ выросло",
+            url="https://www.zol.ru/n/rf",
+            action_level="background",
+            page_type="news_background",
+            summary="Федеральный фон по АПК.",
+        )
+        irrelevant_document = self._doc(
+            doc_id=4,
+            source_name="Правительство РФ - новости",
+            region="federal",
+            title="Навигационная страница",
+            url="https://government.ru/navigation",
+            action_level="irrelevant",
+            page_type="navigation",
+            summary="Служебная страница.",
+        )
+
+        markdown = generate_markdown_report(
+            [
+                requires_attention_document,
+                watchlist_document,
+                background_document,
+                irrelevant_document,
+            ],
+            report_date="2026-04-30",
+            period_days=7,
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn("## Сводка", markdown)
+        self.assertIn("Total documents: 4", markdown)
+        self.assertIn("Visible documents: 2", markdown)
+        self.assertIn("Requires attention count: 1", markdown)
+        self.assertIn("Watchlist count: 1", markdown)
+        self.assertIn("Support reference count: 1", markdown)
+        self.assertIn("Скрыто как background/irrelevant: 2", markdown)
+        self.assertIn("Что требует реакции сегодня: Льготное кредитование АПК", markdown)
+
     def test_global_background_is_hidden_from_telegram_digest(self) -> None:
         from app.notify import telegram
 

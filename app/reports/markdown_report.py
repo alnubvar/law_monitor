@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 import re
 from typing import Iterable
@@ -141,6 +142,10 @@ def generate_markdown_report(
     documents: Iterable[RawDocument],
     report_date: str,
     *,
+    period_days: int | None = None,
+    generated_at: datetime | None = None,
+    report_title: str | None = None,
+    intro_note: str | None = None,
     relevant_only: bool = True,
     max_items: int | None = None,
     source_errors: Iterable[SourceErrorRecord] | None = None,
@@ -165,7 +170,19 @@ def generate_markdown_report(
     )
     error_records = list(source_errors or [])
 
-    lines: list[str] = [f"# GR-мониторинг за {report_date}", ""]
+    generated_at_value = generated_at or datetime.now()
+    lines: list[str] = [report_title or f"# GR-мониторинг за {report_date}", ""]
+    if intro_note:
+        lines.extend([intro_note, ""])
+    lines.extend(
+        _format_header_summary(
+            document_list,
+            report_view=report_view,
+            report_date=report_date,
+            period_days=period_days,
+            generated_at=generated_at_value,
+        )
+    )
     for bucket in REPORT_BUCKET_ORDER:
         if bucket == "market_background" and not include_market_background:
             continue
@@ -578,6 +595,57 @@ def _format_stats(
         lines.append("- Источники с ошибками: нет")
     lines.append("")
     return lines
+
+
+def _format_header_summary(
+    documents: list[RawDocument],
+    *,
+    report_view: ReportView,
+    report_date: str,
+    period_days: int | None,
+    generated_at: datetime,
+) -> list[str]:
+    requires_attention_count = sum(
+        1 for document in documents if document.action_level == "requires_attention"
+    )
+    watchlist_count = sum(
+        1 for document in documents if document.action_level == "watchlist"
+    )
+    hidden_background_irrelevant_count = sum(
+        1
+        for document in documents
+        if document.action_level in {"background", "irrelevant"}
+    )
+    period_text = (
+        f"Последние {period_days} дн."
+        if period_days is not None
+        else f"Дата отчета: {report_date}"
+    )
+    reaction_text = _build_reaction_summary(report_view)
+    return [
+        "## Сводка",
+        f"- Дата генерации: {generated_at.strftime('%Y-%m-%d %H:%M:%S')}",
+        f"- Период: {period_text}",
+        f"- Total documents: {len(documents)}",
+        f"- Visible documents: {report_view.total_visible}",
+        f"- Requires attention count: {requires_attention_count}",
+        f"- Watchlist count: {watchlist_count}",
+        f"- Support reference count: {report_view.total_bucket_counts['support_reference']}",
+        f"- Скрыто как background/irrelevant: {hidden_background_irrelevant_count}",
+        f"- Что требует реакции сегодня: {reaction_text}",
+        "",
+    ]
+
+
+def _build_reaction_summary(report_view: ReportView) -> str:
+    requires_attention_documents = report_view.shown_buckets.get("requires_attention", [])
+    if not requires_attention_documents:
+        return "Срочных GR-сигналов не найдено."
+    titles = [document.title for document in requires_attention_documents[:3]]
+    if len(requires_attention_documents) > 3:
+        extra_count = len(requires_attention_documents) - 3
+        return f"{'; '.join(titles)}; и еще {extra_count}."
+    return "; ".join(titles)
 
 
 def save_markdown_report(markdown: str, path: Path) -> None:

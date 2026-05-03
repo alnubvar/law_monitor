@@ -1,0 +1,138 @@
+from __future__ import annotations
+
+import unittest
+from datetime import datetime, timezone
+from pathlib import Path
+
+from app.models import RawDocument
+from app.pipeline.diagnostics import run_diagnostics
+from app.pipeline.digest import run_demo_report
+from app.storage import init_db, save_document
+
+
+class DiagnosticsSmokeTest(unittest.TestCase):
+    def _db_path(self, name: str) -> Path:
+        path = Path(f"data/test_artifacts/{name}")
+        if path.exists():
+            path.unlink()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _doc(
+        self,
+        *,
+        doc_id: int,
+        source_name: str,
+        title: str,
+        action_level: str,
+        page_type: str,
+        summary: str = "summary",
+        raw_text: str = "raw text",
+    ) -> RawDocument:
+        return RawDocument(
+            id=doc_id,
+            source_name=source_name,
+            source_url=f"https://example.com/{doc_id}",
+            level="federal",
+            region="federal",
+            title=title,
+            url=f"https://example.com/doc/{doc_id}",
+            published_at=datetime.now(timezone.utc),
+            collected_at=datetime.now(timezone.utc),
+            content_hash=f"hash-{doc_id}",
+            raw_text=raw_text,
+            is_relevant=action_level != "irrelevant",
+            relevance_reason="reason",
+            importance="high" if action_level == "requires_attention" else "medium",
+            action_level=action_level,
+            page_type=page_type,
+            summary=summary,
+            impact="impact",
+            topic="topic",
+            support_status="active" if page_type == "measure_card" else "unknown",
+            application_status="regular" if page_type == "measure_card" else "unknown",
+            business_signal="signal",
+            status="analyzed",
+        )
+
+    def test_diagnostics_does_not_fail_on_empty_database(self) -> None:
+        db_path = self._db_path("diagnostics_empty.db")
+        init_db(db_path)
+
+        output = run_diagnostics(db_path=db_path)
+
+        self.assertIn("Total documents: 0", output)
+        self.assertIn("No documents found in the selected period.", output)
+
+    def test_diagnostics_correctly_counts_action_levels(self) -> None:
+        db_path = self._db_path("diagnostics_counts.db")
+        init_db(db_path)
+        first = self._doc(
+            doc_id=1,
+            source_name="ГИСП - меры поддержки АПК",
+            title="Льготное кредитование АПК",
+            action_level="requires_attention",
+            page_type="measure_card",
+        )
+        second = self._doc(
+            doc_id=2,
+            source_name="ГИСП - меры поддержки АПК",
+            title="Гарантия ВЭБ.РФ",
+            action_level="watchlist",
+            page_type="measure_card",
+            summary="",
+        )
+        second.published_at = None
+        third = self._doc(
+            doc_id=3,
+            source_name="ZOL.ru - зерновые новости",
+            title="Навигационная страница",
+            action_level="irrelevant",
+            page_type="navigation",
+            raw_text="",
+        )
+
+        for document in (first, second, third):
+            save_document(document, db_path)
+
+        output = run_diagnostics(db_path=db_path)
+
+        self.assertIn("- requires_attention: 1", output)
+        self.assertIn("- watchlist: 1", output)
+        self.assertIn("- irrelevant: 1", output)
+        self.assertIn("ГИСП - меры поддержки АПК: total=2", output)
+        self.assertIn("missing_published_at=1", output)
+        self.assertIn("missing_summary=1", output)
+        self.assertIn("measure_card=2", output)
+        self.assertIn("Top noisy sources:", output)
+
+    def test_demo_report_generation_does_not_require_telegram_or_env(self) -> None:
+        db_path = self._db_path("demo_report.db")
+        output_path = Path("data/test_artifacts/demo_report.md")
+        if output_path.exists():
+            output_path.unlink()
+        init_db(db_path)
+        document = self._doc(
+            doc_id=1,
+            source_name="ГИСП - меры поддержки АПК",
+            title="Льготное кредитование АПК",
+            action_level="requires_attention",
+            page_type="measure_card",
+        )
+        document.npa_number = "22-68850-00258-Р"
+        document.terms_text = "Срок кредита: До 12 месяцев."
+        document.business_signal = "Активная федеральная мера поддержки, действует на регулярной основе"
+        save_document(document, db_path)
+
+        path = run_demo_report(db_path=db_path, output_path=str(output_path))
+        markdown = path.read_text(encoding="utf-8")
+
+        self.assertTrue(path.exists())
+        self.assertIn("# AHSTEP Demo Report", markdown)
+        self.assertIn("Льготное кредитование АПК", markdown)
+        self.assertIn("НПА: 22-68850-00258-Р", markdown)
+        self.assertIn("Сигнал: Активная федеральная мера поддержки", markdown)
+
+
+if __name__ == "__main__":
+    unittest.main()

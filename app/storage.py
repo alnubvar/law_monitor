@@ -413,6 +413,23 @@ def list_recent_source_errors(
     ]
 
 
+def list_documents(
+    db_path: Path | str = DB_PATH,
+    *,
+    days: int | None = None,
+) -> list[RawDocument]:
+    query = "SELECT * FROM documents"
+    parameters: tuple[Any, ...] = ()
+    if days is not None:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        query += " WHERE collected_at >= ?"
+        parameters = (_serialize_dt(cutoff),)
+    query += " ORDER BY source_name ASC, collected_at DESC"
+    with _connect_db(db_path) as connection:
+        rows = connection.execute(query, parameters).fetchall()
+    return [_row_to_document(row) for row in rows]
+
+
 def list_unnotified_requires_attention(
     db_path: Path | str = DB_PATH,
 ) -> list[RawDocument]:

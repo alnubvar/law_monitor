@@ -7,7 +7,8 @@ from app.config import setup_logging
 from app.notify.telegram import get_diagnostic_status
 from app.pipeline.analyze import run_analyze
 from app.pipeline.collect import run_collect
-from app.pipeline.digest import run_digest
+from app.pipeline.diagnostics import run_diagnostics
+from app.pipeline.digest import run_demo_report, run_digest
 from app.pipeline.run import run_pipeline
 from app.scheduler import run_scheduler, send_test_notification
 from app.storage import init_db
@@ -106,6 +107,34 @@ def build_parser() -> argparse.ArgumentParser:
         "--include-full-background",
         action="store_true",
         help="Показывать полный отраслевой фон и фон вне целевой географии без лимита 5 пунктов.",
+    )
+
+    diagnostics_parser = subparsers.add_parser(
+        "diagnostics",
+        help="Показать диагностику качества источников и action_level по базе.",
+    )
+    diagnostics_parser.add_argument(
+        "--days",
+        type=int,
+        default=None,
+        help="Опционально ограничить диагностику последними N днями.",
+    )
+
+    demo_report_parser = subparsers.add_parser(
+        "demo-report",
+        help="Сформировать безопасный demo-report для docs/demo_report.md.",
+    )
+    demo_report_parser.add_argument(
+        "--days",
+        type=int,
+        default=7,
+        help="Период demo report в днях.",
+    )
+    demo_report_parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="Путь к demo markdown-файлу.",
     )
 
     run_parser = subparsers.add_parser(
@@ -207,6 +236,15 @@ def main() -> int:
             include_full_background=args.include_full_background,
         )
         print(f"Report saved to {Path(output_path).resolve()}")
+        return 0
+
+    if args.command == "diagnostics":
+        print(run_diagnostics(days=args.days))
+        return 0
+
+    if args.command == "demo-report":
+        output_path = run_demo_report(days=args.days, output_path=args.output)
+        print(f"Demo report saved to {Path(output_path).resolve()}")
         return 0
 
     if args.command == "run":
