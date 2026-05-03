@@ -240,6 +240,30 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         self.assertNotIn("Навигатор мер поддержки", result.summary)
         self.assertIn("Льготное кредитование АПК", result.summary)
 
+    def test_gisp_summary_removes_ui_ids_and_duplicate_title(self) -> None:
+        client = MockLLMClient(["транспортировка товаров апк"])
+
+        result = client.analyze_document(
+            "Господдержка. Транспортировка товаров АПК",
+            (
+                "Господдержка. Транспортировка товаров АПК .1104) "
+                "Господдержка. Транспортировка товаров АПК Конкурсное событие "
+                "Общая информация Требования Необходимые документы "
+                "На регулярной основе Администратор меры поддержки АО РЭЦ"
+            ),
+            source_name="ГИСП - меры поддержки АПК",
+            url="https://gisp.gov.ru/nmp/measure/9512857",
+            level="support_measures",
+        )
+
+        self.assertNotIn("1104)", result.summary)
+        self.assertNotIn("Конкурсное событие", result.summary)
+        self.assertNotIn("Общая информация", result.summary)
+        self.assertEqual(
+            result.summary.count("Господдержка. Транспортировка товаров АПК"),
+            1,
+        )
+
     def test_generic_subsidies_title_is_not_requires_attention(self) -> None:
         client = MockLLMClient(["государственная поддержка АПК"])
 
@@ -288,6 +312,24 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         self.assertTrue(result.is_continuous)
         self.assertEqual(result.application_status, "regular")
         self.assertEqual(result.action_level, "requires_attention")
+
+    def test_gisp_measure_url_stays_measure_card_even_with_rule_words(self) -> None:
+        client = MockLLMClient(["льготное кредитование АПК"])
+
+        result = client.analyze_document(
+            "Льготное кредитование АПК",
+            (
+                "Активная мера поддержки. На регулярной основе. "
+                "Приказ от 30.04.2026 упоминается в описании НПА. "
+                "Льготное кредитование АПК."
+            ),
+            source_name="ГИСП - меры поддержки АПК",
+            url="https://gisp.gov.ru/nmp/measure/9564204",
+            level="support_measures",
+            region="federal",
+        )
+
+        self.assertEqual(result.page_type, "measure_card")
 
     def test_veb_guarantee_active_regular_without_open_becomes_watchlist(self) -> None:
         client = MockLLMClient(["сельское хозяйство"])
@@ -506,6 +548,119 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
             result.business_signal,
             "Общий раздел документов/приказов; прямой GR-сигнал не выявлен.",
         )
+
+    def test_regional_subsidies_section_becomes_background_not_watchlist(self) -> None:
+        client = MockLLMClient(["государственная поддержка АПК"])
+
+        result = client.analyze_document(
+            "Субсидии",
+            "Главная Документы Субсидии Раздел с документами и архивом приказов.",
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://msh.krasnodar.ru/documents/subsidii/",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertEqual(result.page_type, "reference_page")
+        self.assertIn(result.action_level, {"background", "irrelevant"})
+        self.assertEqual(
+            result.business_signal,
+            "Общий раздел/список документов; прямой GR-сигнал не выявлен.",
+        )
+
+    def test_regional_vacancies_is_not_watchlist(self) -> None:
+        client = MockLLMClient(["сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Вакансии",
+            "Госслужба Вакансии Раздел с конкурсами на замещение должностей государственной службы.",
+            source_name="Нормативные акты Краснодарского края",
+            url="https://admkrai.krasnodar.ru/content/1254/",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertEqual(result.page_type, "section_page")
+        self.assertIn(result.action_level, {"irrelevant", "background"})
+
+    def test_regional_urban_planning_is_not_watchlist(self) -> None:
+        client = MockLLMClient(["сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Градостроительная деятельность",
+            "Генеральные планы Калькулятор процедур Контактный центр по вопросам предоставления услуг в электронном виде.",
+            source_name="Нормативные акты Краснодарского края",
+            url="https://admkrai.krasnodar.ru/content/1260/",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertEqual(result.page_type, "section_page")
+        self.assertIn(result.action_level, {"irrelevant", "background"})
+
+    def test_regional_contact_center_is_not_watchlist(self) -> None:
+        client = MockLLMClient(["сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Контактный центр по вопросам предоставления услуг в электронном виде",
+            "Контактный центр по вопросам предоставления услуг в электронном виде. Справочная информация для заявителей.",
+            source_name="Нормативные акты Краснодарского края",
+            url="https://admkrai.krasnodar.ru/content/1265/",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertEqual(result.page_type, "section_page")
+        self.assertIn(result.action_level, {"irrelevant", "background"})
+
+    def test_regional_procurement_is_not_watchlist(self) -> None:
+        client = MockLLMClient(["сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Закупки",
+            "Закупки Международное сотрудничество Защита от ЧС Аналитика Биржевая торговля в АПК.",
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://msh.krasnodar.ru/activity/purchases",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertEqual(result.page_type, "section_page")
+        self.assertIn(result.action_level, {"irrelevant", "background"})
+
+    def test_real_regional_subsidy_document_still_visible(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Объявлен отбор заявок на субсидии для АПК Краснодарского края",
+            "Прием заявок до 20 мая 2026 года. Субсидия предоставляется сельхозтоваропроизводителям.",
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://msh.krasnodar.ru/documents/subsidy-open-2026",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertNotEqual(result.page_type, "section_page")
+        self.assertIn(result.action_level, {"watchlist", "requires_attention"})
+
+    def test_government_real_sector_document_is_not_navigation(self) -> None:
+        client = MockLLMClient(["государственная поддержка АПК"])
+
+        result = client.analyze_document(
+            "Постановление о субсидиях для организаций АПК",
+            (
+                "Правительство России Постановление от 30.04.2026 "
+                "о субсидиях для организаций агропромышленного комплекса. "
+                "Внесены изменения в порядок предоставления субсидий."
+            ),
+            source_name="Правительство РФ - документы",
+            url="http://government.ru/docs/58699/",
+            level="federal",
+            region="federal",
+        )
+
+        self.assertNotEqual(result.page_type, "navigation")
+        self.assertNotEqual(result.action_level, "irrelevant")
 
 
 if __name__ == "__main__":

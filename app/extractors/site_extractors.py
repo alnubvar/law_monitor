@@ -24,6 +24,29 @@ COMMON_NAVIGATION_PHRASES = (
     "реклама на сайте",
     "следующая новость предыдущая новость",
 )
+GISP_NAVIGATION_MARKERS = (
+    "главная",
+    "избранное",
+    "сравнить",
+    "навига",
+    "найти",
+    "рекомендованные меры",
+    "смотреть все",
+    "подбор подходящих мер поддержки",
+    "скачать результаты pdf",
+    "фильтр",
+)
+GISP_UI_SECTION_RE = re.compile(
+    r"\b(общая информация|требования|необходимые документы|скачать условия)\b",
+    re.IGNORECASE,
+)
+GISP_UI_ID_RE = re.compile(r"(?<![\d-])\.?\s*\d{3,5}\)(?!\d)")
+REGIONAL_BREADCRUMB_MARKERS = (
+    "главная документы",
+    "главная деятельность",
+    "главная господдержка",
+    "объявления министерство сельского хозяйства",
+)
 ZOL_TAIL_MARKERS = (
     "комментарии",
     "похожие новости",
@@ -181,6 +204,10 @@ def clean_text_for_analysis(
         return _clean_government_text(title, url or "", normalized_text)
     if "zol.ru" in source_key or "зерновые новости" in source_key:
         return _clean_zol_text(title, normalized_text)
+    if "gisp.gov.ru" in source_key or "гисп - меры поддержки апк" in source_key:
+        return _clean_gisp_text(title, url or "", normalized_text)
+    if any(marker in source_key for marker in ("mcx.donland.ru", "msh.krasnodar.ru", "mshsk.ru", "admkrai.krasnodar.ru")):
+        return _clean_regional_portal_text(title, normalized_text)
     if normalized_text.startswith("SERVICE_PAGE"):
         return ExtractedContent(
             text=normalized_text,
@@ -252,6 +279,42 @@ def _clean_zol_text(title: str, raw_text: str) -> ExtractedContent:
             content_quality="navigation",
         )
     if len(cleaned) < 120:
+        return ExtractedContent(text=cleaned, content_quality="weak")
+    return ExtractedContent(text=cleaned, content_quality="good")
+
+
+def _clean_gisp_text(title: str, url: str, raw_text: str) -> ExtractedContent:
+    lowered = raw_text.lower()
+    if "/nmp/main/" in url.lower() and sum(marker in lowered for marker in GISP_NAVIGATION_MARKERS) >= 3:
+        return ExtractedContent(
+            text=_normalize_text(raw_text),
+            is_service_page=False,
+            content_quality="weak",
+        )
+
+    cleaned = GISP_UI_ID_RE.sub(" ", raw_text)
+    cleaned = re.sub(r"\bконкурсное событие\b", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = GISP_UI_SECTION_RE.sub(" ", cleaned)
+    cleaned = _drop_repeated_prefix(cleaned, title)
+    cleaned = _normalize_text(cleaned)
+    cleaned = _remove_duplicate_title_block(cleaned, title)
+    cleaned = _normalize_text(cleaned)
+    if len(cleaned) < 80:
+        return ExtractedContent(text=cleaned, content_quality="weak")
+    return ExtractedContent(text=cleaned, content_quality="good")
+
+
+def _clean_regional_portal_text(title: str, raw_text: str) -> ExtractedContent:
+    cleaned = raw_text
+    lowered = cleaned.lower()
+    for marker in REGIONAL_BREADCRUMB_MARKERS:
+        index = lowered.find(marker)
+        if index != -1:
+            cleaned = cleaned[index + len(marker):]
+            break
+    cleaned = _drop_repeated_prefix(cleaned, title, keep_title_if_missing=False)
+    cleaned = _normalize_text(cleaned)
+    if len(cleaned) < 60:
         return ExtractedContent(text=cleaned, content_quality="weak")
     return ExtractedContent(text=cleaned, content_quality="good")
 
@@ -365,7 +428,12 @@ def _find_effective_title_start(text: str, title: str) -> int:
     return occurrences[0]
 
 
-def _drop_repeated_prefix(text: str, title: str) -> str:
+def _drop_repeated_prefix(
+    text: str,
+    title: str,
+    *,
+    keep_title_if_missing: bool = True,
+) -> str:
     cleaned = text.strip()
     normalized_title = title.strip()
     if not normalized_title:
@@ -374,9 +442,22 @@ def _drop_repeated_prefix(text: str, title: str) -> str:
     while cleaned.lower().startswith(lowered_title):
         cleaned = cleaned[len(normalized_title) :].strip(" -:")
     cleaned = DATE_LINE_RE.sub("", cleaned, count=2).strip()
-    if normalized_title.lower() not in cleaned.lower():
+    if keep_title_if_missing and normalized_title.lower() not in cleaned.lower():
         cleaned = f"{normalized_title}. {cleaned}".strip()
     return cleaned
+
+
+def _remove_duplicate_title_block(text: str, title: str) -> str:
+    cleaned = text.strip()
+    normalized_title = _normalize_text(title)
+    if not normalized_title:
+        return cleaned
+    title_pattern = re.escape(normalized_title)
+    duplicate_re = re.compile(
+        rf"^({title_pattern}[.:]?\s+)(?:{title_pattern}[.:]?\s+)+",
+        re.IGNORECASE,
+    )
+    return duplicate_re.sub(r"\1", cleaned)
 
 
 def _looks_like_service_url(url: str) -> bool:

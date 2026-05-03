@@ -313,6 +313,7 @@ SUMMARY_UI_NOISE_PATTERNS = (
     r"\bнпа\b[^.]*",
     r"\bобщая информация\b",
     r"\bтребования\b",
+    r"\bнеобходимые документы\b",
     r"\bскачать условия\b",
     r"\bадминистратор меры поддержки\b[^.]*",
 )
@@ -350,6 +351,29 @@ PROJECT_DISCUSSION_SIGNALS = (
     "проект постановления",
     "проект приказа",
 )
+REGIONAL_GENERIC_SECTION_TITLES = {
+    "господдержка",
+    "субсидии",
+    "приказы",
+    "документы",
+}
+LOW_VALUE_REGIONAL_SECTION_TITLES = {
+    "вакансии",
+    "контактный центр по вопросам предоставления услуг в электронном виде",
+    "генеральные планы",
+    "градостроительная деятельность",
+    "закупки",
+    "международное сотрудничество",
+    "защита от чс",
+    "аналитика",
+    "биржевая торговля в апк",
+    "госслужба",
+    "открытые данные",
+    "противодействие коррупции",
+    "калькулятор процедур",
+}
+GISP_UI_ID_RE = re.compile(r"(?<![\d-])\.?\s*\d{3,5}\)(?!\d)")
+TITLE_DUPLICATE_RE_TEMPLATE = r"^({title}[.:]?\s+)(?:{title}[.:]?\s+)+"
 
 
 class MockLLMClient(BaseLLMClient):
@@ -404,7 +428,13 @@ class MockLLMClient(BaseLLMClient):
         is_relevant = action_level != "irrelevant"
         importance = self._detect_importance(action_level)
         topic = self._detect_topic(combined_text)
-        summary = self._build_summary(title, cleaned_text, matched_keywords)
+        summary = self._build_summary(
+            title,
+            cleaned_text,
+            matched_keywords,
+            source_name=source_name,
+            url=url,
+        )
         impact = self._build_impact(action_level, topic)
         business_signal = self._build_business_signal(
             action_level=action_level,
@@ -470,6 +500,20 @@ class MockLLMClient(BaseLLMClient):
         if YEAR_TITLE_RE.fullmatch(title_text):
             return "year_archive"
         if self._looks_orders_listing_page(title_text, url=url or "", domain=domain):
+            return "reference_page"
+        if self._looks_low_value_regional_section_page(
+            title_text,
+            lead_text,
+            domain=domain,
+            url=url or "",
+        ):
+            return "section_page"
+        if self._looks_generic_regional_section_page(
+            title_text,
+            lead_text,
+            domain=domain,
+            url=url or "",
+        ):
             return "reference_page"
         if is_service_page or content_quality == "navigation" or self._looks_irrelevant(title_text, body_text):
             return "navigation"
@@ -579,9 +623,24 @@ class MockLLMClient(BaseLLMClient):
         )
 
         if page_type in {"registry", "results_protocol", "reference_page"}:
+            if (
+                page_type == "reference_page"
+                and domain in {"mcx.donland.ru", "msh.krasnodar.ru", "mshsk.ru", "admkrai.krasnodar.ru"}
+                and (is_generic_support_title or self._looks_generic_regional_section_page(title_text, lead_text, domain=domain, url=url or ""))
+            ):
+                return "background"
             if has_any_action_signal or has_watch_in_title or has_watch_in_body or explicit_keywords or is_support_context:
                 return "watchlist"
             return "background"
+        if page_type in {"section_page", "category_page"} and self._looks_low_value_regional_section_page(
+            title_text,
+            lead_text,
+            domain=domain,
+            url=url or "",
+        ):
+            if has_strict_action_signal or has_project_discussion_signal:
+                return "watchlist"
+            return "irrelevant"
         if facts.application_status == "closed":
             if has_any_action_signal or has_watch_in_title or has_watch_in_body or explicit_keywords or is_support_context:
                 return "watchlist"
@@ -653,14 +712,25 @@ class MockLLMClient(BaseLLMClient):
         return "Общий мониторинг АПК" if "апк" in text or "сельск" in text else None
 
     def _build_summary(
-        self, title: str, raw_text: str, matched_keywords: Sequence[str]
+        self,
+        title: str,
+        raw_text: str,
+        matched_keywords: Sequence[str],
+        *,
+        source_name: str | None,
+        url: str | None,
     ) -> str:
         if not raw_text.strip():
             return self._limit_summary(
                 f"Найден документ '{title}', но текст пока не извлечен полностью."
             )
 
-        cleaned_text = self._clean_summary_text(raw_text)
+        cleaned_text = self._clean_summary_text(
+            raw_text,
+            title=title,
+            source_name=source_name,
+            url=url,
+        )
         sentences = SENTENCE_SPLIT_REGEX.split(cleaned_text)
         cleaned = [sentence.strip() for sentence in sentences if sentence.strip()]
         if not cleaned:
@@ -672,8 +742,18 @@ class MockLLMClient(BaseLLMClient):
             keyword = matched_keywords[0].lower()
             for sentence in cleaned:
                 if keyword in sentence.lower():
-                    return self._limit_summary(sentence)
-        return self._limit_summary(" ".join(cleaned[:2]))
+                    return self._finalize_summary(
+                        sentence,
+                        title=title,
+                        source_name=source_name,
+                        url=url,
+                    )
+        return self._finalize_summary(
+            " ".join(cleaned[:2]),
+            title=title,
+            source_name=source_name,
+            url=url,
+        )
 
     def _build_impact(self, action_level: str, topic: str | None) -> str:
         if action_level == "requires_attention":
@@ -771,6 +851,12 @@ class MockLLMClient(BaseLLMClient):
             return "Результаты/протокол отбора: не требует срочной реакции"
         if page_type == "reference_page" and "приказ" in title.lower():
             return "Общий раздел документов/приказов; прямой GR-сигнал не выявлен."
+        if (
+            page_type in {"reference_page", "section_page"}
+            and self._is_generic_regional_section_title(title)
+            and self._extract_domain(source_name, url) in {"mcx.donland.ru", "msh.krasnodar.ru", "mshsk.ru", "admkrai.krasnodar.ru"}
+        ):
+            return "Общий раздел/список документов; прямой GR-сигнал не выявлен."
         if page_type == "reference_page" and is_support_context:
             return "Страница похожа на раздел/листинг мер поддержки, не на конкретную карточку меры."
         if is_support_context and not (is_target_region or is_federal_measure) and facts.support_status == "active":
@@ -855,6 +941,61 @@ class MockLLMClient(BaseLLMClient):
             return True
         return False
 
+    def _looks_generic_regional_section_page(
+        self,
+        title: str,
+        lead_text: str,
+        *,
+        domain: str,
+        url: str,
+    ) -> bool:
+        if domain not in {"mcx.donland.ru", "msh.krasnodar.ru", "mshsk.ru", "admkrai.krasnodar.ru"}:
+            return False
+        if title not in REGIONAL_GENERIC_SECTION_TITLES and not title.startswith("приказы "):
+            return False
+        lower_url = url.lower()
+        listing_markers = (
+            "архив",
+            "раздел",
+            "главная",
+            "документы",
+            "приказы",
+            "субсидии",
+            "господдержка",
+            "перечень",
+        )
+        if any(marker in lead_text for marker in listing_markers):
+            return True
+        return any(fragment in lower_url for fragment in ("/documents/", "/activity/", "/content/"))
+
+    def _looks_low_value_regional_section_page(
+        self,
+        title: str,
+        lead_text: str,
+        *,
+        domain: str,
+        url: str,
+    ) -> bool:
+        if domain not in {"mcx.donland.ru", "msh.krasnodar.ru", "mshsk.ru", "admkrai.krasnodar.ru"}:
+            return False
+        normalized_title = title.lower().strip()
+        if normalized_title not in LOW_VALUE_REGIONAL_SECTION_TITLES:
+            return False
+        actionable_signals = (
+            "прием заявок",
+            "приём заявок",
+            "срок подачи",
+            "публичные консультации",
+            "публичное обсуждение",
+            "проект постановления",
+            "субсидия на",
+            "объявлен отбор",
+        )
+        if any(signal in lead_text for signal in actionable_signals):
+            return False
+        lower_url = url.lower()
+        return any(fragment in lower_url for fragment in ("/activity/", "/content/", "/documents/", "/vacancy", "/purchases"))
+
     def _looks_orders_listing_page(
         self,
         title: str,
@@ -863,7 +1004,7 @@ class MockLLMClient(BaseLLMClient):
         domain: str,
     ) -> bool:
         return (
-            domain in {"msh.krasnodar.ru", "mcx.donland.ru", "admkrai.krasnodar.ru"}
+            domain in {"msh.krasnodar.ru", "mcx.donland.ru", "admkrai.krasnodar.ru", "mshsk.ru"}
             and title.startswith("приказы ")
             and "/documents/" in url.lower()
         )
@@ -951,6 +1092,7 @@ class MockLLMClient(BaseLLMClient):
             "mcx.donland.ru",
             "admkrai.krasnodar.ru",
             "msh.krasnodar.ru",
+            "mshsk.ru",
             "gisp.gov.ru",
             "zol.ru",
         ):
@@ -979,8 +1121,6 @@ class MockLLMClient(BaseLLMClient):
 
         if domain == "gisp.gov.ru":
             if "/measure/" in url.lower():
-                if any(marker in title or marker in lead_text for marker in PAGE_TYPE_MARKERS["new_rule"]):
-                    return "new_rule"
                 return "measure_card"
             if "/nmp/main/" in url.lower() or "навига" in lead_text:
                 if title in GENERIC_SUPPORT_TITLES or self._looks_support_listing_page(
@@ -992,7 +1132,7 @@ class MockLLMClient(BaseLLMClient):
                     return "reference_page"
                 return "navigation"
 
-        if domain in {"mcx.donland.ru", "admkrai.krasnodar.ru", "msh.krasnodar.ru"}:
+        if domain in {"mcx.donland.ru", "admkrai.krasnodar.ru", "msh.krasnodar.ru", "mshsk.ru"}:
             lower_url = url.lower()
             if title.startswith("приказы ") and "/documents/" in lower_url:
                 return "reference_page"
@@ -1034,7 +1174,14 @@ class MockLLMClient(BaseLLMClient):
             return False
         return bool(REFERENCE_TITLE_WORD_RE.search(title))
 
-    def _clean_summary_text(self, text: str) -> str:
+    def _clean_summary_text(
+        self,
+        text: str,
+        *,
+        title: str,
+        source_name: str | None,
+        url: str | None,
+    ) -> str:
         cleaned = text
         for pattern in SUMMARY_UI_NOISE_PATTERNS:
             cleaned = re.sub(pattern, " ", cleaned, flags=re.IGNORECASE)
@@ -1044,8 +1191,54 @@ class MockLLMClient(BaseLLMClient):
             cleaned,
             flags=re.IGNORECASE,
         )
+        if self._is_gisp_source(source_name, url):
+            cleaned = GISP_UI_ID_RE.sub(" ", cleaned)
+            cleaned = re.sub(r"\bконкурсное событие\b", " ", cleaned, flags=re.IGNORECASE)
+            cleaned = re.sub(
+                r"\b(общая информация|требования|необходимые документы|скачать условия)\b",
+                " ",
+                cleaned,
+                flags=re.IGNORECASE,
+            )
+            cleaned = self._collapse_duplicate_title(cleaned, title)
         cleaned = WHITESPACE_RE.sub(" ", cleaned).strip(" .,-:")
         return cleaned
+
+    def _collapse_duplicate_title(self, text: str, title: str) -> str:
+        normalized_title = WHITESPACE_RE.sub(" ", title).strip()
+        if not normalized_title:
+            return text
+        title_pattern = re.escape(normalized_title)
+        duplicate_re = re.compile(
+            TITLE_DUPLICATE_RE_TEMPLATE.format(title=title_pattern),
+            re.IGNORECASE,
+        )
+        collapsed = duplicate_re.sub(r"\1", text.strip())
+        lowered_title = normalized_title.lower()
+        if collapsed.lower().startswith(f"{lowered_title} {lowered_title}"):
+            collapsed = collapsed[len(normalized_title):].strip(" .:-")
+            collapsed = f"{normalized_title}. {collapsed}".strip()
+        return collapsed
+
+    def _finalize_summary(
+        self,
+        text: str,
+        *,
+        title: str,
+        source_name: str | None,
+        url: str | None,
+    ) -> str:
+        cleaned = WHITESPACE_RE.sub(" ", text).strip(" .,-:")
+        if self._is_gisp_source(source_name, url) and title.lower() not in cleaned.lower():
+            cleaned = f"{title}. {cleaned}".strip()
+        return self._limit_summary(cleaned)
+
+    def _is_gisp_source(self, source_name: str | None, url: str | None) -> bool:
+        combined = f"{source_name or ''} {url or ''}".lower()
+        return "gisp.gov.ru" in combined or "гисп" in combined
+
+    def _is_generic_regional_section_title(self, title: str) -> bool:
+        return title.lower().strip() in REGIONAL_GENERIC_SECTION_TITLES or title.lower().strip().startswith("приказы ")
 
     def _limit_summary(self, text: str) -> str:
         normalized = WHITESPACE_RE.sub(" ", text).strip()

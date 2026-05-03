@@ -36,6 +36,7 @@ class SourceDiagnosticsRow:
     reference_page_count: int
     registry_count: int
     measure_card_count: int
+    unknown_page_type_count: int
     noisy_count: int
     noisy_ratio: float
     published_at_coverage: str
@@ -111,6 +112,9 @@ def build_diagnostics_snapshot(
         measure_card_count = sum(
             1 for document in source_documents if document.page_type == "measure_card"
         )
+        unknown_page_type_count = sum(
+            1 for document in source_documents if (document.page_type or "unknown") == "unknown"
+        )
         noisy_count = sum(
             1
             for document in source_documents
@@ -132,6 +136,7 @@ def build_diagnostics_snapshot(
                 reference_page_count=reference_page_count,
                 registry_count=registry_count,
                 measure_card_count=measure_card_count,
+                unknown_page_type_count=unknown_page_type_count,
                 noisy_count=noisy_count,
                 noisy_ratio=(noisy_count / total_documents) if total_documents else 0.0,
                 published_at_coverage=f"{total_documents - missing_published_at_count}/{total_documents}",
@@ -210,7 +215,8 @@ def format_diagnostics(snapshot: DiagnosticsSnapshot) -> str:
                 "  "
                 f"reference_page={row.reference_page_count}; "
                 f"registry/results={row.registry_count}; "
-                f"measure_card={row.measure_card_count}",
+                f"measure_card={row.measure_card_count}; "
+                f"unknown_page_type={row.unknown_page_type_count}",
             ]
         )
 
@@ -226,6 +232,47 @@ def format_diagnostics(snapshot: DiagnosticsSnapshot) -> str:
             f"{row.source_name}: low_signal={row.noisy_count}/{row.total_documents} "
             f"({row.noisy_ratio:.0%})"
         )
+
+    lines.extend(["", "Parser quality hints:"])
+    high_missing = [
+        row for row in snapshot.rows
+        if row.total_documents > 0 and row.missing_published_at_count / row.total_documents >= 0.6
+    ][:3]
+    high_low_signal = [
+        row for row in noisy_rows
+        if row.total_documents > 0 and row.noisy_ratio >= 0.7
+    ][:3]
+    high_unknown = sorted(
+        [row for row in snapshot.rows if row.unknown_page_type_count > 0],
+        key=lambda row: (row.unknown_page_type_count, row.total_documents),
+        reverse=True,
+    )[:3]
+    if high_missing:
+        lines.append(
+            "- high missing published_at: "
+            + ", ".join(
+                f"{row.source_name} ({row.missing_published_at_count}/{row.total_documents})"
+                for row in high_missing
+            )
+        )
+    if high_low_signal:
+        lines.append(
+            "- high low_signal: "
+            + ", ".join(
+                f"{row.source_name} ({row.noisy_ratio:.0%})"
+                for row in high_low_signal
+            )
+        )
+    if high_unknown:
+        lines.append(
+            "- many unknown page_type: "
+            + ", ".join(
+                f"{row.source_name} ({row.unknown_page_type_count})"
+                for row in high_unknown
+            )
+        )
+    if not any((high_missing, high_low_signal, high_unknown)):
+        lines.append("- no major parser quality issues detected in the selected period.")
 
     return "\n".join(lines)
 

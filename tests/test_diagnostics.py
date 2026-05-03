@@ -202,6 +202,26 @@ class DiagnosticsSmokeTest(unittest.TestCase):
         self.assertIn("НПА: 22-68850-00258-Р", markdown)
         self.assertIn("Сигнал: Активная федеральная мера поддержки", markdown)
 
+    def test_diagnostics_includes_parser_quality_hints(self) -> None:
+        db_path = self._db_path("diagnostics_hints.db")
+        init_db(db_path)
+        noisy = self._doc(
+            doc_id=1,
+            source_name="Нормативные акты Краснодарского края",
+            title="Просмотр",
+            action_level="irrelevant",
+            page_type="unknown",
+        )
+        noisy.published_at = None
+        save_document(noisy, db_path)
+
+        output = run_diagnostics(db_path=db_path, days=7)
+
+        self.assertIn("Parser quality hints:", output)
+        self.assertIn("high missing published_at:", output)
+        self.assertIn("high low_signal:", output)
+        self.assertIn("many unknown page_type:", output)
+
 
 if __name__ == "__main__":
     unittest.main()
