@@ -9,6 +9,13 @@ ActionLevel = Literal["requires_attention", "watchlist", "background", "irreleva
 ImportanceLevel = Literal["high", "medium", "low"]
 SupportStatus = Literal["active", "inactive", "unknown"]
 ApplicationStatus = Literal["open", "closed", "regular", "unknown"]
+SourceRole = Literal[
+    "strategy",
+    "support_documents",
+    "regional_npa",
+    "active_support_measures",
+    "news_signals",
+]
 PageType = Literal[
     "selection_announcement",
     "measure_card",
@@ -35,6 +42,7 @@ class SourceConfig(BaseModel):
     url: str
     level: Literal["federal", "regional", "news", "support_measures"]
     region: Literal["federal", "rostov", "krasnodar", "stavropol"]
+    source_role: SourceRole
     source_type: str = "html_listing"
     enabled: bool = True
     parser: Literal["generic_html", "government", "regional_law"] = "generic_html"

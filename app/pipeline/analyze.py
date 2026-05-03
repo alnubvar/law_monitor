@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from app.config import load_keywords
+from app.config import load_keyword_groups, load_keywords
 from app.llm.mock_client import MockLLMClient
 from app.storage import (
     count_documents_by_action_level,
@@ -16,7 +16,10 @@ logger = logging.getLogger(__name__)
 
 def run_analyze(limit: int | None = None, *, reanalyze: bool = False) -> int:
     init_db()
-    client = MockLLMClient(load_keywords())
+    client = MockLLMClient(
+        load_keywords(),
+        keyword_groups=load_keyword_groups(),
+    )
     documents = list_unanalyzed_documents(limit=limit, reanalyze=reanalyze)
     analyzed_count = 0
 

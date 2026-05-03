@@ -4,10 +4,11 @@ import re
 from collections.abc import Sequence
 from urllib.parse import urlparse
 
+from app.config import get_source_role
 from app.extractors.site_extractors import clean_text_for_analysis
 from app.llm.base import BaseLLMClient
 from app.llm.facts_extractor import DocumentFacts, extract_document_facts
-from app.models import AnalysisResult
+from app.models import AnalysisResult, SourceRole
 
 ACTION_MARKERS = (
     "субсид",
@@ -350,6 +351,7 @@ PROJECT_DISCUSSION_SIGNALS = (
     "изменение порядка",
     "проект постановления",
     "проект приказа",
+    "консультац",
 )
 REGIONAL_GENERIC_SECTION_TITLES = {
     "господдержка",
@@ -372,13 +374,87 @@ LOW_VALUE_REGIONAL_SECTION_TITLES = {
     "противодействие коррупции",
     "калькулятор процедур",
 }
+LOW_VALUE_SUPPORT_NPA_TITLE_FRAGMENTS = (
+    "политика обработки персональных данных",
+    "персональные данные",
+    "охраны объектов культурного наследия",
+    "культурного наследия",
+    "приоритеты",
+    "структура",
+    "контакты",
+    "положение об органе",
+    "госслужба",
+    "вакансии",
+    "кадры",
+    "документы сайта",
+    "служебная информация",
+    "управление ",
+)
+SOFT_LOW_VALUE_SUPPORT_NPA_TITLE_FRAGMENTS = (
+    "независимая экспертиза",
+)
+LOW_VALUE_SUPPORT_NPA_BODY_MARKERS = (
+    "политика обработки персональных данных",
+    "обработка персональных данных",
+    "независимая экспертиза",
+    "охрана объектов культурного наследия",
+    "управление государственной охраны объектов культурного наследия",
+    "положение об органе",
+    "структура министерства",
+    "контакты министерства",
+    "государственная служба",
+    "кадровое обеспечение",
+    "документы сайта",
+)
 GISP_UI_ID_RE = re.compile(r"(?<![\d-])\.?\s*\d{3,5}\)(?!\d)")
 TITLE_DUPLICATE_RE_TEMPLATE = r"^({title}[.:]?\s+)(?:{title}[.:]?\s+)+"
+STRATEGY_SIGNAL_GROUPS = (
+    "support_measures",
+    "subsidy_terms",
+    "credit_terms",
+    "regulatory_change",
+    "public_discussion",
+)
+SUPPORT_DOCUMENT_SIGNAL_GROUPS = (
+    "support_measures",
+    "subsidy_terms",
+    "credit_terms",
+    "regulatory_change",
+    "public_discussion",
+)
+NEWS_SIGNAL_GROUPS = (
+    "support_measures",
+    "subsidy_terms",
+    "credit_terms",
+    "export_support",
+    "grain_support",
+    "regulatory_change",
+)
+NEWS_SIGNAL_MARKERS = (
+    "пошлин",
+    "экспорт",
+    "господдерж",
+    "субсид",
+    "льготн",
+    "кредит",
+    "поручен",
+    "финансирован",
+    "программа",
+)
 
 
 class MockLLMClient(BaseLLMClient):
-    def __init__(self, keywords: Sequence[str]):
+    def __init__(
+        self,
+        keywords: Sequence[str],
+        *,
+        keyword_groups: dict[str, Sequence[str]] | None = None,
+    ):
         self.keywords = [keyword.strip() for keyword in keywords if keyword.strip()]
+        self.keyword_groups = {
+            group_name: [value.strip() for value in values if value.strip()]
+            for group_name, values in (keyword_groups or {}).items()
+        }
 
     def analyze_document(
         self,
@@ -496,9 +572,27 @@ class MockLLMClient(BaseLLMClient):
         body_text = raw_text.lower()
         lead_text = body_text[:2000]
         domain = self._extract_domain(source_name, url)
+        source_role = self._get_source_role(source_name)
+        has_strategy_signal = self._has_strategy_signal(
+            title_text,
+            lead_text,
+            matched_keywords=matched_keywords,
+        )
+        has_regional_npa_signal = self._has_regional_npa_signal(
+            title_text,
+            lead_text,
+            matched_keywords=matched_keywords,
+        )
 
         if YEAR_TITLE_RE.fullmatch(title_text):
             return "year_archive"
+        if self._looks_low_value_support_or_npa_page(
+            title_text,
+            lead_text,
+            source_role=source_role,
+            url=url or "",
+        ):
+            return "section_page"
         if self._looks_orders_listing_page(title_text, url=url or "", domain=domain):
             return "reference_page"
         if self._looks_low_value_regional_section_page(
@@ -516,6 +610,10 @@ class MockLLMClient(BaseLLMClient):
         ):
             return "reference_page"
         if is_service_page or content_quality == "navigation" or self._looks_irrelevant(title_text, body_text):
+            if source_role == "strategy" and has_strategy_signal:
+                return "new_rule" if has_regional_npa_signal else "news_background"
+            if source_role == "regional_npa" and has_regional_npa_signal:
+                return "news_background"
             return "navigation"
         source_specific_page_type = self._detect_source_specific_page_type(
             domain=domain,
@@ -577,10 +675,39 @@ class MockLLMClient(BaseLLMClient):
         body_text = raw_text.lower()
         lead_text = body_text[:1500]
         domain = self._extract_domain(source_name, url)
+        source_role = self._get_source_role(source_name)
+        has_strategy_signal = self._has_strategy_signal(
+            title_text,
+            lead_text,
+            matched_keywords=matched_keywords,
+        )
+        has_support_document_signal = self._has_support_document_signal(
+            title_text,
+            lead_text,
+            matched_keywords=matched_keywords,
+        )
+        has_regional_npa_signal = self._has_regional_npa_signal(
+            title_text,
+            lead_text,
+            matched_keywords=matched_keywords,
+        )
+        has_news_signal = self._has_news_signal(
+            title_text,
+            lead_text,
+            matched_keywords=matched_keywords,
+        )
 
         if is_service_page or page_type == "navigation" or content_quality in {"navigation", "empty"}:
+            if source_role == "strategy" and has_strategy_signal:
+                return "watchlist"
+            if source_role == "regional_npa" and has_regional_npa_signal:
+                return "watchlist"
             return "irrelevant"
         if self._looks_irrelevant(title_text, body_text):
+            if source_role == "strategy" and has_strategy_signal:
+                return "watchlist"
+            if source_role == "regional_npa" and has_regional_npa_signal:
+                return "watchlist"
             return "irrelevant"
         if self._looks_anti_corruption_noise(title_text, lead_text):
             return "irrelevant"
@@ -623,6 +750,29 @@ class MockLLMClient(BaseLLMClient):
         )
 
         if page_type in {"registry", "results_protocol", "reference_page"}:
+            if source_role == "regional_npa":
+                if (
+                    page_type == "reference_page"
+                    and has_project_discussion_signal
+                    and has_regional_npa_signal
+                ):
+                    return "watchlist"
+                return "background"
+            if source_role == "support_documents":
+                if (
+                    page_type == "reference_page"
+                    and not is_generic_support_title
+                    and not self._looks_generic_regional_section_page(title_text, lead_text, domain=domain, url=url or "")
+                    and (
+                        has_strict_action_signal
+                        or has_project_discussion_signal
+                        or facts.deadline_text is not None
+                        or facts.application_status == "open"
+                    )
+                    and has_support_document_signal
+                ):
+                    return "watchlist"
+                return "background"
             if (
                 page_type == "reference_page"
                 and domain in {"mcx.donland.ru", "msh.krasnodar.ru", "mshsk.ru", "admkrai.krasnodar.ru"}
@@ -641,8 +791,31 @@ class MockLLMClient(BaseLLMClient):
             if has_strict_action_signal or has_project_discussion_signal:
                 return "watchlist"
             return "irrelevant"
+        if self._looks_low_value_support_or_npa_page(
+            title_text,
+            lead_text,
+            source_role=source_role,
+            url=url or "",
+        ):
+            if has_strict_action_signal or has_project_discussion_signal or facts.deadline_text:
+                return "watchlist"
+            return "irrelevant"
+        if source_role == "support_documents" and page_type in {"section_page", "category_page"}:
+            if has_support_document_signal and has_strict_action_signal:
+                return "watchlist"
+            return "background"
+        if source_role == "regional_npa" and page_type in {"section_page", "category_page", "year_archive"}:
+            if has_regional_npa_signal and has_project_discussion_signal:
+                return "watchlist"
+            return "background"
         if facts.application_status == "closed":
             if has_any_action_signal or has_watch_in_title or has_watch_in_body or explicit_keywords or is_support_context:
+                return "watchlist"
+            return "background"
+        if source_role == "strategy":
+            if has_project_discussion_signal and facts.deadline_text:
+                return "requires_attention"
+            if has_strategy_signal or has_any_action_signal or explicit_keywords:
                 return "watchlist"
             return "background"
         if domain == "regulation.gov.ru":
@@ -679,11 +852,27 @@ class MockLLMClient(BaseLLMClient):
             if has_any_action_signal or has_watch_in_title or has_watch_in_body or explicit_keywords:
                 return "watchlist"
             return "background"
+        if source_role == "regional_npa":
+            if has_project_discussion_signal and has_regional_npa_signal:
+                return "watchlist"
+            if page_type in ACTIONABLE_PAGE_TYPES and (has_regional_npa_signal or has_any_action_signal or explicit_keywords):
+                return "watchlist"
+            return "background"
+        if source_role == "support_documents":
+            if page_type in ACTIONABLE_PAGE_TYPES and has_strict_action_signal:
+                return "requires_attention"
+            if page_type in ACTIONABLE_PAGE_TYPES and (has_support_document_signal or has_any_action_signal or explicit_keywords):
+                return "watchlist"
+            return "background"
         if page_type in ACTIONABLE_PAGE_TYPES and has_strict_action_signal:
             if facts.support_status != "inactive" and facts.application_status != "closed":
                 return "requires_attention"
         if page_type in WATCHLIST_ONLY_PAGE_TYPES:
             if has_any_action_signal or has_watch_in_title or has_watch_in_body or explicit_keywords:
+                return "watchlist"
+            return "background"
+        if source_role == "news_signals":
+            if has_news_signal:
                 return "watchlist"
             return "background"
         if page_type == "news_background":
@@ -847,10 +1036,36 @@ class MockLLMClient(BaseLLMClient):
             marker in title.lower()
             for marker in IMPORTANT_FEDERAL_PERMANENT_MEASURE_MARKERS
         )
+        source_role = self._get_source_role(source_name)
+        title_text = title.lower()
+        combined_text = f"{title_text} {(url or '').lower()}"
         if page_type in {"results_protocol", "registry"}:
             return "Результаты/протокол отбора: не требует срочной реакции"
+        if self._looks_low_value_support_or_npa_page(
+            title.lower(),
+            f"{title.lower()} {(url or '').lower()}",
+            source_role=source_role,
+            url=url or "",
+        ):
+            return "Общий раздел/служебная страница; прямой GR-сигнал не выявлен."
         if page_type == "reference_page" and "приказ" in title.lower():
             return "Общий раздел документов/приказов; прямой GR-сигнал не выявлен."
+        if source_role == "strategy":
+            if facts.deadline_text or "публич" in combined_text:
+                return "Стратегический федеральный документ с обсуждением или сроком; держать на контроле."
+            return "Стратегический федеральный сигнал по господдержке или порядку регулирования."
+        if source_role == "regional_npa":
+            if "публич" in combined_text or "консультац" in combined_text:
+                return "Региональный НПА / публичные консультации по профильной теме; держать на наблюдении."
+            if page_type in {"reference_page", "section_page", "category_page", "year_archive"}:
+                return "Общий раздел/архив НПА; прямой GR-сигнал не выявлен."
+            return "Региональный НПА по профильной теме: оставить в наблюдении."
+        if source_role == "support_documents" and page_type in {"reference_page", "section_page", "category_page"}:
+            return "Общий раздел/список документов; прямой GR-сигнал не выявлен."
+        if source_role == "news_signals":
+            if self._has_news_signal(title_text, title_text, matched_keywords=()):
+                return "Новостной предвестник возможных изменений господдержки, экспорта или регулирования."
+            return "Рыночный или отраслевой фон без прямого регуляторного сигнала."
         if (
             page_type in {"reference_page", "section_page"}
             and self._is_generic_regional_section_title(title)
@@ -895,6 +1110,79 @@ class MockLLMClient(BaseLLMClient):
             values.append(f"NPA:{facts.npa_number}")
         return values[:5]
 
+    def _get_source_role(self, source_name: str | None) -> SourceRole | None:
+        return get_source_role(source_name)
+
+    def _matches_keyword_groups(
+        self,
+        text: str,
+        group_names: Sequence[str],
+    ) -> bool:
+        for group_name in group_names:
+            keywords = self.keyword_groups.get(group_name, [])
+            if any(keyword.lower() in text for keyword in keywords):
+                return True
+        return False
+
+    def _has_strategy_signal(
+        self,
+        title: str,
+        lead_text: str,
+        *,
+        matched_keywords: Sequence[str],
+    ) -> bool:
+        combined = f"{title} {lead_text}"
+        return (
+            self._matches_keyword_groups(combined, STRATEGY_SIGNAL_GROUPS)
+            or any(keyword.lower() in combined for keyword in matched_keywords)
+            or "апк" in combined
+        )
+
+    def _has_support_document_signal(
+        self,
+        title: str,
+        lead_text: str,
+        *,
+        matched_keywords: Sequence[str],
+    ) -> bool:
+        combined = f"{title} {lead_text}"
+        return (
+            self._matches_keyword_groups(combined, SUPPORT_DOCUMENT_SIGNAL_GROUPS)
+            or any(keyword.lower() in combined for keyword in matched_keywords)
+            or any(signal in combined for signal in REQUIRES_ATTENTION_SIGNALS)
+        )
+
+    def _has_regional_npa_signal(
+        self,
+        title: str,
+        lead_text: str,
+        *,
+        matched_keywords: Sequence[str],
+    ) -> bool:
+        combined = f"{title} {lead_text}"
+        return (
+            self._matches_keyword_groups(combined, ("regulatory_change", "public_discussion", "subsidy_terms", "support_measures"))
+            or any(keyword.lower() in combined for keyword in matched_keywords)
+            or "субсид" in combined
+            or "апк" in combined
+        )
+
+    def _has_news_signal(
+        self,
+        title: str,
+        lead_text: str,
+        *,
+        matched_keywords: Sequence[str],
+    ) -> bool:
+        combined = f"{title} {lead_text}"
+        if re.search(r"без сигналов\s+(господдерж|субсид|регулир|экспорт)", combined):
+            return False
+        return (
+            self._matches_keyword_groups(combined, NEWS_SIGNAL_GROUPS)
+            or any(marker in combined for marker in NEWS_SIGNAL_MARKERS)
+            or any(keyword.lower() in combined for keyword in matched_keywords)
+        )
+
     def _is_support_context(
         self,
         *,
@@ -904,6 +1192,9 @@ class MockLLMClient(BaseLLMClient):
         page_type: str,
     ) -> bool:
         combined = f"{source_name or ''} {url or ''} {level or ''}".lower()
+        source_role = self._get_source_role(source_name)
+        if source_role in {"active_support_measures", "support_documents"}:
+            return True
         if "gisp" in combined or "гисп" in combined:
             return True
         if "господдерж" in combined or "меры поддержки" in combined:
@@ -995,6 +1286,67 @@ class MockLLMClient(BaseLLMClient):
             return False
         lower_url = url.lower()
         return any(fragment in lower_url for fragment in ("/activity/", "/content/", "/documents/", "/vacancy", "/purchases"))
+
+    def _looks_low_value_support_or_npa_page(
+        self,
+        title: str,
+        lead_text: str,
+        *,
+        source_role: SourceRole | None,
+        url: str,
+    ) -> bool:
+        if source_role not in {"support_documents", "regional_npa"}:
+            return False
+        combined = f"{title} {lead_text} {url.lower()}"
+        actionable_markers = (
+            "субсид",
+            "льготн",
+            "кредит",
+            "экспорт",
+            "отбор",
+            "прием заявок",
+            "приём заявок",
+            "срок подачи",
+            "порядок предоставления",
+            "изменение порядка",
+            "проект постановления",
+            "проект приказа",
+            "публичные консультации",
+            "публичное обсуждение",
+            "оценка регулирующего воздействия",
+            "орв",
+        )
+        if any(fragment in title for fragment in LOW_VALUE_SUPPORT_NPA_TITLE_FRAGMENTS):
+            return True
+        if any(marker in combined for marker in actionable_markers):
+            if any(fragment in title for fragment in SOFT_LOW_VALUE_SUPPORT_NPA_TITLE_FRAGMENTS) and not any(
+                marker in combined
+                for marker in (
+                    "проект постановления",
+                    "проект приказа",
+                    "оценка регулирующего воздействия",
+                    "публичные консультации",
+                    "субсид",
+                )
+            ):
+                return True
+            return False
+
+        if any(fragment in title for fragment in SOFT_LOW_VALUE_SUPPORT_NPA_TITLE_FRAGMENTS):
+            return True
+        if any(fragment in combined for fragment in LOW_VALUE_SUPPORT_NPA_BODY_MARKERS):
+            return True
+        return any(
+            fragment in url.lower()
+            for fragment in (
+                "/department/",
+                "/contacts/",
+                "/structure/",
+                "/policy/",
+                "/personal-data",
+                "/personalnye-dannye",
+            )
+        )
 
     def _looks_orders_listing_page(
         self,

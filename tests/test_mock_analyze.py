@@ -643,6 +643,66 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         self.assertNotEqual(result.page_type, "section_page")
         self.assertIn(result.action_level, {"watchlist", "requires_attention"})
 
+    def test_privacy_policy_is_not_visible_watchlist(self) -> None:
+        client = MockLLMClient(["сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Политика обработки персональных данных",
+            "Политика обработки персональных данных и правила использования сайта министерства.",
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://msh.krasnodar.ru/department/politika-obrabotki-personalnykh-dannykh",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertEqual(result.action_level, "irrelevant")
+        self.assertIn(result.page_type, {"section_page", "reference_page", "navigation"})
+
+    def test_independent_expertise_generic_page_is_not_visible_watchlist(self) -> None:
+        client = MockLLMClient(["сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Независимая экспертиза",
+            "Независимая экспертиза. Нормативная база для награждения. Основные направления работы министерства.",
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://msh.krasnodar.ru/documents/nezavisimaya-ekspertiza1",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertIn(result.action_level, {"background", "irrelevant"})
+        self.assertIn(result.page_type, {"section_page", "reference_page", "navigation"})
+
+    def test_cultural_heritage_authority_page_is_not_visible_watchlist(self) -> None:
+        client = MockLLMClient(["сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Управление государственной охраны объектов культурного наследия",
+            "Управление Государственная историко-культурная экспертиза Информация о проведенных проверках деятельности органов местного самоуправления.",
+            source_name="Нормативные акты Краснодарского края",
+            url="https://admkrai.krasnodar.ru/content/1280/",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertIn(result.action_level, {"background", "irrelevant"})
+        self.assertIn(result.page_type, {"section_page", "reference_page", "navigation"})
+
+    def test_priorities_generic_page_is_not_visible_watchlist(self) -> None:
+        client = MockLLMClient(["сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Приоритеты",
+            "Пресс-центр Край Губернатор Власть Деятельность Документы Визитка Значимая дата года.",
+            source_name="Нормативные акты Краснодарского края",
+            url="https://admkrai.krasnodar.ru/content/1202/",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertIn(result.action_level, {"background", "irrelevant"})
+        self.assertIn(result.page_type, {"section_page", "reference_page", "navigation"})
+
     def test_government_real_sector_document_is_not_navigation(self) -> None:
         client = MockLLMClient(["государственная поддержка АПК"])
 
@@ -661,6 +721,77 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
 
         self.assertNotEqual(result.page_type, "navigation")
         self.assertNotEqual(result.action_level, "irrelevant")
+
+    def test_government_strategy_doc_with_apk_signal_is_not_irrelevant(self) -> None:
+        client = MockLLMClient(["государственная поддержка АПК"])
+
+        result = client.analyze_document(
+            "Постановление о государственной поддержке АПК",
+            "Проект постановления уточняет порядок предоставления субсидий сельскому хозяйству.",
+            source_name="Правительство РФ - документы",
+            url="http://government.ru/docs/60001/",
+            level="federal",
+            region="federal",
+        )
+
+        self.assertEqual(result.action_level, "watchlist")
+        self.assertNotEqual(result.page_type, "navigation")
+
+    def test_regional_npa_public_consultation_is_visible_watchlist(self) -> None:
+        client = MockLLMClient(["публичные консультации", "государственная поддержка АПК"])
+
+        result = client.analyze_document(
+            "Сводный отчёт о результатах проведения публичных консультаций",
+            "Публичные консультации по проекту порядка предоставления субсидий в АПК Краснодарского края.",
+            source_name="Нормативные акты Краснодарского края",
+            url="https://admkrai.krasnodar.ru/content/1397/",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertEqual(result.action_level, "watchlist")
+
+    def test_regional_npa_archive_listing_is_background_or_irrelevant(self) -> None:
+        client = MockLLMClient(["сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Архив нормативных актов",
+            "Раздел нормативных правовых актов. Архив документов.",
+            source_name="Нормативные акты Краснодарского края",
+            url="https://admkrai.krasnodar.ru/content/1291/archive/",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertIn(result.action_level, {"background", "irrelevant"})
+
+    def test_zol_export_support_signal_is_watchlist(self) -> None:
+        client = MockLLMClient(["Поддержка экспорта АПК", "экспортная пошлина"])
+
+        result = client.analyze_document(
+            "Пошлина на экспорт пшеницы из РФ останется нулевой",
+            "В правительстве подтвердили параметры экспортной пошлины и меры поддержки экспорта АПК.",
+            source_name="ZOL.ru - зерновые новости",
+            url="https://www.zol.ru/n/41337",
+            level="news",
+            region="federal",
+        )
+
+        self.assertEqual(result.action_level, "watchlist")
+
+    def test_zol_generic_market_news_is_background(self) -> None:
+        client = MockLLMClient(["сельское хозяйство"])
+
+        result = client.analyze_document(
+            "В Австралии ожидается снижение урожайности",
+            "Рыночный обзор по зерну и погодным условиям без сигналов господдержки или регулирования.",
+            source_name="ZOL.ru - зерновые новости",
+            url="https://www.zol.ru/n/41399",
+            level="news",
+            region="federal",
+        )
+
+        self.assertEqual(result.action_level, "background")
 
 
 if __name__ == "__main__":

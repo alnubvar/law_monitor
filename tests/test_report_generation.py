@@ -224,9 +224,10 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertIn("Visible documents: 2", markdown)
         self.assertIn("Requires attention count: 1", markdown)
         self.assertIn("Watchlist count: 1", markdown)
-        self.assertIn("Support reference count: 1", markdown)
+        self.assertIn("Support/reference count: 1", markdown)
         self.assertIn("Скрыто как background/irrelevant: 2", markdown)
         self.assertIn("Что требует реакции сегодня: Льготное кредитование АПК", markdown)
+        self.assertIn("## Документы по мерам поддержки", markdown)
 
     def test_report_does_not_fail_when_published_at_is_none(self) -> None:
         document = self._doc(
@@ -390,6 +391,52 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertIn("Сигнал: Активная федеральная мера поддержки", markdown)
         self.assertIn("Дедлайн/срок подачи: Прием заявок до 30.06.2026.", markdown)
         self.assertIn("Условия/срок действия: Срок кредита: До 12 месяцев.", markdown)
+
+    def test_report_uses_source_taxonomy_sections(self) -> None:
+        documents = [
+            self._doc(
+                doc_id=1,
+                source_name="Правительство РФ - документы",
+                region="federal",
+                title="Постановление о господдержке АПК",
+                url="https://government.ru/docs/1",
+                action_level="watchlist",
+                page_type="new_rule",
+                summary="Федеральный стратегический сигнал.",
+            ),
+            self._doc(
+                doc_id=2,
+                source_name="Нормативные акты Краснодарского края",
+                region="krasnodar",
+                title="Сводный отчёт о результатах проведения публичных консультаций",
+                url="https://admkrai.krasnodar.ru/content/1397/",
+                action_level="watchlist",
+                page_type="news_background",
+                summary="Региональный НПА.",
+            ),
+            self._doc(
+                doc_id=3,
+                source_name="ZOL.ru - зерновые новости",
+                region="federal",
+                title="Пошлина на экспорт пшеницы останется нулевой",
+                url="https://www.zol.ru/n/1",
+                action_level="watchlist",
+                page_type="news_background",
+                summary="Новостной сигнал.",
+            ),
+        ]
+
+        markdown = generate_markdown_report(
+            documents,
+            report_date="2026-05-03",
+            period_days=7,
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn("## Стратегические федеральные сигналы", markdown)
+        self.assertIn("## Региональные НПА", markdown)
+        self.assertIn("## Новостные предвестники изменений", markdown)
 
     def test_inactive_measure_does_not_show_deadline_as_current_in_report(self) -> None:
         document = self._doc(

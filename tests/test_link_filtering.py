@@ -15,6 +15,7 @@ class LinkFilteringSmokeTest(unittest.TestCase):
             url="https://example.com/docs/",
             level="federal",
             region="federal",
+            source_role="strategy",
             parser="generic_html",
             description="test source",
             max_items=2,

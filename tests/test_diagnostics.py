@@ -124,7 +124,10 @@ class DiagnosticsSmokeTest(unittest.TestCase):
         self.assertIn("- watchlist: 1", output)
         self.assertIn("- irrelevant: 1", output)
         self.assertIn("Published_at coverage: 2/3", output)
-        self.assertIn("- ГИСП - меры поддержки АПК", output)
+        self.assertIn("By source_role:", output)
+        self.assertIn("- active_support_measures", output)
+        self.assertIn("- news_signals", output)
+        self.assertIn("- ГИСП - меры поддержки АПК [active_support_measures]", output)
         self.assertIn("total=2; RA=1; WL=1; BG=0; IRR=0", output)
         self.assertIn("missing published_at=1; coverage=1/2", output)
         self.assertIn("missing summary=1", output)
@@ -145,7 +148,7 @@ class DiagnosticsSmokeTest(unittest.TestCase):
 
         output = run_diagnostics(db_path=db_path)
 
-        self.assertIn("- Минсельхоз Краснодарского края - субсидирование и финансирование", output)
+        self.assertIn("- Минсельхоз Краснодарского края - субсидирование и финансирование [support_documents]", output)
         self.assertIn("registry/results=", output)
         self.assertNotIn("missineference_page", output)
         self.assertNotIn("irrelev-", output)
@@ -221,6 +224,36 @@ class DiagnosticsSmokeTest(unittest.TestCase):
         self.assertIn("high missing published_at:", output)
         self.assertIn("high low_signal:", output)
         self.assertIn("many unknown page_type:", output)
+
+    def test_diagnostics_groups_by_source_role(self) -> None:
+        db_path = self._db_path("diagnostics_roles.db")
+        init_db(db_path)
+        save_document(
+            self._doc(
+                doc_id=1,
+                source_name="Правительство РФ - документы",
+                title="Постановление о господдержке АПК",
+                action_level="watchlist",
+                page_type="new_rule",
+            ),
+            db_path,
+        )
+        save_document(
+            self._doc(
+                doc_id=2,
+                source_name="ZOL.ru - зерновые новости",
+                title="Пошлина на экспорт пшеницы останется нулевой",
+                action_level="watchlist",
+                page_type="news_background",
+            ),
+            db_path,
+        )
+
+        output = run_diagnostics(db_path=db_path)
+
+        self.assertIn("- strategy", output)
+        self.assertIn("- news_signals", output)
+        self.assertIn("coverage=1/1", output)
 
 
 if __name__ == "__main__":

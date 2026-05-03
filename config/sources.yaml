@@ -2,6 +2,7 @@
   url: http://government.ru/docs/
   level: federal
   region: federal
+  source_role: strategy
   source_type: html_listing
   enabled: true
   parser: government
@@ -25,6 +26,7 @@
   url: http://government.ru/news/
   level: federal
   region: federal
+  source_role: strategy
   source_type: html_listing
   enabled: true
   parser: government
@@ -46,6 +48,7 @@
   url: https://regulation.gov.ru/
   level: federal
   region: federal
+  source_role: strategy
   source_type: html_listing
   enabled: true
   parser: generic_html
@@ -68,6 +71,7 @@
   url: https://msh.krasnodar.ru/documents/subsidirovanie-i-finansirovanie1
   level: regional
   region: krasnodar
+  source_role: support_documents
   source_type: html_listing
   enabled: true
   parser: generic_html
@@ -96,6 +100,7 @@
   url: https://mcx.donland.ru/activity/35217/
   level: regional
   region: rostov
+  source_role: support_documents
   source_type: html_listing
   enabled: true
   parser: generic_html
@@ -123,6 +128,7 @@
   url: https://mshsk.ru/gospodderzhka/
   level: regional
   region: stavropol
+  source_role: support_documents
   source_type: html_listing
   enabled: true
   parser: generic_html
@@ -144,6 +150,7 @@
   url: https://pravo.donland.ru/
   level: regional
   region: rostov
+  source_role: regional_npa
   source_type: html_listing
   enabled: true
   parser: regional_law
@@ -167,6 +174,7 @@
   url: https://pravo.stavregion.ru/
   level: regional
   region: stavropol
+  source_role: regional_npa
   source_type: html_listing
   enabled: true
   parser: regional_law
@@ -188,6 +196,7 @@
   url: https://admkrai.krasnodar.ru/content/1291/
   level: regional
   region: krasnodar
+  source_role: regional_npa
   source_type: html_listing
   enabled: true
   parser: regional_law
@@ -209,6 +218,7 @@
   url: https://gisp.gov.ru/nmp/main/1?recommended=0&searchstr=%D0%90%D0%9F%D0%9A
   level: support_measures
   region: federal
+  source_role: active_support_measures
   source_type: html_listing
   enabled: true
   parser: generic_html
@@ -232,6 +242,7 @@
   url: https://www.zol.ru/news/grain/
   level: news
   region: federal
+  source_role: news_signals
   source_type: html_listing
   enabled: true
   parser: generic_html

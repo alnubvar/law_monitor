@@ -5,10 +5,23 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from app.config import setup_logging
+from app.config import load_keyword_groups, load_sources, setup_logging
 
 
 class ConfigSmokeTest(unittest.TestCase):
+    def test_sources_have_source_role(self) -> None:
+        sources = load_sources()
+
+        self.assertTrue(sources)
+        self.assertTrue(all(source.source_role for source in sources))
+
+    def test_keyword_groups_are_loaded(self) -> None:
+        groups = load_keyword_groups()
+
+        self.assertIn("support_measures", groups)
+        self.assertIn("public_discussion", groups)
+        self.assertTrue(groups["support_measures"])
+
     def test_setup_logging_does_not_duplicate_handlers(self) -> None:
         root_logger = logging.getLogger()
         original_handlers = list(root_logger.handlers)

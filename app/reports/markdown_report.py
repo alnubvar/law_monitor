@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 from typing import Iterable
 
+from app.config import get_source_role
 from app.models import DigestItem, RawDocument, SourceErrorRecord
 
 VISIBLE_WATCHLIST_PAGE_TYPES = {
@@ -91,6 +92,33 @@ EMPTY_BUCKET_MESSAGES = {
     "non_target_background": "Фона вне целевой географии для показа не найдено.",
     "market_background": "Глобальный и рыночный фон за выбранный период не добавлен в отчет.",
 }
+DISPLAY_SECTION_ORDER = (
+    "requires_attention",
+    "active_support_measures",
+    "support_documents",
+    "regional_npa",
+    "strategy_signals",
+    "news_signals",
+    "background_reference",
+)
+DISPLAY_SECTION_TITLES = {
+    "requires_attention": "## Требует внимания GR",
+    "active_support_measures": "## Объявленные меры / отборы",
+    "support_documents": "## Документы по мерам поддержки",
+    "regional_npa": "## Региональные НПА",
+    "strategy_signals": "## Стратегические федеральные сигналы",
+    "news_signals": "## Новостные предвестники изменений",
+    "background_reference": "## Фон / справочно",
+}
+DISPLAY_EMPTY_MESSAGES = {
+    "requires_attention": "Документов, требующих внимания GR, за выбранный период не найдено.",
+    "active_support_measures": "Подходящих объявленных мер поддержки и отборов не найдено.",
+    "support_documents": "Подходящих документов по мерам поддержки не найдено.",
+    "regional_npa": "Подходящих региональных НПА для показа не найдено.",
+    "strategy_signals": "Стратегических федеральных сигналов для показа не найдено.",
+    "news_signals": "Новостных предвестников изменений для показа не найдено.",
+    "background_reference": "Фоновых и справочных материалов для показа не найдено.",
+}
 
 
 @dataclass(slots=True)
@@ -168,6 +196,7 @@ def generate_markdown_report(
         include_market_background=include_market_background,
         include_full_background=include_full_background,
     )
+    display_sections = _build_display_sections(report_view.flatten())
     error_records = list(source_errors or [])
 
     generated_at_value = generated_at or datetime.now()
@@ -183,25 +212,23 @@ def generate_markdown_report(
             generated_at=generated_at_value,
         )
     )
-    for bucket in REPORT_BUCKET_ORDER:
-        if bucket == "market_background" and not include_market_background:
-            continue
-        lines.append(REPORT_BUCKET_TITLES[bucket])
-        documents_for_bucket = report_view.shown_buckets.get(bucket, [])
+    for section in DISPLAY_SECTION_ORDER:
+        lines.append(DISPLAY_SECTION_TITLES[section])
+        documents_for_bucket = display_sections.get(section, [])
         if documents_for_bucket:
             for document in documents_for_bucket:
                 digest_item = _to_digest_item(document)
-                if bucket == "requires_attention":
+                if section == "requires_attention":
                     lines.extend(_format_detailed_item(digest_item))
                 else:
                     lines.extend(
                         _format_compact_item(
                             digest_item,
-                            include_business_facts=bucket == "support_reference",
+                            include_business_facts=section in {"active_support_measures", "support_documents", "regional_npa"},
                         )
                     )
         else:
-            lines.append(EMPTY_BUCKET_MESSAGES[bucket])
+            lines.append(DISPLAY_EMPTY_MESSAGES[section])
             lines.append("")
 
     lines.extend(
@@ -209,6 +236,7 @@ def generate_markdown_report(
             document_list,
             error_records,
             report_view=report_view,
+            display_sections=display_sections,
             include_market_background=include_market_background,
         )
     )
@@ -342,6 +370,30 @@ def select_visible_report_documents(
         max_items=max_items,
     )
     return report_view.flatten()
+
+
+def _build_display_sections(documents: Iterable[RawDocument]) -> dict[str, list[RawDocument]]:
+    sections = {section: [] for section in DISPLAY_SECTION_ORDER}
+    for document in documents:
+        sections[classify_display_section(document)].append(document)
+    return sections
+
+
+def classify_display_section(document: RawDocument) -> str:
+    if document.action_level == "requires_attention":
+        return "requires_attention"
+    source_role = get_source_role(document.source_name)
+    if source_role == "active_support_measures":
+        return "active_support_measures"
+    if source_role == "support_documents":
+        return "support_documents"
+    if source_role == "regional_npa":
+        return "regional_npa"
+    if source_role == "strategy":
+        return "strategy_signals"
+    if source_role == "news_signals":
+        return "news_signals"
+    return "background_reference"
 
 
 def classify_document_bucket(document: RawDocument) -> str:
@@ -526,6 +578,7 @@ def _format_stats(
     source_errors: list[SourceErrorRecord],
     *,
     report_view: ReportView,
+    display_sections: dict[str, list[RawDocument]],
     include_market_background: bool,
 ) -> list[str]:
     relevant_count = sum(1 for document in documents if document.is_relevant)
@@ -565,11 +618,13 @@ def _format_stats(
         f"- Medium: {medium_count}",
         f"- Low: {low_count}",
         f"- Visible documents: {report_view.total_visible}",
-        f"- Показано требует внимания GR: {len(report_view.shown_buckets['requires_attention'])}",
-        f"- Показано меры поддержки / справочно: {len(report_view.shown_buckets['support_reference'])}",
-        f"- Показано на наблюдении по целевым регионам: {len(report_view.shown_buckets['target_watchlist'])}",
-        f"- Показано отраслевого фона РФ: {len(report_view.shown_buckets['industry_background'])}",
-        f"- Показано фона вне целевой географии: {len(report_view.shown_buckets['non_target_background'])}",
+        f"- Показано требует внимания GR: {len(display_sections['requires_attention'])}",
+        f"- Показано объявленных мер / отборов: {len(display_sections['active_support_measures'])}",
+        f"- Показано документов по мерам поддержки: {len(display_sections['support_documents'])}",
+        f"- Показано региональных НПА: {len(display_sections['regional_npa'])}",
+        f"- Показано стратегических федеральных сигналов: {len(display_sections['strategy_signals'])}",
+        f"- Показано новостных предвестников: {len(display_sections['news_signals'])}",
+        f"- Показано фона / справочно: {len(display_sections['background_reference'])}",
     ]
     if include_market_background:
         lines.append(
@@ -634,7 +689,7 @@ def _format_header_summary(
         f"- Visible documents: {report_view.total_visible}",
         f"- Requires attention count: {requires_attention_count}",
         f"- Watchlist count: {watchlist_count}",
-        f"- Support reference count: {report_view.total_bucket_counts['support_reference']}",
+        f"- Support/reference count: {report_view.total_bucket_counts['support_reference']}",
         f"- Скрыто как background/irrelevant: {hidden_background_irrelevant_count}",
         f"- Что требует реакции сегодня: {reaction_text}",
         "",

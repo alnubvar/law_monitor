@@ -9,7 +9,7 @@ from pathlib import Path
 import yaml
 from dotenv import load_dotenv
 
-from app.models import SourceConfig
+from app.models import SourceConfig, SourceRole
 
 load_dotenv()
 
@@ -114,11 +114,55 @@ def load_sources(config_path: Path | None = None) -> list[SourceConfig]:
 
 
 @lru_cache(maxsize=1)
-def load_keywords(path: Path | None = None) -> list[str]:
+def load_keyword_groups(path: Path | None = None) -> dict[str, list[str]]:
     config_path = path or CONFIG_DIR / "keywords.yaml"
     data = _load_yaml(config_path)
     if isinstance(data, dict):
-        keywords = data.get("keywords", [])
+        grouped_keywords = data
     else:
-        keywords = data
-    return [str(keyword).strip() for keyword in keywords if str(keyword).strip()]
+        grouped_keywords = {"keywords": data}
+
+    normalized: dict[str, list[str]] = {}
+    for group_name, values in grouped_keywords.items():
+        if isinstance(values, str):
+            candidates = [values]
+        else:
+            candidates = list(values or [])
+        normalized[str(group_name).strip()] = [
+            str(keyword).strip()
+            for keyword in candidates
+            if str(keyword).strip()
+        ]
+    return normalized
+
+
+@lru_cache(maxsize=1)
+def load_keywords(path: Path | None = None) -> list[str]:
+    grouped_keywords = load_keyword_groups(path)
+    flattened: list[str] = []
+    seen: set[str] = set()
+    for values in grouped_keywords.values():
+        for keyword in values:
+            normalized = keyword.strip()
+            if normalized and normalized not in seen:
+                flattened.append(normalized)
+                seen.add(normalized)
+    return flattened
+
+
+@lru_cache(maxsize=1)
+def load_source_map(config_path: Path | None = None) -> dict[str, SourceConfig]:
+    return {source.name: source for source in load_sources(config_path)}
+
+
+def get_source_config(source_name: str | None) -> SourceConfig | None:
+    if not source_name:
+        return None
+    return load_source_map().get(source_name)
+
+
+def get_source_role(source_name: str | None) -> SourceRole | None:
+    source_config = get_source_config(source_name)
+    if source_config is None:
+        return None
+    return source_config.source_role
