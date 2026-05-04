@@ -311,7 +311,7 @@ def detect_action_level(
     if source_role == "regional_npa":
         if has_project_discussion_signal and has_regional_npa_signal:
             return "watchlist"
-        if page_type in ACTIONABLE_PAGE_TYPES and (has_regional_npa_signal or has_any_action_signal or explicit_keywords):
+        if page_type in ACTIONABLE_PAGE_TYPES and has_regional_npa_signal:
             return "watchlist"
         return "background"
     if source_role == "support_documents":

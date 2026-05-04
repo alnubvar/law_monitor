@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import unittest
 
+from app.llm.facts_extractor import DocumentFacts
 from app.llm.mock_client import MockLLMClient
+from app.rules.business_signal_rules import detect_action_level
 
 
 class MockAnalyzeSmokeTest(unittest.TestCase):
@@ -805,6 +807,49 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         )
 
         self.assertIn(result.action_level, {"background", "irrelevant"})
+
+    def test_regional_non_agro_new_rule_stays_background(self) -> None:
+        action_level = detect_action_level(
+            "Приказ министерства транспорта Краснодарского края",
+            "Документ о временных ограничениях движения транспортных средств.",
+            (),
+            page_type="new_rule",
+            content_quality="full_text",
+            is_service_page=False,
+            source_role="regional_npa",
+            source_name="Нормативные акты Краснодарского края",
+            url="https://admkrai.krasnodar.ru/upload/test-transport.pdf",
+            domain="admkrai.krasnodar.ru",
+            level="regional",
+            region="krasnodar",
+            facts=DocumentFacts(),
+            has_strategy_signal=False,
+            has_support_document_signal=False,
+            has_regional_npa_signal=False,
+            has_news_signal_value=False,
+        )
+        self.assertIn(action_level, {"background", "irrelevant"})
+
+    def test_generic_pdf_title_is_replaced_from_summary_signal(self) -> None:
+        client = MockLLMClient(["государственная поддержка АПК"])
+
+        result = client.analyze_document(
+            "Просмотр",
+            (
+                "МИНИСТЕРСТВО СЕЛЬСКОГО ХОЗЯЙСТВА И ПЕРЕРАБАТЫВАЮЩЕЙ ПРОМЫШЛЕННОСТИ "
+                "КРАСНОДАРСКОГО КРАЯ\n"
+                "О ВНЕСЕНИИ ИЗМЕНЕНИЙ В ПРИКАЗ МИНИСТЕРСТВА СЕЛЬСКОГО ХОЗЯЙСТВА "
+                "КРАСНОДАРСКОГО КРАЯ ОТ 10 ЯНВАРЯ 2026 Г. № 12\n"
+                "Текст приказа."
+            ),
+            source_name="Нормативные акты Краснодарского края",
+            url="https://admkrai.krasnodar.ru/upload/test.pdf",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertTrue((result.normalized_title or "").startswith("О внесении изменений"))
+        self.assertNotEqual(result.normalized_title, "Просмотр")
 
     def test_zol_export_support_signal_is_watchlist(self) -> None:
         client = MockLLMClient(["Поддержка экспорта АПК", "экспортная пошлина"])
