@@ -114,6 +114,7 @@ class RawDocument(BaseModel):
 class AnalysisResult(BaseModel):
     is_relevant: bool
     relevance_reason: str
+    normalized_title: str | None = None
     topic: str | None = None
     importance: ImportanceLevel
     action_level: ActionLevel

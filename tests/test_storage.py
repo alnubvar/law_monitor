@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app import storage
+from app.models import AnalysisResult, RawDocument
 from app.storage import init_db
 
 
@@ -64,6 +65,45 @@ class StorageSmokeTest(unittest.TestCase):
 
         self.assertTrue(created_connections)
         self.assertTrue(all(connection.closed_called for connection in created_connections))
+
+    def test_update_analysis_persists_normalized_title(self) -> None:
+        db_path = Path("data/test_artifacts/test_update_analysis.db")
+        if db_path.exists():
+            db_path.unlink()
+        init_db(db_path)
+
+        document = RawDocument(
+            source_name="Нормативные акты Краснодарского края",
+            source_url="https://admkrai.krasnodar.ru/upload/test.pdf",
+            level="regional",
+            region="krasnodar",
+            title="Просмотр",
+            url="https://admkrai.krasnodar.ru/upload/test.pdf",
+            content_hash="hash-title-normalized",
+            raw_text="Текст документа",
+        )
+        document_id = storage.save_document(document, db_path)
+
+        analysis = AnalysisResult(
+            is_relevant=True,
+            relevance_reason="reason",
+            normalized_title="О внесении изменений в приказ министерства",
+            topic="topic",
+            importance="medium",
+            action_level="watchlist",
+            page_type="news_background",
+            summary="summary",
+            impact="impact",
+        )
+
+        storage.update_analysis(document_id, analysis, db_path)
+
+        stored_documents = storage.list_documents(db_path)
+        self.assertEqual(len(stored_documents), 1)
+        self.assertEqual(
+            stored_documents[0].title,
+            "О внесении изменений в приказ министерства",
+        )
 
 
 if __name__ == "__main__":

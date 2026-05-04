@@ -319,7 +319,8 @@ def update_analysis(
         connection.execute(
             """
             UPDATE documents
-            SET is_relevant = ?,
+            SET title = ?,
+                is_relevant = ?,
                 relevance_reason = ?,
                 topic = ?,
                 importance = ?,
@@ -340,6 +341,7 @@ def update_analysis(
             WHERE id = ?
             """,
             (
+                analysis.normalized_title,
                 int(analysis.is_relevant),
                 analysis.relevance_reason,
                 analysis.topic,
