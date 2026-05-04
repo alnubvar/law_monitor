@@ -1,0 +1,14 @@
+{
+  "id": "zol_broad_export_story",
+  "source_name": "ZOL.ru - зерновые новости",
+  "source_role": "news_signals",
+  "title": "Причины рекордного экспорта зерна по железной дороге",
+  "url": "https://www.zol.ru/n/41332",
+  "raw_text": "Экспорт зерна по железной дороге побьет рекорды. Среди причин роста называют хороший урожай, запасы в РФ, дополнительную квоту на экспорт и оценки экспертов рынка.",
+  "level": "news",
+  "region": "federal",
+  "expected_action_level": "background",
+  "expected_page_type": "news_background",
+  "expected_source_role": "news_signals",
+  "expected_business_signal_contains": "Рыночный или отраслевой фон"
+}

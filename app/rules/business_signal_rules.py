@@ -26,6 +26,7 @@ from app.rules.support_measure_rules import (
     is_federal_measure,
     is_support_context,
     is_target_region,
+    looks_support_catalog_page,
 )
 
 TOPIC_RULES = {
@@ -167,6 +168,13 @@ def detect_action_level(
                 return "watchlist"
             return "background"
         if source_role == "support_documents":
+            if looks_support_catalog_page(
+                title_text,
+                lead_text,
+                source_name=source_name,
+                url=url,
+            ):
+                return "background"
             if (
                 page_type == "reference_page"
                 and not is_generic_support_title
@@ -208,6 +216,13 @@ def detect_action_level(
         if has_strict_action_signal or has_project_discussion_signal or facts.deadline_text:
             return "watchlist"
         return "irrelevant"
+    if source_role == "support_documents" and looks_support_catalog_page(
+        title_text,
+        lead_text,
+        source_name=source_name,
+        url=url,
+    ):
+        return "background"
     if source_role == "support_documents" and page_type in {"section_page", "category_page"}:
         if has_support_document_signal and has_strict_action_signal:
             return "watchlist"

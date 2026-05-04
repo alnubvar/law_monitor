@@ -18,7 +18,11 @@ from app.rules.regional_npa_rules import (
     looks_low_value_support_or_npa_page,
     looks_orders_listing_page,
 )
-from app.rules.support_measure_rules import GENERIC_SUPPORT_TITLES, looks_support_listing_page
+from app.rules.support_measure_rules import (
+    GENERIC_SUPPORT_TITLES,
+    looks_support_catalog_page,
+    looks_support_listing_page,
+)
 
 ACTION_MARKERS = (
     "субсид",
@@ -210,6 +214,13 @@ def detect_page_type(
         return "section_page"
     if title_text in CATEGORY_PAGE_TITLES:
         return "category_page"
+    if source_role == "support_documents" and looks_support_catalog_page(
+        title_text,
+        lead_text,
+        source_name=source_name,
+        url=url,
+    ):
+        return "reference_page"
     if looks_support_listing_page(title_text, lead_text, source_name=source_name, url=url):
         return "reference_page"
     if looks_reference_title(title_text):

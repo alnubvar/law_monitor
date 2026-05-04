@@ -568,6 +568,47 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
             "Общий раздел/список документов; прямой GR-сигнал не выявлен.",
         )
 
+    def test_support_documents_2022_listing_becomes_background(self) -> None:
+        client = MockLLMClient(["государственная поддержка АПК"])
+
+        result = client.analyze_document(
+            "Субсидирование и финансирование 2022",
+            (
+                "Главная Документы Субсидирование и финансирование 2022 "
+                "Электронный бюджет Инструкция по заполнению отчета "
+                "Виноградарство и виноделие Животноводство Инвестиционные кредиты "
+                "Льготное кредитование Мелиорация Экспорт Перерабатывающая промышленность."
+            ),
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://msh.krasnodar.ru/documents/subsidirovanie-i-finansirovanie1/i2022",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertEqual(result.page_type, "reference_page")
+        self.assertIn(result.action_level, {"background", "irrelevant"})
+
+    def test_support_documents_2024_listing_becomes_background(self) -> None:
+        client = MockLLMClient(["государственная поддержка АПК"])
+
+        result = client.analyze_document(
+            "Субсидирование и финансирование 2024",
+            (
+                "Главная Документы Субсидирование и финансирование 2024 "
+                "АКТУАЛЬНЫЕ ОТБОРЫ ЭЛЕКТРОННЫЙ БЮДЖЕТ "
+                "ПОРТАЛ ПРЕДОСТАВЛЕНИЯ МЕР ФИНАНСОВОЙ ГОСУДАРСТВЕННОЙ ПОДДЕРЖКИ "
+                "Инструкции по заполнению отчетов Виноградарство Животноводство "
+                "Инвестиционные кредиты Льготное кредитование."
+            ),
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://msh.krasnodar.ru/documents/subsidirovanie-i-finansirovanie1/i2024",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertEqual(result.page_type, "reference_page")
+        self.assertIn(result.action_level, {"background", "irrelevant"})
+
     def test_regional_vacancies_is_not_watchlist(self) -> None:
         client = MockLLMClient(["сельское хозяйство"])
 
@@ -778,6 +819,114 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         )
 
         self.assertEqual(result.action_level, "watchlist")
+
+    def test_zol_broad_export_story_with_secondary_quota_is_background(self) -> None:
+        client = MockLLMClient(["экспорт зерна", "квота на экспорт"])
+
+        result = client.analyze_document(
+            "Причины рекордного экспорта зерна по железной дороге",
+            (
+                "Экспорт зерна побьет рекорды благодаря урожаю и тарифам. "
+                "В тексте также упомянута дополнительная квота на экспорт и оценка экспертов рынка."
+            ),
+            source_name="ZOL.ru - зерновые новости",
+            url="https://www.zol.ru/n/41332",
+            level="news",
+            region="federal",
+        )
+
+        self.assertEqual(result.action_level, "background")
+
+    def test_zol_forecast_news_is_background(self) -> None:
+        client = MockLLMClient(["экспорт зерна", "сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Совэкон повысил прогноз экспорта пшеницы из России",
+            "Аналитики повысили прогноз экспорта пшеницы и оценку рынка зерна без мер господдержки и решений правительства.",
+            source_name="ZOL.ru - зерновые новости",
+            url="https://www.zol.ru/n/41322",
+            level="news",
+            region="federal",
+        )
+
+        self.assertEqual(result.action_level, "background")
+
+    def test_zol_forecast_with_secondary_quota_context_stays_background(self) -> None:
+        client = MockLLMClient(["экспорт зерна", "сельское хозяйство"])
+
+        result = client.analyze_document(
+            "«Совэкон» повысил прогноз экспорта пшеницы из РФ",
+            (
+                "Консалтинговая компания повысила прогноз экспорта пшеницы. "
+                "В тексте также упомянута квота Турции на импорт кукурузы и мировой рынок."
+            ),
+            source_name="ZOL.ru - зерновые новости",
+            url="https://www.zol.ru/n/4133d",
+            level="news",
+            region="federal",
+        )
+
+        self.assertEqual(result.action_level, "background")
+
+    def test_zol_fieldwork_regional_news_is_background(self) -> None:
+        client = MockLLMClient(["сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Весенние посевные работы в Волгоградской области идут с опережением",
+            "В регионе продолжаются полевые работы и сев ранних культур без решений по господдержке или регулированию.",
+            source_name="ZOL.ru - зерновые новости",
+            url="https://www.zol.ru/n/41332",
+            level="news",
+            region="federal",
+        )
+
+        self.assertEqual(result.action_level, "background")
+
+    def test_zol_fieldwork_with_support_amounts_stays_background(self) -> None:
+        client = MockLLMClient(["сельское хозяйство", "льготные кредиты в АПК"])
+
+        result = client.analyze_document(
+            "Весенние посевные работы в Волгоградской области — на особом контроле экспертной группы",
+            (
+                "В регионе идет посевная. "
+                "На проведение работ аграрии получат господдержку и льготные кредиты, "
+                "но новость описывает ход полевых работ и посевное окно."
+            ),
+            source_name="ZOL.ru - зерновые новости",
+            url="https://www.zol.ru/n/4132e",
+            level="news",
+            region="federal",
+        )
+
+        self.assertEqual(result.action_level, "background")
+
+    def test_zol_government_support_signal_is_watchlist(self) -> None:
+        client = MockLLMClient(["господдержка АПК", "субсидии"])
+
+        result = client.analyze_document(
+            "Правительство расширило программу господдержки экспортеров АПК",
+            "Правительство России утвердило изменения программы финансирования и субсидии для экспорта продукции АПК.",
+            source_name="ZOL.ru - зерновые новости",
+            url="https://www.zol.ru/n/4133d",
+            level="news",
+            region="federal",
+        )
+
+        self.assertEqual(result.action_level, "watchlist")
+
+    def test_non_agro_government_fuel_news_is_background(self) -> None:
+        client = MockLLMClient(["сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Правительство договорилось с нефтяниками по поставкам и ценам на топливо",
+            "Правительство поручило заключить соглашения о стабилизации внутреннего рынка топлива.",
+            source_name="ZOL.ru - зерновые новости",
+            url="https://www.zol.ru/n/4133c",
+            level="news",
+            region="federal",
+        )
+
+        self.assertEqual(result.action_level, "background")
 
     def test_zol_generic_market_news_is_background(self) -> None:
         client = MockLLMClient(["сельское хозяйство"])

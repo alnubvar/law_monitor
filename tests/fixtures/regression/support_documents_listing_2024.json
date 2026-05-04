@@ -1,0 +1,14 @@
+{
+  "id": "support_documents_listing_2024",
+  "source_name": "Минсельхоз Краснодарского края - субсидирование и финансирование",
+  "source_role": "support_documents",
+  "title": "Субсидирование и финансирование 2024",
+  "url": "https://msh.krasnodar.ru/documents/subsidirovanie-i-finansirovanie1/i2024",
+  "raw_text": "Главная Документы Субсидирование и финансирование 2024 АКТУАЛЬНЫЕ ОТБОРЫ ЭЛЕКТРОННЫЙ БЮДЖЕТ ПОРТАЛ ПРЕДОСТАВЛЕНИЯ МЕР ФИНАНСОВОЙ ГОСУДАРСТВЕННОЙ ПОДДЕРЖКИ Инструкции по заполнению отчетов Виноградарство Животноводство Инвестиционные кредиты Льготное кредитование.",
+  "level": "regional",
+  "region": "krasnodar",
+  "expected_action_level": "background",
+  "expected_page_type": "reference_page",
+  "expected_source_role": "support_documents",
+  "expected_business_signal_contains": "Общий раздел/список документов"
+}

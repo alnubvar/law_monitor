@@ -8,6 +8,37 @@ GENERIC_SUPPORT_TITLES = {
     "меры поддержки",
     "меры господдержки",
 }
+SUPPORT_LISTING_TITLE_PREFIXES = (
+    "субсидирование и финансирование",
+    "господдержка",
+    "меры поддержки",
+    "меры господдержки",
+)
+SUPPORT_LISTING_BODY_MARKERS = (
+    "электронный бюджет",
+    "актуальные отборы",
+    "инструкция по заполнению",
+    "инструкции по заполнению",
+    "виноградарство",
+    "животноводство",
+    "инвестиционные кредиты",
+    "льготное кредитование",
+    "мелиорация",
+    "экспорт продукции апк",
+    "перерабатывающая промышленность",
+    "растениеводство",
+    "рыбоводство",
+    "садоводство",
+    "страхование в области растениеводства",
+    "приобретение сельскохозяйственной техники",
+    "ссылки все краевые порталы",
+    "портал предоставления мер финансовой государственной поддержки",
+)
+SUPPORT_LISTING_URL_MARKERS = (
+    "/subsidirovanie-i-finansirovanie",
+    "/gospodderzhka/",
+    "/subsidii/",
+)
 TARGET_REGIONS = {"federal", "rostov", "krasnodar", "stavropol"}
 IMPORTANT_FEDERAL_PERMANENT_MEASURE_MARKERS = (
     "льготное кредитование",
@@ -62,6 +93,61 @@ def looks_support_listing_page(
     if "гисп" in source_key and lead_text.count("активная") + lead_text.count("не активная") > 1:
         return True
     return False
+
+
+def looks_support_catalog_page(
+    title: str,
+    lead_text: str,
+    *,
+    source_name: str | None,
+    url: str | None,
+) -> bool:
+    title_text = title.lower().strip()
+    lead_text_lower = lead_text.lower()
+    source_key = f"{source_name or ''} {url or ''}".lower()
+
+    has_generic_title = (
+        title_text in GENERIC_SUPPORT_TITLES
+        or any(title_text.startswith(prefix) for prefix in SUPPORT_LISTING_TITLE_PREFIXES)
+    )
+    has_listing_url = any(marker in source_key for marker in SUPPORT_LISTING_URL_MARKERS)
+    listing_marker_hits = sum(
+        1 for marker in SUPPORT_LISTING_BODY_MARKERS if marker in lead_text_lower
+    )
+    has_listing_chrome = any(
+        marker in lead_text_lower
+        for marker in (
+            "главная документы",
+            "электронный бюджет",
+            "портал предоставления мер",
+            "ссылки все краевые порталы",
+        )
+    )
+    has_concrete_signal = any(
+        marker in lead_text_lower
+        for marker in (
+            "прием заявок до",
+            "приём заявок до",
+            "заявки принимаются до",
+            "срок подачи",
+            "срок приема",
+            "срок приёма",
+            "нпа ",
+            "постановление от",
+            "приказ от",
+            "распоряжение от",
+            "размер субсидии",
+            "размер поддержки",
+            "ставка субсидии",
+            "объявлен отбор",
+            "конкурсный отбор",
+        )
+    )
+    return (
+        (has_generic_title or has_listing_url)
+        and (listing_marker_hits >= 3 or has_listing_chrome)
+        and not has_concrete_signal
+    )
 
 
 def is_target_region(

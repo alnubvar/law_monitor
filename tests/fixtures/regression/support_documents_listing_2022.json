@@ -1,0 +1,14 @@
+{
+  "id": "support_documents_listing_2022",
+  "source_name": "Минсельхоз Краснодарского края - субсидирование и финансирование",
+  "source_role": "support_documents",
+  "title": "Субсидирование и финансирование 2022",
+  "url": "https://msh.krasnodar.ru/documents/subsidirovanie-i-finansirovanie1/i2022",
+  "raw_text": "Главная Документы Субсидирование и финансирование 2022 Электронный бюджет Инструкция по заполнению отчета о достижении значений результатов предоставления субсидии Виноградарство и виноделие Животноводство Инвестиционные кредиты Льготное кредитование Экспорт Перерабатывающая промышленность.",
+  "level": "regional",
+  "region": "krasnodar",
+  "expected_action_level": "background",
+  "expected_page_type": "reference_page",
+  "expected_source_role": "support_documents",
+  "expected_business_signal_contains": "Общий раздел/список документов"
+}
