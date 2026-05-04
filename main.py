@@ -29,7 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--source",
         type=str,
         default=None,
-        help='Собрать документы только для одного источника по точному name.',
+        help="Собрать документы только для одного источника по точному name.",
     )
     collect_parser.add_argument(
         "--limit",
@@ -207,9 +207,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _print_telegram_diagnostics(*, sent: bool) -> None:
     status = get_diagnostic_status()
-    print(
-        f"Telegram configured: {'yes' if status['telegram_configured'] else 'no'}"
-    )
+    print(f"Telegram configured: {'yes' if status['telegram_configured'] else 'no'}")
     print(f"Proxy configured: {'yes' if status['proxy_configured'] else 'no'}")
     print(f"Send result: {'success' if sent else 'fail'}")
 
