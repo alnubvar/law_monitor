@@ -24,3 +24,4 @@ law_monitor_mvp.egg-info/
 
 reports/*.md
 !reports/.gitkeep
+docs/demo_report.md
