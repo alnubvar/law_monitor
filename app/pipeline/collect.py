@@ -27,7 +27,7 @@ from app.storage import (
 )
 
 logger = logging.getLogger(__name__)
-PROGRESS_LOG_EVERY = 10
+PROGRESS_LOG_EVERY = 25
 
 PARSER_REGISTRY: dict[str, type[BaseSource]] = {
     "generic_html": GenericHTMLSource,
@@ -95,6 +95,14 @@ def extract_document(item: CollectedItem, source_config: SourceConfig) -> Extrac
     )
 
 
+def _should_log_progress(index: int, total_items: int) -> bool:
+    if total_items <= 3:
+        return index == 1 or index == total_items
+    if index == 1 or index == total_items:
+        return True
+    return index % PROGRESS_LOG_EVERY == 0
+
+
 def run_collect(source_name: str | None = None, limit: int | None = None) -> int:
     ensure_directories()
     init_db()
@@ -132,9 +140,9 @@ def run_collect(source_name: str | None = None, limit: int | None = None) -> int
         total_items = len(items)
 
         for index, item in enumerate(items, start=1):
-            if index == 1 or index % PROGRESS_LOG_EVERY == 0 or index == total_items:
+            if _should_log_progress(index, total_items):
                 logger.info(
-                    "Source progress [%s]: %s/%s items processed",
+                    "Source progress [%s]: %s/%s",
                     source_config.name,
                     index,
                     total_items,
