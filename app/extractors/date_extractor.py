@@ -4,7 +4,7 @@ from datetime import date, datetime, time, timezone
 import re
 from urllib.parse import urlparse
 
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup, NavigableString, Tag
 
 RUSSIAN_MONTHS = {
     "января": 1,
@@ -68,6 +68,40 @@ RUSSIAN_DATE_RE = re.compile(
     re.IGNORECASE,
 )
 TIME_RE = re.compile(r"\b\d{1,2}:\d{2}\b")
+ADMKRAI_PUBLICATION_CONTEXT_RE = re.compile(
+    r"(?:дата\s+публикации|дата\s+опубликования|опубликовано|опубликован|размещено|размещен|размещён)"
+    r"[:\s,]+(.{0,120})",
+    re.IGNORECASE,
+)
+ADMKRAI_BARE_DATE_RE = re.compile(
+    r"^(?:\d{1,2}[./]\d{1,2}[./]\d{4}|"
+    r"\d{1,2}\s+"
+    r"(?:января|январь|февраля|февраль|марта|март|апреля|апрель|мая|май|июня|июнь|"
+    r"июля|июль|августа|август|сентября|сентябрь|октября|октябрь|ноября|ноябрь|"
+    r"декабря|декабрь)\s+\d{4})(?:\s+\d{1,2}:\d{2})?$",
+    re.IGNORECASE,
+)
+ADMKRAI_HEADER_DATE_RE = re.compile(
+    r"(?:п\s*р\s*и\s*к\s*а\s*з|постановлени[ея]|распоряжени[ея])\s*"
+    r"(?:№\s*[\w./-]+\s*)?(?:от\s*)?"
+    r"(\d{1,2}[./]\d{1,2}[./]\d{4}|"
+    r"\d{1,2}\s+"
+    r"(?:января|январь|февраля|февраль|марта|март|апреля|апрель|мая|май|июня|июнь|"
+    r"июля|июль|августа|август|сентября|сентябрь|октября|октябрь|ноября|ноябрь|"
+    r"декабря|декабрь)\s+\d{4})",
+    re.IGNORECASE,
+)
+ADMKRAI_UNSAFE_DATE_MARKERS = (
+    "приказ от",
+    "постановление от",
+    "распоряжение от",
+    "областной закон от",
+    "прием заяв",
+    "приём заяв",
+    "заявки принима",
+    "срок подачи",
+    "до ",
+)
 
 
 def parse_russian_date(text: str) -> date | None:
@@ -166,6 +200,11 @@ def extract_published_at_from_html(html: str, source_name: str, url: str) -> dat
         if parsed is not None:
             return parsed
 
+    if _is_admkrai_source(source_name, url):
+        parsed = _extract_admkrai_publication_from_text(" ".join(soup.stripped_strings))
+        if parsed is not None:
+            return parsed
+
     return extract_published_at_from_url(url)
 
 
@@ -175,6 +214,11 @@ def extract_published_at_from_link_tag(
     source_name: str,
     url: str,
 ) -> date | None:
+    if _is_admkrai_source(source_name, url):
+        parsed = _extract_admkrai_publication_from_link(link)
+        if parsed is not None:
+            return parsed
+
     time_tag = link.find_previous("time") or link.find("time")
     if isinstance(time_tag, Tag):
         datetime_attr = str(time_tag.get("datetime", "")).strip()
@@ -211,6 +255,11 @@ def infer_published_at(
     source_name: str,
     url: str,
 ) -> datetime | None:
+    if _is_admkrai_source(source_name, url):
+        parsed = _extract_admkrai_publication_from_text(raw_text)
+        if parsed is not None:
+            return _to_utc_datetime(parsed)
+
     for candidate_text, allow_leading_date in (
         (raw_text, _is_news_like_source(source_name, url)),
         (title, False),
@@ -291,6 +340,91 @@ def _is_news_like_source(source_name: str, url: str) -> bool:
             "regulation.gov.ru",
         )
     )
+
+
+def _is_admkrai_source(source_name: str, url: str) -> bool:
+    source_key = f"{source_name} {url}".lower()
+    return "admkrai.krasnodar.ru" in source_key or "нормативные акты краснодарского края" in source_key
+
+
+def _extract_admkrai_publication_from_link(link: Tag) -> date | None:
+    time_tag = link.find_previous("time") or link.find("time")
+    if isinstance(time_tag, Tag):
+        datetime_attr = str(time_tag.get("datetime", "")).strip()
+        parsed = parse_russian_date(datetime_attr or " ".join(time_tag.stripped_strings))
+        if parsed is not None:
+            return parsed
+
+    for candidate in _collect_admkrai_link_candidates(link):
+        parsed = _parse_admkrai_safe_date_candidate(candidate)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _collect_admkrai_link_candidates(link: Tag) -> list[str]:
+    candidates: list[str] = []
+    for sibling in list(link.previous_siblings)[:4]:
+        text = _to_candidate_text(sibling)
+        if text:
+            candidates.append(text)
+    parent = link.parent
+    if isinstance(parent, Tag) and parent.name in {"td", "th"}:
+        for sibling in list(parent.previous_siblings)[:3]:
+            text = _to_candidate_text(sibling)
+            if text:
+                candidates.append(text)
+    return candidates
+
+
+def _to_candidate_text(node: object) -> str:
+    if isinstance(node, Tag):
+        return " ".join(node.stripped_strings)
+    if isinstance(node, NavigableString):
+        return str(node).strip()
+    return ""
+
+
+def _parse_admkrai_safe_date_candidate(text: str) -> date | None:
+    normalized = " ".join((text or "").split())
+    if not normalized or len(normalized) > 140:
+        return None
+
+    lowered = normalized.lower()
+    if any(marker in lowered for marker in ADMKRAI_UNSAFE_DATE_MARKERS):
+        return None
+
+    context_match = ADMKRAI_PUBLICATION_CONTEXT_RE.search(normalized)
+    if context_match:
+        parsed = parse_russian_date(context_match.group(1))
+        if parsed is not None:
+            return parsed
+
+    stripped = normalized.strip(" .,:;")
+    if ADMKRAI_BARE_DATE_RE.fullmatch(stripped):
+        return parse_russian_date(stripped)
+    return None
+
+
+def _extract_admkrai_publication_from_text(text: str) -> date | None:
+    normalized = " ".join((text or "").split())
+    if not normalized:
+        return None
+
+    lowered = normalized.lower()
+    if "requires ocr extraction" in lowered:
+        return None
+
+    for match in ADMKRAI_PUBLICATION_CONTEXT_RE.finditer(normalized[:1600]):
+        parsed = parse_russian_date(match.group(1))
+        if parsed is not None:
+            return parsed
+
+    header_fragment = normalized[:700]
+    header_match = ADMKRAI_HEADER_DATE_RE.search(header_fragment)
+    if header_match is not None:
+        return parse_russian_date(header_match.group(1))
+    return None
 
 
 def _safe_date(year: int, month: int, day: int) -> date | None:

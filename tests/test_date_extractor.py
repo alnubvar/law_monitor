@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 from bs4 import BeautifulSoup
 
@@ -11,6 +12,8 @@ from app.extractors.date_extractor import (
     normalize_date_to_iso,
     parse_russian_date,
 )
+
+TEXT_FIXTURES_DIR = Path(__file__).parent / "fixtures" / "text"
 
 
 class DateExtractorSmokeTest(unittest.TestCase):
@@ -115,6 +118,86 @@ class DateExtractorSmokeTest(unittest.TestCase):
         )
 
         self.assertIsNone(parsed)
+
+    def test_admkrai_table_row_date_is_used_for_pdf_link(self) -> None:
+        soup = BeautifulSoup(
+            """
+            <table>
+              <tr>
+                <td>30.04.2026</td>
+                <td><a href="/upload/iblock/111/order-1.pdf">Приказ № 1</a></td>
+              </tr>
+              <tr>
+                <td>Прием заявок до 20.05.2026</td>
+                <td><a href="/upload/iblock/222/order-2.pdf">Приказ № 2</a></td>
+              </tr>
+            </table>
+            """,
+            "html.parser",
+        )
+        links = soup.find_all("a")
+        self.assertEqual(len(links), 2)
+
+        first = extract_published_at_from_link_tag(
+            links[0],  # type: ignore[arg-type]
+            source_name="Нормативные акты Краснодарского края",
+            url="https://admkrai.krasnodar.ru/upload/iblock/111/order-1.pdf",
+        )
+        second = extract_published_at_from_link_tag(
+            links[1],  # type: ignore[arg-type]
+            source_name="Нормативные акты Краснодарского края",
+            url="https://admkrai.krasnodar.ru/upload/iblock/222/order-2.pdf",
+        )
+
+        self.assertEqual(normalize_date_to_iso(first), "2026-04-30")
+        self.assertIsNone(second)
+
+    def test_admkrai_html_publication_marker_extracts_published_at(self) -> None:
+        html = """
+        <html>
+          <body>
+            <div>Опубликовано: 30.04.2026</div>
+          </body>
+        </html>
+        """
+        parsed = extract_published_at_from_html(
+            html,
+            "Нормативные акты Краснодарского края",
+            "https://admkrai.krasnodar.ru/content/1291/",
+        )
+        self.assertEqual(normalize_date_to_iso(parsed), "2026-04-30")
+
+    def test_admkrai_pdf_header_date_is_safe_publication_date(self) -> None:
+        raw_text = (TEXT_FIXTURES_DIR / "admkrai_pdf_current_document_date.txt").read_text(encoding="utf-8")
+        inferred = infer_published_at(
+            title="Об утверждении порядка предоставления субсидий",
+            raw_text=raw_text,
+            source_name="Нормативные акты Краснодарского края",
+            url="https://admkrai.krasnodar.ru/upload/iblock/123/document.pdf",
+        )
+        self.assertEqual(normalize_date_to_iso(inferred), "2026-04-30")
+
+    def test_admkrai_reference_prikaz_date_is_not_used_as_publication(self) -> None:
+        raw_text = (TEXT_FIXTURES_DIR / "admkrai_pdf_reference_prikaz_false_positive.txt").read_text(
+            encoding="utf-8"
+        )
+        inferred = infer_published_at(
+            title="О внесении изменения в приказ министерства ... от 31 января 2024 г.",
+            raw_text=raw_text,
+            source_name="Нормативные акты Краснодарского края",
+            url="https://admkrai.krasnodar.ru/upload/iblock/124/document.pdf",
+        )
+        self.assertIsNone(inferred)
+
+    def test_admkrai_deadline_date_is_not_used_as_publication(self) -> None:
+        raw_text = (TEXT_FIXTURES_DIR / "admkrai_deadline_false_positive.txt").read_text(encoding="utf-8")
+        inferred = infer_published_at(
+            title="Объявление о проведении отбора",
+            raw_text=raw_text,
+            source_name="Нормативные акты Краснодарского края",
+            url="https://admkrai.krasnodar.ru/content/1397/",
+        )
+        self.assertIsNone(inferred)
 
 
 if __name__ == "__main__":
