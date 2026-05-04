@@ -152,6 +152,42 @@ REFERENCE_TITLE_WORD_RE = re.compile(
     r"\b(анкета|форма|формы|памятка|инструкция|инструкции|образец)\b",
     re.IGNORECASE,
 )
+MCX_DONLAND_REFERENCE_TITLES = {
+    "агропромышленный комплекс",
+    "виноградарство и виноделие",
+    "государственные закупки",
+    "действующие документы",
+    "животноводство",
+    "малые формы хозяйствования",
+    "меры государственной поддержки",
+    "наука и образование",
+    "пищевая и перерабатывающая промышленность",
+    "пресс-центр",
+    "растениеводство",
+    "рыбохозяйственный комплекс",
+    "страхование и инвестиции",
+    "экономика и финансы",
+}
+PRAVO_DONLAND_REFERENCE_TITLES = {
+    "за сегодня",
+    "за неделю",
+    "за месяц",
+    "календарь опубликования",
+    "официальное опубликование",
+    "отмененные документы",
+    "правовая информация",
+    "правовая информатизация",
+    "правовые акты",
+    "проекты правовых актов",
+}
+PRAVO_DONLAND_DOCUMENT_MARKERS = (
+    "закон",
+    "постановление",
+    "приказ",
+    "распоряжение",
+    "решение",
+    "указ",
+)
 
 
 def detect_page_type(
@@ -267,20 +303,51 @@ def detect_source_specific_page_type(
     lead_text: str,
     url: str,
 ) -> str | None:
+    lower_url = url.lower()
+
     if title in RESULTS_LIKE_TITLES:
         if "реестр" in title or "получател" in title or "список" in title:
             return "registry"
         return "results_protocol"
+
+    if domain == "pravo.donland.ru":
+        if any(
+            fragment in lower_url
+            for fragment in (
+                "/doc/list/",
+                "/search-main/",
+                "/calendar/",
+                "/rss/",
+                "/news/list/",
+                "/static/",
+                "/legalinfo/",
+            )
+        ):
+            return "reference_page"
+        if title in PRAVO_DONLAND_REFERENCE_TITLES:
+            return "reference_page"
+        if (
+            "/doc/view/" in lower_url
+            or lower_url.endswith((".pdf", ".doc", ".docx"))
+        ) and any(marker in title for marker in PRAVO_DONLAND_DOCUMENT_MARKERS):
+            return "new_rule"
 
     if domain in DOMAIN_SECTION_TITLE_HINTS and title in DOMAIN_SECTION_TITLE_HINTS[domain]:
         if YEAR_TITLE_RE.fullmatch(title):
             return "year_archive"
         return "section_page"
 
+    if domain == "mcx.donland.ru":
+        if title in MCX_DONLAND_REFERENCE_TITLES and any(
+            fragment in lower_url
+            for fragment in ("/activity/", "/documents/", "/presscenter/")
+        ):
+            return "reference_page"
+
     if domain == "gisp.gov.ru":
-        if "/measure/" in url.lower():
+        if "/measure/" in lower_url:
             return "measure_card"
-        if "/nmp/main/" in url.lower() or "навига" in lead_text:
+        if "/nmp/main/" in lower_url or "навига" in lead_text:
             if title in GENERIC_SUPPORT_TITLES or looks_support_listing_page(
                 title,
                 lead_text,
@@ -291,7 +358,6 @@ def detect_source_specific_page_type(
             return "navigation"
 
     if domain in REGIONAL_DOMAINS:
-        lower_url = url.lower()
         if domain == "admkrai.krasnodar.ru" and lower_url.endswith((".pdf", ".doc", ".docx")):
             return "new_rule"
         if (

@@ -829,6 +829,98 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         self.assertEqual(result.page_type, "new_rule")
         self.assertIn(result.action_level, {"watchlist", "requires_attention"})
 
+    def test_mcx_donland_category_listing_is_background_reference_page(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Животноводство",
+            (
+                "Животноводство. С 01.01.2025 проведение отбора по субсидиям будет "
+                "осуществляться в электронном виде. Доступные меры государственной поддержки."
+            ),
+            source_name="Минсельхоз Ростовской области - господдержка",
+            url="https://mcx.donland.ru/activity/37370/",
+            level="regional",
+            region="rostov",
+        )
+
+        self.assertEqual(result.page_type, "reference_page")
+        self.assertEqual(result.action_level, "background")
+
+    def test_mcx_donland_documents_listing_is_background_reference_page(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Действующие документы",
+            (
+                "Действующие документы Приказ от 23.04.2026 № П-117 "
+                "О внесении изменений в приказ министерства. "
+                "Постановление Правительства Ростовской области от 09.04.2026 № 8."
+            ),
+            source_name="Минсельхоз Ростовской области - господдержка",
+            url="https://mcx.donland.ru/documents/active/",
+            level="regional",
+            region="rostov",
+        )
+
+        self.assertEqual(result.page_type, "reference_page")
+        self.assertEqual(result.action_level, "background")
+
+    def test_mcx_donland_real_selection_announcement_stays_visible(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Объявление о проведении отбора на предоставление субсидии сельхозтоваропроизводителям",
+            (
+                "Объявление о проведении отбора на предоставление субсидии "
+                "сельхозтоваропроизводителям. Прием заявок открыт до 20 мая 2026 года."
+            ),
+            source_name="Минсельхоз Ростовской области - господдержка",
+            url="https://mcx.donland.ru/presscenter/events/72822/",
+            level="regional",
+            region="rostov",
+        )
+
+        self.assertEqual(result.page_type, "selection_announcement")
+        self.assertEqual(result.action_level, "watchlist")
+
+    def test_pravo_donland_listing_is_background_reference_page(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            "ОФИЦИАЛЬНОЕ ОПУБЛИКОВАНИЕ",
+            (
+                "Официальное опубликование правовых актов. Найдено документов: 51330. "
+                "Документ за сегодня, за неделю, за месяц, все."
+            ),
+            source_name="Право Ростовской области",
+            url="https://pravo.donland.ru/doc/list/clear/1/",
+            level="regional",
+            region="rostov",
+        )
+
+        self.assertEqual(result.page_type, "reference_page")
+        self.assertEqual(result.action_level, "background")
+
+    def test_pravo_donland_real_npa_is_new_rule_not_unknown(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Постановление Правительства Ростовской области от 29.04.2026 № 42 «О внесении изменений в порядок предоставления субсидий сельскохозяйственным товаропроизводителям»",
+            (
+                "Постановление Правительства Ростовской области от 29.04.2026 № 42. "
+                "О внесении изменений в порядок предоставления субсидий "
+                "сельскохозяйственным товаропроизводителям."
+            ),
+            source_name="Право Ростовской области",
+            url="https://pravo.donland.ru/doc/view/id/Постановление_42_29042026_60001/",
+            level="regional",
+            region="rostov",
+        )
+
+        self.assertEqual(result.page_type, "new_rule")
+        self.assertEqual(result.action_level, "watchlist")
+
     def test_regional_npa_archive_listing_is_background_or_irrelevant(self) -> None:
         client = MockLLMClient(["сельское хозяйство"])
 

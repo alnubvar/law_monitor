@@ -113,12 +113,53 @@ DOMAIN_SECTION_TITLE_HINTS = {
         "административное деление",
     },
     "msh.krasnodar.ru": SECTION_PAGE_TITLES | {"2022", "2023", "2024", "2025", "2026"},
+    "pravo.donland.ru": SECTION_PAGE_TITLES
+    | {
+        "официальное опубликование",
+        "правовые акты",
+        "проекты правовых актов",
+        "правовая информация",
+        "календарь опубликования",
+        "отмененные документы",
+        "о портале",
+        "контакты",
+    },
 }
 REGIONAL_GENERIC_SECTION_TITLES = {
     "господдержка",
     "субсидии",
     "приказы",
     "документы",
+}
+MCX_DONLAND_GENERIC_SECTION_TITLES = {
+    "агропромышленный комплекс",
+    "виноградарство и виноделие",
+    "государственные закупки",
+    "действующие документы",
+    "животноводство",
+    "малые формы хозяйствования",
+    "меры государственной поддержки",
+    "наука и образование",
+    "пищевая и перерабатывающая промышленность",
+    "пресс-центр",
+    "растениеводство",
+    "рыбохозяйственный комплекс",
+    "страхование и инвестиции",
+    "экономика и финансы",
+}
+PRAVO_DONLAND_GENERIC_SECTION_TITLES = {
+    "за сегодня",
+    "за неделю",
+    "за месяц",
+    "календарь опубликования",
+    "о портале",
+    "официальное опубликование",
+    "отмененные документы",
+    "правовая информатизация",
+    "правовая информация",
+    "правила использования материалов, размещенных на портале",
+    "правовые акты",
+    "проекты правовых актов",
 }
 LOW_VALUE_REGIONAL_SECTION_TITLES = {
     "вакансии",
@@ -167,7 +208,13 @@ LOW_VALUE_SUPPORT_NPA_BODY_MARKERS = (
     "кадровое обеспечение",
     "документы сайта",
 )
-REGIONAL_DOMAINS = {"mcx.donland.ru", "msh.krasnodar.ru", "mshsk.ru", "admkrai.krasnodar.ru"}
+REGIONAL_DOMAINS = {
+    "mcx.donland.ru",
+    "pravo.donland.ru",
+    "msh.krasnodar.ru",
+    "mshsk.ru",
+    "admkrai.krasnodar.ru",
+}
 
 
 def looks_generic_regional_section_page(
@@ -179,7 +226,12 @@ def looks_generic_regional_section_page(
 ) -> bool:
     if domain not in REGIONAL_DOMAINS:
         return False
-    if title not in REGIONAL_GENERIC_SECTION_TITLES and not title.startswith("приказы "):
+    domain_titles = set(REGIONAL_GENERIC_SECTION_TITLES)
+    if domain == "mcx.donland.ru":
+        domain_titles |= MCX_DONLAND_GENERIC_SECTION_TITLES
+    if domain == "pravo.donland.ru":
+        domain_titles |= PRAVO_DONLAND_GENERIC_SECTION_TITLES
+    if title not in domain_titles and not title.startswith("приказы "):
         return False
     lower_url = url.lower()
     listing_markers = (
@@ -191,10 +243,25 @@ def looks_generic_regional_section_page(
         "субсидии",
         "господдержка",
         "перечень",
+        "официальное опубликование",
+        "найдено документов",
+        "документ за сегодня",
     )
     if any(marker in lead_text for marker in listing_markers):
         return True
-    return any(fragment in lower_url for fragment in ("/documents/", "/activity/", "/content/"))
+    return any(
+        fragment in lower_url
+        for fragment in (
+            "/documents/",
+            "/activity/",
+            "/content/",
+            "/doc/list/",
+            "/search-main/",
+            "/calendar/",
+            "/legalinfo/",
+            "/static/",
+        )
+    )
 
 
 def looks_low_value_regional_section_page(

@@ -263,6 +263,14 @@ def detect_action_level(
         url=url,
     ):
         return "background"
+    if source_role == "support_documents" and page_type in {"section_page", "category_page", "reference_page"}:
+        if looks_generic_regional_section_page(
+            title_text,
+            lead_text,
+            domain=domain,
+            url=url or "",
+        ):
+            return "background"
     if source_role == "support_documents" and page_type in {"section_page", "category_page"}:
         if has_support_document_signal and has_strict_action_signal:
             return "watchlist"
