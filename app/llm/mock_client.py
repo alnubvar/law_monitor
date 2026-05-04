@@ -98,7 +98,7 @@ class MockLLMClient(BaseLLMClient):
             source_name=source_name,
             url=url,
         )
-        impact = self._build_impact(action_level, topic)
+        impact = self._build_impact(action_level, topic, facts=facts)
         business_signal = self._build_business_signal(
             action_level=action_level,
             page_type=page_type,
@@ -292,8 +292,14 @@ class MockLLMClient(BaseLLMClient):
             url=url,
         )
 
-    def _build_impact(self, action_level: str, topic: str | None) -> str:
-        return build_impact(action_level, topic)
+    def _build_impact(
+        self,
+        action_level: str,
+        topic: str | None,
+        *,
+        facts: DocumentFacts,
+    ) -> str:
+        return build_impact(action_level, topic, facts=facts)
 
     def _build_reason(
         self,

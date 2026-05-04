@@ -64,7 +64,40 @@ def detect_topic(text: str) -> str | None:
     return "Общий мониторинг АПК" if "апк" in text or "сельск" in text else None
 
 
-def build_impact(action_level: str, topic: str | None) -> str:
+def build_impact(
+    action_level: str,
+    topic: str | None,
+    *,
+    facts: DocumentFacts | None = None,
+) -> str:
+    if facts is not None:
+        if facts.support_status == "inactive":
+            return (
+                "Материал носит справочный характер: мера сейчас неактивна, поэтому его стоит "
+                "использовать для истории условий и сравнения с будущими перезапусками."
+            )
+        if facts.application_status == "closed":
+            if facts.deadline_text:
+                return (
+                    "Окно подачи уже завершено; документ полезен как справка по прошедшему отбору "
+                    "и для проверки условий перед следующим запуском."
+                )
+            return "Прием заявок завершен; документ полезен как справка и ориентир для следующих отборов."
+        if facts.application_status == "open" and facts.deadline_text:
+            return (
+                f"Есть действующий срок подачи ({facts.deadline_text}); GR-команде стоит проверить "
+                "окно участия, условия меры и ответственных."
+            )
+        if facts.application_status == "open":
+            return (
+                "Прием заявок открыт; GR-команде стоит проверить условия участия, состав документов "
+                "и ближайшие действия по мере."
+            )
+        if facts.support_status == "active" and facts.application_status == "regular":
+            return (
+                "Мера действует на регулярной основе без разового дедлайна; ее можно использовать "
+                "для проработки участия, сверки условий и планирования финансирования."
+            )
     if action_level == "requires_attention":
         return (
             "Материал требует реакции GR-команды: в тексте есть признаки мер поддержки, "
