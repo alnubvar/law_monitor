@@ -571,6 +571,42 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertNotIn("Дедлайн/срок подачи: Прием заявок до 30.06.2026.", markdown)
         self.assertIn("Примечание: Срок найден в описании неактивной меры", markdown)
 
+    def test_background_gisp_measures_are_hidden_from_visible_watchlist_report(self) -> None:
+        inactive_document = self._doc(
+            doc_id=1,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Субсидии на возмещение затрат",
+            url="https://gisp.gov.ru/nmp/measure/8130026",
+            action_level="background",
+            page_type="measure_card",
+            summary="Неактивная мера поддержки.",
+        )
+        inactive_document.support_status = "inactive"
+        inactive_document.business_signal = "Неактивная мера поддержки: оставить в справочном блоке"
+
+        non_target_document = self._doc(
+            doc_id=2,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title='Льготные заёмное финансирование РФРП Ульяновской области по программе "Финансирование АПК".',
+            url="https://gisp.gov.ru/nmp/measure/12446930",
+            action_level="background",
+            page_type="measure_card",
+            summary="Активная мера вне целевой географии.",
+        )
+        non_target_document.support_status = "active"
+        non_target_document.application_status = "regular"
+        non_target_document.business_signal = "Активная мера поддержки вне целевой географии; оставлена для справки."
+
+        report_view = build_report_view(
+            [inactive_document, non_target_document],
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertEqual(report_view.total_visible, 0)
+
     def test_telegram_digest_includes_business_facts_for_requires_attention(self) -> None:
         from app.notify import telegram
 

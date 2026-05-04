@@ -7,7 +7,7 @@
   "raw_text": "Активная мера поддержки. На регулярной основе. Региональная программа Ульяновской области.",
   "level": "support_measures",
   "region": "federal",
-  "expected_action_level": "watchlist",
+  "expected_action_level": "background",
   "expected_page_type": "measure_card",
   "expected_source_role": "active_support_measures",
   "expected_business_signal_contains": "вне целевой географии",

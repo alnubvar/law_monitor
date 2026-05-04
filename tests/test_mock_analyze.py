@@ -331,6 +331,7 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
 
         self.assertEqual(result.support_status, "inactive")
         self.assertFalse(result.is_active)
+        self.assertEqual(result.action_level, "background")
         self.assertNotEqual(result.action_level, "requires_attention")
         self.assertEqual(result.business_signal, "Неактивная мера поддержки: оставить в справочном блоке")
 
@@ -406,6 +407,26 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         self.assertIn("до 15 мая 2026 года", result.deadline_text or "")
         self.assertEqual(result.npa_number, "НПА 338а")
         self.assertIsNone(result.terms_text)
+
+    def test_gisp_open_deadline_measure_stays_requires_attention(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Объявление об отборе на предоставление субсидии",
+            (
+                "Активная мера поддержки. Объявлен отбор. "
+                "Прием заявок открыт до 20 июня 2026 года."
+            ),
+            source_name="ГИСП - меры поддержки АПК",
+            url="https://gisp.gov.ru/nmp/measure/9999999",
+            level="support_measures",
+            region="federal",
+        )
+
+        self.assertEqual(result.page_type, "measure_card")
+        self.assertEqual(result.application_status, "open")
+        self.assertIsNotNone(result.deadline_text)
+        self.assertEqual(result.action_level, "requires_attention")
 
     def test_closed_application_is_not_requires_attention(self) -> None:
         client = MockLLMClient(["субсидии сельское хозяйство"])
@@ -527,6 +548,7 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         )
 
         self.assertNotEqual(result.action_level, "requires_attention")
+        self.assertEqual(result.action_level, "background")
         self.assertEqual(
             result.business_signal,
             "Активная мера поддержки вне целевой географии; оставлена для справки.",
@@ -546,6 +568,7 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
 
         self.assertEqual(result.support_status, "inactive")
         self.assertIsNotNone(result.deadline_text)
+        self.assertEqual(result.action_level, "background")
         self.assertNotEqual(result.action_level, "requires_attention")
         self.assertIn("не является текущим окном подачи", result.risk_notes or "")
 

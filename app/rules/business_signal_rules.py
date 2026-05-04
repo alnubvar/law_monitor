@@ -305,9 +305,9 @@ def detect_action_level(
         return "background"
     if is_support_context_value and page_type in ACTIONABLE_PAGE_TYPES:
         if not (is_target_region_value or is_federal_measure_value):
-            return "watchlist" if facts.support_status == "active" else "background"
+            return "background"
         if facts.support_status == "inactive":
-            return "watchlist"
+            return "background"
         if facts.support_status == "active" and facts.application_status == "open":
             return "requires_attention"
         if (
