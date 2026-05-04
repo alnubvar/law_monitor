@@ -20,7 +20,10 @@ logger = logging.getLogger(__name__)
 
 TELEGRAM_SEND_ATTEMPTS = 3
 TELEGRAM_RETRY_BACKOFF_SECONDS = 1.0
-TELEGRAM_COMMANDS = ("/status", "/today", "/urgent", "/report", "/sources", "/help")
+TELEGRAM_COMMANDS = ("/status", "/today", "/urgent", "/watchlist", "/report", "/sources", "/help")
+TELEGRAM_MAX_MESSAGE_LENGTH = 4096
+TELEGRAM_SAFE_MESSAGE_LENGTH = 3900
+TELEGRAM_LIST_LIMIT = 10
 
 
 def is_configured() -> bool:
@@ -76,6 +79,14 @@ def send_message(text: str) -> bool:
     if proxies:
         logger.info("Using Telegram proxy.")
 
+    chunks = _split_message_chunks(text)
+    for chunk in chunks:
+        if not _send_message_chunk(chunk, proxies=proxies):
+            return False
+    return True
+
+
+def _send_message_chunk(text: str, *, proxies: dict[str, str] | None) -> bool:
     for attempt in range(1, TELEGRAM_SEND_ATTEMPTS + 1):
         try:
             response = requests.post(
@@ -137,6 +148,8 @@ def build_command_response(
         return _build_today_message(resolved_db_path)
     if normalized_command == "/urgent":
         return _build_urgent_message(resolved_db_path)
+    if normalized_command == "/watchlist":
+        return _build_watchlist_message(resolved_db_path)
     if normalized_command == "/report":
         return _build_report_message(resolved_db_path)
     if normalized_command == "/sources":
@@ -168,28 +181,47 @@ def _build_status_message(db_path: Path | str) -> str:
         action_levels=["requires_attention", "watchlist"],
         include_market_background=False,
     )
+    snapshot = build_diagnostics_snapshot(list_documents(db_path=db_path, days=7), days=7)
+    active_source_rows = [row for row in snapshot.rows if row.total_documents > 0]
+    latest_collect = max((document.collected_at for document in all_documents), default=None)
+    latest_publish = max(
+        (
+            document.published_at
+            for document in all_documents
+            if document.published_at is not None
+        ),
+        default=None,
+    )
+    latest_report = _find_latest_report_file()
+    requires_attention_count = count_documents_by_action_level("requires_attention", db_path=db_path)
+    watchlist_count = count_documents_by_action_level("watchlist", db_path=db_path)
     lines = [
-        "AHSTEP GR-monitoring status",
-        f"Время: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}",
-        f"Источники: {len(sources)} enabled",
-        f"Всего документов: {len(all_documents)}",
-        f"requires_attention: {count_documents_by_action_level('requires_attention', db_path=db_path)}",
-        f"watchlist: {count_documents_by_action_level('watchlist', db_path=db_path)}",
-        f"visible (7d): {len(visible_documents)}",
-        f"Telegram configured: {'yes' if is_configured() else 'no'}",
-        f"Proxy configured: {'yes' if is_proxy_configured() else 'no'}",
-        "Последние циклы: n/a (scheduler state is not persisted)",
+        "📊 Статус AHSTEP GR-monitoring",
+        f"Дата/время: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}",
+        f"Документов в базе: {len(all_documents)}",
+        f"Счетчики: requires_attention={requires_attention_count} | watchlist={watchlist_count} | visible(7d)={len(visible_documents)}",
+        f"Источники: {len(sources)} enabled, с активностью за 7 дн: {len(active_source_rows)}",
+        f"Последний collect: {_fmt_dt(latest_collect)}",
+        f"Последний published_at в базе: {_fmt_dt(latest_publish)}",
+        f"Последний report: {latest_report or 'не найден'}",
+        f"Telegram/proxy: {'configured' if is_configured() else 'not configured'} / {'configured' if is_proxy_configured() else 'not configured'}",
+        "Примечание: scheduler-state по циклам не хранится, поэтому показываются вычислимые runtime-метрики.",
     ]
-    return "\n".join(lines)
+    return _cap_message("\n".join(lines))
 
 
 def _build_today_message(db_path: Path | str) -> str:
     today_documents = _select_today_visible_documents(db_path)
     if not today_documents:
-        return f"Visible documents for today ({_today_utc().isoformat()}): 0"
-    lines = [f"Visible documents for today ({_today_utc().isoformat()}): {len(today_documents)}"]
+        return "📅 Сегодня: видимых документов нет."
+    urgent_count = sum(1 for document in today_documents if document.action_level == "requires_attention")
+    watchlist_count = sum(1 for document in today_documents if document.action_level == "watchlist")
+    lines = [
+        f"📅 Сегодня ({_today_utc().isoformat()})",
+        f"Счетчики: requires_attention={urgent_count} | watchlist={watchlist_count} | visible={len(today_documents)}",
+    ]
     lines.extend(_format_document_lines(today_documents, include_summary=True))
-    return "\n".join(lines)
+    return _cap_message("\n".join(lines))
 
 
 def _build_urgent_message(db_path: Path | str) -> str:
@@ -206,10 +238,36 @@ def _build_urgent_message(db_path: Path | str) -> str:
         include_market_background=False,
     )
     if not urgent_documents:
-        return "Urgent documents: 0"
-    lines = [f"Urgent documents: {len(urgent_documents)}"]
+        return "🚨 Срочных документов сейчас нет."
+    lines = [
+        "🚨 Срочные документы (requires_attention)",
+        f"Счетчики: requires_attention={len(urgent_documents)} | watchlist=0 | visible={len(urgent_documents)}",
+    ]
     lines.extend(_format_document_lines(urgent_documents, include_summary=True))
-    return "\n".join(lines)
+    return _cap_message("\n".join(lines))
+
+
+def _build_watchlist_message(db_path: Path | str) -> str:
+    documents = list_recent_documents(
+        db_path=db_path,
+        days=7,
+        relevant_only=False,
+        action_levels=["watchlist"],
+    )
+    watchlist_documents = select_visible_report_documents(
+        documents,
+        relevant_only=False,
+        action_levels=["watchlist"],
+        include_market_background=False,
+    )
+    if not watchlist_documents:
+        return "👀 Документов watchlist сейчас нет."
+    lines = [
+        "👀 Документы на наблюдении (watchlist)",
+        f"Счетчики: requires_attention=0 | watchlist={len(watchlist_documents)} | visible={len(watchlist_documents)}",
+    ]
+    lines.extend(_format_document_lines(watchlist_documents, include_summary=True))
+    return _cap_message("\n".join(lines))
 
 
 def _build_report_message(db_path: Path | str) -> str:
@@ -225,7 +283,12 @@ def _build_report_message(db_path: Path | str) -> str:
         action_levels=["requires_attention", "watchlist"],
         include_market_background=False,
     )
-    return build_digest_message(visible_documents)
+    short_digest = build_digest_message(visible_documents)
+    latest_report = _find_latest_report_file()
+    prefix = ["🧾 Последняя сводка (7 дней)"]
+    if latest_report:
+        prefix.append(f"Файл отчета: {latest_report}")
+    return _cap_message("\n".join(prefix + ["", short_digest]))
 
 
 def _build_sources_message(db_path: Path | str) -> str:
@@ -233,7 +296,7 @@ def _build_sources_message(db_path: Path | str) -> str:
     recent_documents = list_documents(db_path=db_path, days=7)
     snapshot = build_diagnostics_snapshot(recent_documents, days=7)
     rows_by_name = {row.source_name: row for row in snapshot.rows}
-    lines = [f"Sources ({len(sources)} enabled)"]
+    lines = [f"🛰 Источники ({len(sources)} enabled)"]
     for source in sources:
         row = rows_by_name.get(source.name)
         if row is None:
@@ -244,21 +307,22 @@ def _build_sources_message(db_path: Path | str) -> str:
             f"7d={row.total_documents}; RA={row.requires_attention_count}; "
             f"WL={row.watchlist_count}; BG={row.background_count}; IRR={row.irrelevant_count}"
         )
-    return "\n".join(lines)
+    return _cap_message("\n".join(lines))
 
 
 def _build_help_message() -> str:
-    return "\n".join(
+    return _cap_message("\n".join(
         [
-            "AHSTEP Telegram commands:",
-            "/status - system status and counters",
-            "/today - today's visible documents",
-            "/urgent - current requires_attention documents",
-            "/report - short digest for the last 7 days",
-            "/sources - enabled sources and 7-day counts",
-            "/help - command list",
+            "🤖 AHSTEP GR-monitoring команды:",
+            "/status — состояние системы и счетчики",
+            "/today — видимые документы за сегодня",
+            "/urgent — срочные документы (requires_attention)",
+            "/watchlist — документы на наблюдении",
+            "/report — краткая сводка за 7 дней + путь к последнему report",
+            "/sources — источники и счетчики за 7 дней",
+            "/help — список команд",
         ]
-    )
+    ))
 
 
 def _select_today_visible_documents(db_path: Path | str) -> list[RawDocument]:
@@ -299,12 +363,66 @@ def _format_document_lines(
     include_summary: bool,
 ) -> list[str]:
     lines: list[str] = []
-    for document in documents[:10]:
+    for document in documents[:TELEGRAM_LIST_LIMIT]:
+        published_label = _fmt_dt(document.published_at)
         lines.append(f"- {document.title}")
-        lines.append(f"  {document.source_name} | {document.url}")
+        lines.append(
+            f"  Источник: {document.source_name} | Дата: {published_label} | Action: {document.action_level or 'n/a'}"
+        )
+        if document.business_signal:
+            lines.append(f"  Причина: {document.business_signal[:180]}")
         if include_summary and document.summary:
             lines.append(f"  {document.summary[:180]}")
-    hidden_count = len(documents) - min(len(documents), 10)
+        lines.append(f"  {document.url}")
+    hidden_count = len(documents) - min(len(documents), TELEGRAM_LIST_LIMIT)
     if hidden_count > 0:
-        lines.append(f"... and {hidden_count} more")
+        lines.append(f"... и еще {hidden_count}.")
     return lines
+
+
+def _fmt_dt(value: datetime | None) -> str:
+    if value is None:
+        return "n/a"
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone().strftime("%Y-%m-%d")
+
+
+def _find_latest_report_file() -> str | None:
+    reports_dir = Path("reports")
+    if not reports_dir.exists():
+        return None
+    report_files = sorted(
+        reports_dir.glob("gr_monitoring_*.md"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    if not report_files:
+        return None
+    return str(report_files[0])
+
+
+def _cap_message(text: str) -> str:
+    normalized = text.strip()
+    if len(normalized) <= TELEGRAM_SAFE_MESSAGE_LENGTH:
+        return normalized
+    return f"{normalized[: TELEGRAM_SAFE_MESSAGE_LENGTH - 20].rstrip()}\n\n... (truncated)"
+
+
+def _split_message_chunks(text: str) -> list[str]:
+    normalized = text.strip()
+    if not normalized:
+        return [""]
+    if len(normalized) <= TELEGRAM_MAX_MESSAGE_LENGTH:
+        return [normalized]
+    chunks: list[str] = []
+    buffer = normalized
+    while len(buffer) > TELEGRAM_MAX_MESSAGE_LENGTH:
+        split_at = buffer.rfind("\n", 0, TELEGRAM_MAX_MESSAGE_LENGTH)
+        if split_at < 200:
+            split_at = TELEGRAM_MAX_MESSAGE_LENGTH
+        chunks.append(buffer[:split_at].rstrip())
+        buffer = buffer[split_at:].lstrip()
+    if buffer:
+        chunks.append(buffer)
+    return chunks

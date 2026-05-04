@@ -127,6 +127,7 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         self.assertIn("/status", text)
         self.assertIn("/today", text)
         self.assertIn("/urgent", text)
+        self.assertIn("/watchlist", text)
         self.assertIn("/report", text)
         self.assertIn("/sources", text)
 
@@ -148,7 +149,8 @@ class TelegramNotifySmokeTest(unittest.TestCase):
 
         text = telegram.build_command_response("/urgent", db_path=db_path)
 
-        self.assertIn("Urgent documents: 1", text)
+        self.assertIn("Срочные документы", text)
+        self.assertIn("requires_attention=1", text)
         self.assertIn("Льготное кредитование АПК", text)
 
     def test_today_command_returns_visible_today_documents(self) -> None:
@@ -182,9 +184,55 @@ class TelegramNotifySmokeTest(unittest.TestCase):
 
         text = telegram.build_command_response("/today", db_path=db_path)
 
-        self.assertIn("Visible documents for today", text)
+        self.assertIn("Сегодня", text)
+        self.assertIn("visible=1", text)
         self.assertIn("Пошлина на экспорт пшеницы останется нулевой", text)
         self.assertNotIn("Старый документ", text)
+
+    def test_watchlist_command_returns_watchlist_documents(self) -> None:
+        db_path = self._db_path("telegram_watchlist.db")
+        init_db(db_path)
+        save_document(
+            self._doc(
+                doc_id=1,
+                source_name="ZOL.ru - зерновые новости",
+                region="federal",
+                title="Пошлина на экспорт пшеницы останется нулевой",
+                url="https://www.zol.ru/n/41337",
+                action_level="watchlist",
+                page_type="news_background",
+            ),
+            db_path,
+        )
+
+        text = telegram.build_command_response("/watchlist", db_path=db_path)
+
+        self.assertIn("Документы на наблюдении", text)
+        self.assertIn("watchlist=1", text)
+        self.assertIn("Пошлина на экспорт пшеницы останется нулевой", text)
+
+    def test_status_command_contains_main_counters(self) -> None:
+        db_path = self._db_path("telegram_status.db")
+        init_db(db_path)
+        save_document(
+            self._doc(
+                doc_id=1,
+                source_name="ГИСП - меры поддержки АПК",
+                region="federal",
+                title="Льготное кредитование АПК",
+                url="https://gisp.gov.ru/nmp/measure/9564204",
+                action_level="requires_attention",
+                page_type="measure_card",
+            ),
+            db_path,
+        )
+
+        text = telegram.build_command_response("/status", db_path=db_path)
+
+        self.assertIn("Статус AHSTEP GR-monitoring", text)
+        self.assertIn("Документов в базе: 1", text)
+        self.assertIn("requires_attention=1", text)
+        self.assertIn("watchlist=0", text)
 
     def test_sources_command_includes_enabled_sources(self) -> None:
         db_path = self._db_path("telegram_sources.db")
@@ -192,7 +240,7 @@ class TelegramNotifySmokeTest(unittest.TestCase):
 
         text = telegram.build_command_response("/sources", db_path=db_path)
 
-        self.assertIn("Sources (", text)
+        self.assertIn("Источники (", text)
         self.assertIn("ZOL.ru - зерновые новости", text)
         self.assertIn("ГИСП - меры поддержки АПК", text)
 
@@ -202,6 +250,30 @@ class TelegramNotifySmokeTest(unittest.TestCase):
 
         self.assertTrue(sent)
         self.assertEqual(send_message.call_count, 1)
+
+    def test_empty_urgent_state_is_human_friendly(self) -> None:
+        db_path = self._db_path("telegram_urgent_empty.db")
+        init_db(db_path)
+
+        text = telegram.build_command_response("/urgent", db_path=db_path)
+
+        self.assertEqual(text, "🚨 Срочных документов сейчас нет.")
+
+    def test_long_message_is_split_to_multiple_chunks(self) -> None:
+        with patch.multiple(
+            telegram.config,
+            TELEGRAM_BOT_TOKEN="token",
+            TELEGRAM_CHAT_ID="chat-id",
+            TELEGRAM_PROXY_URL="",
+            TELEGRAM_API_TIMEOUT=15,
+        ):
+            response = Mock()
+            response.raise_for_status.return_value = None
+            with patch("app.notify.telegram.requests.post", return_value=response) as post:
+                sent = telegram.send_message("x" * 9000)
+
+        self.assertTrue(sent)
+        self.assertGreaterEqual(post.call_count, 3)
 
 
 if __name__ == "__main__":
