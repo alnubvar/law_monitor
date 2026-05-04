@@ -82,6 +82,45 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         self.assertEqual(result.action_level, "irrelevant")
         self.assertEqual(result.page_type, "navigation")
 
+    def test_government_rss_page_does_not_become_visible_signal(self) -> None:
+        client = MockLLMClient(["сельское хозяйство", "государственная поддержка АПК"])
+
+        result = client.analyze_document(
+            "о субсидировании кредита для реализации инвестпроекта",
+            "о субсидировании кредита для реализации крупного инвестпроекта в области нефтехимии",
+            source_name="Правительство РФ - новости",
+            url="http://government.ru/news/rss/",
+        )
+
+        self.assertEqual(result.page_type, "navigation")
+        self.assertIn(result.action_level, {"background", "irrelevant"})
+
+    def test_government_classifier_page_is_navigation_not_new_rule(self) -> None:
+        client = MockLLMClient(["сельское хозяйство", "государственная поддержка АПК"])
+
+        result = client.analyze_document(
+            "Экономические отношения с зарубежными странами",
+            "Экономические отношения с зарубежными странами. Классификатор материалов.",
+            source_name="Правительство РФ - новости",
+            url="http://government.ru/rugovclassifier/21/",
+        )
+
+        self.assertEqual(result.page_type, "navigation")
+        self.assertIn(result.action_level, {"background", "irrelevant"})
+
+    def test_government_search_archive_page_is_navigation(self) -> None:
+        client = MockLLMClient(["сельское хозяйство", "государственная поддержка АПК"])
+
+        result = client.analyze_document(
+            "Документы",
+            "Новости за выбранную дату и список документов.",
+            source_name="Правительство РФ - документы",
+            url="http://government.ru/docs/?dt.since=29.04.2026&dt.till=29.04.2026",
+        )
+
+        self.assertEqual(result.page_type, "navigation")
+        self.assertIn(result.action_level, {"background", "irrelevant"})
+
     def test_agriculture_only_text_is_watchlist_not_requires_attention(self) -> None:
         client = MockLLMClient(["сельское хозяйство", "экспорт АПК"])
 

@@ -1,0 +1,14 @@
+{
+  "id": "government_rss_service_page",
+  "source_name": "Правительство РФ - новости",
+  "source_role": "strategy",
+  "title": "о субсидировании кредита для реализации инвестпроекта",
+  "url": "http://government.ru/news/rss/",
+  "raw_text": "SERVICE_PAGE government.ru navigation page",
+  "level": "federal",
+  "region": "federal",
+  "expected_action_level": "irrelevant",
+  "expected_page_type": "navigation",
+  "expected_source_role": "strategy",
+  "expected_not_action_level": "requires_attention"
+}

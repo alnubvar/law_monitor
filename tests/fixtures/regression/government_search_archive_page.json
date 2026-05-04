@@ -1,0 +1,14 @@
+{
+  "id": "government_search_archive_page",
+  "source_name": "Правительство РФ - документы",
+  "source_role": "strategy",
+  "title": "Документы за выбранную дату",
+  "url": "http://government.ru/docs/?dt.since=29.04.2026&dt.till=29.04.2026",
+  "raw_text": "SERVICE_PAGE government.ru navigation page",
+  "level": "federal",
+  "region": "federal",
+  "expected_action_level": "irrelevant",
+  "expected_page_type": "navigation",
+  "expected_source_role": "strategy",
+  "expected_not_action_level": "requires_attention"
+}

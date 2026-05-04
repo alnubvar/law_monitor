@@ -274,6 +274,8 @@ def detect_page_type(
     ):
         return "reference_page"
     if is_service_page or content_quality == "navigation" or looks_irrelevant(title_text, body_text):
+        if domain == "government.ru":
+            return "navigation"
         if source_role == "strategy" and has_strategy_signal:
             return "new_rule" if has_regional_npa_signal else "news_background"
         if source_role == "regional_npa" and has_regional_npa_signal:

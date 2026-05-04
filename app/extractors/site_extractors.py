@@ -10,12 +10,15 @@ SERVICE_PATH_MARKERS = (
     "search",
     "archive",
     "rugovclassifier",
+    "rss",
     "sitemap",
     "about",
     "persons",
     "photos",
     "social",
     "page=",
+    "dt.since",
+    "dt.till",
 )
 COMMON_NAVIGATION_PHRASES = (
     "правительство россии работа правительства",

@@ -68,6 +68,14 @@ RUSSIAN_DATE_RE = re.compile(
     re.IGNORECASE,
 )
 TIME_RE = re.compile(r"\b\d{1,2}:\d{2}\b")
+GOVERNMENT_REAL_PAGE_PATH_RE = re.compile(r"^/(?:news|docs)/\d+/?$")
+GOVERNMENT_LEADING_DATE_TIME_RE = re.compile(
+    r"(\d{1,2}\s+"
+    r"(?:января|январь|февраля|февраль|марта|март|апреля|апрель|мая|май|июня|июнь|"
+    r"июля|июль|августа|август|сентября|сентябрь|октября|октябрь|ноября|ноябрь|"
+    r"декабря|декабрь)\s+\d{4})\s+\d{1,2}:\d{2}",
+    re.IGNORECASE,
+)
 ADMKRAI_PUBLICATION_CONTEXT_RE = re.compile(
     r"(?:дата\s+публикации|дата\s+опубликования|опубликовано|опубликован|размещено|размещен|размещён)"
     r"[:\s,]+(.{0,120})",
@@ -147,6 +155,8 @@ def normalize_date_to_iso(value: date | datetime | None) -> str | None:
 
 
 def extract_published_at_from_html(html: str, source_name: str, url: str) -> date | None:
+    if _is_government_source(source_name, url) and not _is_government_real_page_url(url):
+        return None
     soup = BeautifulSoup(html or "", "html.parser")
 
     meta_candidates: list[str] = []
@@ -204,6 +214,10 @@ def extract_published_at_from_html(html: str, source_name: str, url: str) -> dat
         parsed = _extract_admkrai_publication_from_text(" ".join(soup.stripped_strings))
         if parsed is not None:
             return parsed
+    if _is_government_source(source_name, url):
+        parsed = _extract_government_publication_from_text(" ".join(soup.stripped_strings))
+        if parsed is not None:
+            return parsed
 
     return extract_published_at_from_url(url)
 
@@ -214,6 +228,13 @@ def extract_published_at_from_link_tag(
     source_name: str,
     url: str,
 ) -> date | None:
+    if _is_government_source(source_name, url):
+        if not _is_government_real_page_url(url):
+            return None
+        parsed = _extract_government_publication_from_link(link)
+        if parsed is not None:
+            return parsed
+
     if _is_admkrai_source(source_name, url):
         parsed = _extract_admkrai_publication_from_link(link)
         if parsed is not None:
@@ -255,6 +276,13 @@ def infer_published_at(
     source_name: str,
     url: str,
 ) -> datetime | None:
+    if _is_government_source(source_name, url):
+        if not _is_government_real_page_url(url):
+            return None
+        parsed = _extract_government_publication_from_text(raw_text)
+        if parsed is not None:
+            return _to_utc_datetime(parsed)
+
     if _is_admkrai_source(source_name, url):
         parsed = _extract_admkrai_publication_from_text(raw_text)
         if parsed is not None:
@@ -333,13 +361,56 @@ def _is_news_like_source(source_name: str, url: str) -> bool:
         marker in source_key
         for marker in (
             "zol.ru",
-            "government.ru/news",
-            "правительство рф - новости",
-            "government.ru/docs",
-            "правительство рф - документы",
             "regulation.gov.ru",
         )
     )
+
+
+def _is_government_source(source_name: str, url: str) -> bool:
+    source_key = f"{source_name} {url}".lower()
+    return "government.ru" in source_key or "правительство рф" in source_key
+
+
+def _is_government_real_page_url(url: str) -> bool:
+    parsed = urlparse(url or "")
+    if parsed.netloc.lower() != "government.ru":
+        return False
+    if parsed.query:
+        return False
+    return GOVERNMENT_REAL_PAGE_PATH_RE.fullmatch(parsed.path.lower()) is not None
+
+
+def _extract_government_publication_from_link(link: Tag) -> date | None:
+    time_tag = link.find("time")
+    if isinstance(time_tag, Tag):
+        datetime_attr = str(time_tag.get("datetime", "")).strip()
+        parsed = parse_russian_date(datetime_attr or " ".join(time_tag.stripped_strings))
+        if parsed is not None:
+            return parsed
+
+    for sibling in list(link.previous_siblings)[:3]:
+        candidate = _to_candidate_text(sibling).strip(" .,:;")
+        if not candidate:
+            continue
+        if len(candidate) > 80:
+            continue
+        match = GOVERNMENT_LEADING_DATE_TIME_RE.search(candidate)
+        if match:
+            parsed = parse_russian_date(match.group(1))
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def _extract_government_publication_from_text(text: str) -> date | None:
+    normalized = " ".join((text or "").split())
+    if not normalized:
+        return None
+    header_fragment = normalized[:900]
+    match = GOVERNMENT_LEADING_DATE_TIME_RE.search(header_fragment)
+    if match is None:
+        return None
+    return parse_russian_date(match.group(1))
 
 
 def _is_admkrai_source(source_name: str, url: str) -> bool:

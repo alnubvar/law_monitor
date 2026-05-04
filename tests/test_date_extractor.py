@@ -14,6 +14,7 @@ from app.extractors.date_extractor import (
 )
 
 TEXT_FIXTURES_DIR = Path(__file__).parent / "fixtures" / "text"
+HTML_FIXTURES_DIR = Path(__file__).parent / "fixtures" / "html"
 
 
 class DateExtractorSmokeTest(unittest.TestCase):
@@ -198,6 +199,42 @@ class DateExtractorSmokeTest(unittest.TestCase):
             url="https://admkrai.krasnodar.ru/content/1397/",
         )
         self.assertIsNone(inferred)
+
+    def test_government_news_real_page_extracts_date(self) -> None:
+        html = (HTML_FIXTURES_DIR / "government_news_real_page.html").read_text(encoding="utf-8")
+        parsed = extract_published_at_from_html(
+            html,
+            "Правительство РФ - новости",
+            "http://government.ru/news/58642/",
+        )
+        self.assertEqual(normalize_date_to_iso(parsed), "2026-05-01")
+
+    def test_government_docs_real_page_extracts_date(self) -> None:
+        html = (HTML_FIXTURES_DIR / "government_docs_real_page.html").read_text(encoding="utf-8")
+        parsed = extract_published_at_from_html(
+            html,
+            "Правительство РФ - документы",
+            "http://government.ru/docs/58316/",
+        )
+        self.assertEqual(normalize_date_to_iso(parsed), "2026-04-02")
+
+    def test_government_rss_page_does_not_extract_date(self) -> None:
+        html = (HTML_FIXTURES_DIR / "government_news_real_page.html").read_text(encoding="utf-8")
+        parsed = extract_published_at_from_html(
+            html,
+            "Правительство РФ - новости",
+            "http://government.ru/news/rss/",
+        )
+        self.assertIsNone(parsed)
+
+    def test_government_archive_search_page_does_not_extract_date(self) -> None:
+        html = (HTML_FIXTURES_DIR / "government_archive_search_page.html").read_text(encoding="utf-8")
+        parsed = extract_published_at_from_html(
+            html,
+            "Правительство РФ - документы",
+            "http://government.ru/docs/?dt.since=29.04.2026&dt.till=29.04.2026",
+        )
+        self.assertIsNone(parsed)
 
 
 if __name__ == "__main__":

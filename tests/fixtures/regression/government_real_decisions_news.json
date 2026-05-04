@@ -1,0 +1,14 @@
+{
+  "id": "government_real_decisions_news",
+  "source_name": "Правительство РФ - новости",
+  "source_role": "strategy",
+  "title": "Решения, принятые на заседании Правительства 29 апреля 2026 года",
+  "url": "http://government.ru/news/58642/",
+  "raw_text": "Решения Правительства: 1. Принять к сведению доклад Минсельхоза России о подготовке к весенним полевым работам. 2. Продолжить мониторинг цен на нефтепродукты, сельхозтехнику и минеральные удобрения.",
+  "level": "federal",
+  "region": "federal",
+  "expected_action_level": "background",
+  "expected_page_type": "unknown",
+  "expected_source_role": "strategy",
+  "expected_business_signal_contains": "Стратегический федеральный сигнал"
+}
