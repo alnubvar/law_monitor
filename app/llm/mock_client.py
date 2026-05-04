@@ -28,6 +28,7 @@ from app.rules.source_role_rules import (
     has_strategy_signal,
     has_support_document_signal,
 )
+from app.rules.title_normalization import normalize_document_title
 
 
 class MockLLMClient(BaseLLMClient):
@@ -98,6 +99,11 @@ class MockLLMClient(BaseLLMClient):
             source_name=source_name,
             url=url,
         )
+        normalized_title = normalize_document_title(
+            title,
+            raw_text=cleaned_text,
+            summary=summary,
+        )
         impact = self._build_impact(action_level, topic, facts=facts)
         business_signal = self._build_business_signal(
             action_level=action_level,
@@ -123,6 +129,7 @@ class MockLLMClient(BaseLLMClient):
         return AnalysisResult(
             is_relevant=is_relevant,
             relevance_reason=reason,
+            normalized_title=normalized_title,
             topic=topic,
             importance=importance,
             action_level=action_level,
