@@ -213,6 +213,7 @@ def clean_text_for_analysis(
             "pravo.donland.ru",
             "msh.krasnodar.ru",
             "mshsk.ru",
+            "pravo.stavregion.ru",
             "admkrai.krasnodar.ru",
         )
     ):

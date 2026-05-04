@@ -18,6 +18,7 @@ from app.sources.generic_html_source import GenericHTMLSource
 from app.sources.government_source import GovernmentSource
 from app.sources.krasnodar_source import KrasnodarSource
 from app.sources.regional_law_source import RegionalLawSource
+from app.sources.stavropol_source import StavropolSource
 from app.storage import (
     update_document_published_at_by_url,
     clear_source_errors,
@@ -37,6 +38,7 @@ PARSER_REGISTRY: dict[str, type[BaseSource]] = {
     "government": GovernmentSource,
     "krasnodar": KrasnodarSource,
     "regional_law": RegionalLawSource,
+    "stavropol": StavropolSource,
 }
 
 

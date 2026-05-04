@@ -12,6 +12,7 @@ def extract_domain(source_name: str | None, url: str | None) -> str:
         "admkrai.krasnodar.ru",
         "msh.krasnodar.ru",
         "mshsk.ru",
+        "pravo.stavregion.ru",
         "gisp.gov.ru",
         "zol.ru",
     ):
