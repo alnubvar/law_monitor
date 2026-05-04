@@ -10,6 +10,11 @@
 - хранить SQLite и логи на диске
 - иметь понятный backup/recovery plan
 
+Базовые требования runtime:
+- Python `>=3.12`
+- VPS-путь проекта: `/opt/ahstep/gr-monitor`
+- systemd service: `ahstep-gr-monitor`
+
 ## Recommended MVP Variant
 
 Рекомендуемый MVP-вариант сейчас:
@@ -155,6 +160,14 @@ Smoke-check:
 .\.venv\Scripts\python.exe main.py run-scheduler
 ```
 
+Linux VPS (рекомендуемый путь):
+
+```bash
+cd /opt/ahstep/gr-monitor
+source .venv/bin/activate
+python main.py run-scheduler
+```
+
 ## Telegram Check
 
 Проверить конфиг Telegram без отправки production digest:
@@ -167,6 +180,16 @@ Smoke-check:
 
 ```powershell
 .\.venv\Scripts\python.exe main.py telegram-check
+```
+
+На Linux VPS:
+
+```bash
+cd /opt/ahstep/gr-monitor
+source .venv/bin/activate
+python main.py telegram-check
+# или
+python main.py notify-test
 ```
 
 Важно:
@@ -207,6 +230,12 @@ sudo systemctl stop ahstep-gr-monitor.service
 sudo systemctl restart ahstep-gr-monitor.service
 ```
 
+Проверка статуса и логов:
+```bash
+sudo systemctl status ahstep-gr-monitor.service
+journalctl -u ahstep-gr-monitor.service -f --no-pager
+```
+
 ## SQLite Backup
 
 Windows-first backup script:
@@ -242,10 +271,13 @@ Windows-first backup script:
 
 - `.venv` создан и зависимости установлены
 - `.env` заполнен
+- `python main.py init-db` проходит
 - `python main.py smoke-check` проходит
-- `python -m unittest discover -s tests -v` проходит
+- `python -m unittest` проходит
+- `python main.py diagnostics --days 7` проходит
+- `python main.py report --days 7` проходит
 - рабочая БД лежит на постоянном диске
 - log directory writable
 - backup script протестирован
-- Telegram proxy проверен через `telegram-check`
+- Telegram proxy проверен через `telegram-check` или `notify-test`
 - scheduler выбран: `Task Scheduler` или `systemd`

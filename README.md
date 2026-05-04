@@ -120,10 +120,13 @@ python main.py diagnostics --days 7
 
 Команды в Telegram:
 
+- `/help` — список команд;
 - `/today` — visible документы за сегодня;
-- `/urgent` — только `requires_attention`;
+- `/urgent` — срочные документы (`requires_attention`);
+- `/watchlist` — документы на наблюдении;
 - `/sources` — статус источников;
-- `/help` — список команд.
+- `/status` — состояние системы и счетчики;
+- `/report` — краткая сводка за 7 дней.
 
 ## Структура Проекта
 
@@ -140,7 +143,7 @@ README.md
 
 ## Требования
 
-- Python 3.11+
+- Python 3.12+
 - Windows / Linux
 - Telegram bot token и chat id для уведомлений
 
