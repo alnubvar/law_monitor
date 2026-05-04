@@ -1,0 +1,13 @@
+{
+  "id": "pravo_stavregion_listing_reference",
+  "source_name": "Право Ставропольского края",
+  "source_role": "regional_npa",
+  "expected_source_role": "regional_npa",
+  "level": "regional",
+  "region": "stavropol",
+  "title": "Правовые акты",
+  "url": "https://pravo.stavregion.ru/document/list/",
+  "raw_text": "Правовые акты. Поиск документов. Архив документов. Список документов и переход по страницам архива.",
+  "expected_action_level": "background",
+  "expected_page_type": "reference_page"
+}

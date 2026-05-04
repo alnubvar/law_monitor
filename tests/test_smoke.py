@@ -97,7 +97,7 @@ class SmokeCheckTest(unittest.TestCase):
         ):
             result = run_smoke_check(db_path=db_path)
 
-        self.assertIn("[OK] regression fixtures found: 19", result.render_text())
+        self.assertIn("[OK] regression fixtures found: 23", result.render_text())
 
     def test_smoke_check_returns_structured_result_and_text(self) -> None:
         db_path = self._db_path("smoke_structured.db")

@@ -921,6 +921,76 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         self.assertEqual(result.page_type, "new_rule")
         self.assertEqual(result.action_level, "watchlist")
 
+    def test_mshsk_listing_is_background_reference_page(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Субсидии",
+            (
+                "Субсидии. Объявления. Результаты. Электронный Бюджет. "
+                "Грантовая поддержка Агростартап. Решения о порядке предоставления субсидии."
+            ),
+            source_name="Минсельхоз Ставропольского края - господдержка",
+            url="https://mshsk.ru/subsidii/",
+            level="regional",
+            region="stavropol",
+        )
+
+        self.assertEqual(result.page_type, "reference_page")
+        self.assertEqual(result.action_level, "background")
+
+    def test_mshsk_real_selection_announcement_stays_visible(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Объявление об отборе на возмещение части затрат, связанных с посадкой ягодных культур",
+            (
+                "Объявление об отборе на возмещение части затрат, связанных с посадкой ягодных культур. "
+                "Прием заявок открыт до 20 февраля 2026 года."
+            ),
+            source_name="Минсельхоз Ставропольского края - господдержка",
+            url="https://mshsk.ru/gospodderzhka/selection-berry-2026.php",
+            level="regional",
+            region="stavropol",
+        )
+
+        self.assertEqual(result.page_type, "selection_announcement")
+        self.assertEqual(result.action_level, "watchlist")
+
+    def test_pravo_stavregion_listing_is_background_reference_page(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Правовые акты",
+            "Правовые акты. Поиск документов. Архив документов. Список документов и переход по страницам архива.",
+            source_name="Право Ставропольского края",
+            url="https://pravo.stavregion.ru/document/list/",
+            level="regional",
+            region="stavropol",
+        )
+
+        self.assertEqual(result.page_type, "reference_page")
+        self.assertEqual(result.action_level, "background")
+
+    def test_pravo_stavregion_real_npa_is_new_rule_not_unknown(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Постановление Правительства Ставропольского края от 29.04.2026 № 123-п «О внесении изменений в порядок предоставления субсидий сельскохозяйственным товаропроизводителям»",
+            (
+                "Постановление Правительства Ставропольского края от 29.04.2026 № 123-п. "
+                "О внесении изменений в порядок предоставления субсидий "
+                "сельскохозяйственным товаропроизводителям."
+            ),
+            source_name="Право Ставропольского края",
+            url="https://pravo.stavregion.ru/document/98765",
+            level="regional",
+            region="stavropol",
+        )
+
+        self.assertEqual(result.page_type, "new_rule")
+        self.assertEqual(result.action_level, "watchlist")
+
     def test_regional_npa_archive_listing_is_background_or_irrelevant(self) -> None:
         client = MockLLMClient(["сельское хозяйство"])
 

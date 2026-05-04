@@ -113,6 +113,13 @@ DOMAIN_SECTION_TITLE_HINTS = {
         "административное деление",
     },
     "msh.krasnodar.ru": SECTION_PAGE_TITLES | {"2022", "2023", "2024", "2025", "2026"},
+    "mshsk.ru": SECTION_PAGE_TITLES
+    | {
+        "объявления",
+        "результаты",
+        "электронный бюджет",
+        "решения о порядке предоставления субсидии",
+    },
     "pravo.donland.ru": SECTION_PAGE_TITLES
     | {
         "официальное опубликование",
@@ -121,6 +128,17 @@ DOMAIN_SECTION_TITLE_HINTS = {
         "правовая информация",
         "календарь опубликования",
         "отмененные документы",
+        "о портале",
+        "контакты",
+    },
+    "pravo.stavregion.ru": SECTION_PAGE_TITLES
+    | {
+        "архив документов",
+        "документы",
+        "правовые акты",
+        "проекты документов",
+        "поиск документов",
+        "расширенный поиск",
         "о портале",
         "контакты",
     },
@@ -147,6 +165,15 @@ MCX_DONLAND_GENERIC_SECTION_TITLES = {
     "страхование и инвестиции",
     "экономика и финансы",
 }
+MSHSK_GENERIC_SECTION_TITLES = {
+    "гранты",
+    "объявления",
+    "результаты",
+    "электронный бюджет",
+    "грантовая поддержка \"агростартап\"",
+    "решения о порядке предоставления субсидии",
+    "справочник по мерам государственной поддержки",
+}
 PRAVO_DONLAND_GENERIC_SECTION_TITLES = {
     "за сегодня",
     "за неделю",
@@ -160,6 +187,15 @@ PRAVO_DONLAND_GENERIC_SECTION_TITLES = {
     "правила использования материалов, размещенных на портале",
     "правовые акты",
     "проекты правовых актов",
+}
+PRAVO_STAV_GENERIC_SECTION_TITLES = {
+    "архив документов",
+    "документы",
+    "о портале",
+    "поиск документов",
+    "правовые акты",
+    "проекты документов",
+    "расширенный поиск",
 }
 LOW_VALUE_REGIONAL_SECTION_TITLES = {
     "вакансии",
@@ -213,6 +249,7 @@ REGIONAL_DOMAINS = {
     "pravo.donland.ru",
     "msh.krasnodar.ru",
     "mshsk.ru",
+    "pravo.stavregion.ru",
     "admkrai.krasnodar.ru",
 }
 
@@ -229,8 +266,12 @@ def looks_generic_regional_section_page(
     domain_titles = set(REGIONAL_GENERIC_SECTION_TITLES)
     if domain == "mcx.donland.ru":
         domain_titles |= MCX_DONLAND_GENERIC_SECTION_TITLES
+    if domain == "mshsk.ru":
+        domain_titles |= MSHSK_GENERIC_SECTION_TITLES
     if domain == "pravo.donland.ru":
         domain_titles |= PRAVO_DONLAND_GENERIC_SECTION_TITLES
+    if domain == "pravo.stavregion.ru":
+        domain_titles |= PRAVO_STAV_GENERIC_SECTION_TITLES
     if title not in domain_titles and not title.startswith("приказы "):
         return False
     lower_url = url.lower()
@@ -260,6 +301,10 @@ def looks_generic_regional_section_page(
             "/calendar/",
             "/legalinfo/",
             "/static/",
+            "/document/",
+            "/documents/",
+            "/search/",
+            "/archive/",
         )
     )
 

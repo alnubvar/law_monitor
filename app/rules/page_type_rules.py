@@ -45,8 +45,11 @@ ACTION_MARKERS = (
     "распределение субсид",
 )
 REQUIRES_ATTENTION_SIGNALS = (
+    "объявление об отборе",
     "прием заявок",
+    "прием заявок открыт",
     "приём заявок",
+    "приём заявок открыт",
     "срок подачи",
     "объявлен отбор",
     "утвержден порядок",
@@ -91,6 +94,8 @@ PAGE_TYPE_MARKERS: dict[str, tuple[str, ...]] = {
         "итоги конкурсного отбора",
     ),
     "selection_announcement": (
+        "объявление об отборе",
+        "объявление о приеме заявочной документации",
         "объявлен отбор",
         "прием заявок",
         "приём заявок",
@@ -181,6 +186,33 @@ PRAVO_DONLAND_REFERENCE_TITLES = {
     "проекты правовых актов",
 }
 PRAVO_DONLAND_DOCUMENT_MARKERS = (
+    "закон",
+    "постановление",
+    "приказ",
+    "распоряжение",
+    "решение",
+    "указ",
+)
+MSHSK_REFERENCE_TITLES = {
+    "гранты",
+    "объявления",
+    "результаты",
+    "субсидии",
+    "электронный бюджет",
+    "грантовая поддержка \"агростартап\"",
+    "решения о порядке предоставления субсидии",
+    "справочник по мерам государственной поддержки",
+}
+PRAVO_STAV_REFERENCE_TITLES = {
+    "архив документов",
+    "документы",
+    "о портале",
+    "поиск документов",
+    "правовые акты",
+    "проекты документов",
+    "расширенный поиск",
+}
+PRAVO_STAV_DOCUMENT_MARKERS = (
     "закон",
     "постановление",
     "приказ",
@@ -332,6 +364,29 @@ def detect_source_specific_page_type(
         ) and any(marker in title for marker in PRAVO_DONLAND_DOCUMENT_MARKERS):
             return "new_rule"
 
+    if domain == "pravo.stavregion.ru":
+        if any(
+            fragment in lower_url
+            for fragment in (
+                "/search",
+                "/archive",
+                "/news",
+                "/rss",
+                "/about",
+                "/contacts",
+                "/document/list",
+                "/documents/list",
+            )
+        ):
+            return "reference_page"
+        if title in PRAVO_STAV_REFERENCE_TITLES:
+            return "reference_page"
+        if (
+            any(fragment in lower_url for fragment in ("/document/", "/documents/", "/doc/", "/law/"))
+            or lower_url.endswith((".pdf", ".doc", ".docx"))
+        ) and any(marker in title for marker in PRAVO_STAV_DOCUMENT_MARKERS):
+            return "new_rule"
+
     if domain in DOMAIN_SECTION_TITLE_HINTS and title in DOMAIN_SECTION_TITLE_HINTS[domain]:
         if YEAR_TITLE_RE.fullmatch(title):
             return "year_archive"
@@ -342,6 +397,13 @@ def detect_source_specific_page_type(
             fragment in lower_url
             for fragment in ("/activity/", "/documents/", "/presscenter/")
         ):
+            return "reference_page"
+    if domain == "mshsk.ru":
+        if title in MSHSK_REFERENCE_TITLES:
+            return "reference_page"
+        if lower_url.endswith(("/gospodderzhka/", "/subsidii/")):
+            return "reference_page"
+        if "/gospodderzhka/obyavleniya-20" in lower_url:
             return "reference_page"
 
     if domain == "gisp.gov.ru":

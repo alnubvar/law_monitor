@@ -1,0 +1,13 @@
+{
+  "id": "mshsk_listing_reference",
+  "source_name": "Минсельхоз Ставропольского края - господдержка",
+  "source_role": "support_documents",
+  "expected_source_role": "support_documents",
+  "level": "regional",
+  "region": "stavropol",
+  "title": "Субсидии",
+  "url": "https://mshsk.ru/subsidii/",
+  "raw_text": "Субсидии. Объявления. Результаты. Электронный Бюджет. Грантовая поддержка Агростартап. Решения о порядке предоставления субсидии.",
+  "expected_action_level": "background",
+  "expected_page_type": "reference_page"
+}
