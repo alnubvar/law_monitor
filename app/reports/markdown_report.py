@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from difflib import SequenceMatcher
 from pathlib import Path
 import re
 from typing import Iterable
+from urllib.parse import urlsplit, urlunsplit
 
 from app.config import get_source_role
 from app.models import DigestItem, RawDocument, SourceErrorRecord
@@ -119,6 +121,8 @@ DISPLAY_EMPTY_MESSAGES = {
     "news_signals": "Новостных предвестников изменений для показа не найдено.",
     "background_reference": "Фоновых и справочных материалов для показа не найдено.",
 }
+BAD_TITLE_VALUES = {"просмотр", "скачать", "документ", "pdf"}
+TITLE_SIMILARITY_THRESHOLD = 0.92
 
 
 @dataclass(slots=True)
@@ -256,11 +260,12 @@ def build_report_view(
     include_full_background: bool = False,
 ) -> ReportView:
     document_list = list(documents)
+    best_document_list = select_best_report_documents(document_list)
     filtered_action_levels = list(action_levels or ["requires_attention", "watchlist"])
     if include_background and "background" not in filtered_action_levels:
         filtered_action_levels.append("background")
 
-    report_candidates = document_list
+    report_candidates = best_document_list
     if relevant_only:
         report_candidates = [
             document
@@ -346,6 +351,41 @@ def build_report_view(
     )
 
 
+def select_best_report_documents(documents: Iterable[RawDocument]) -> list[RawDocument]:
+    document_list = list(documents)
+    groups: list[list[RawDocument]] = []
+    group_indexes: list[int] = []
+    url_group_indexes: dict[str, int] = {}
+    title_group_keys: list[str] = []
+
+    for index, document in enumerate(document_list):
+        url_key = _document_url_key(document)
+        if url_key:
+            group_index = url_group_indexes.get(url_key)
+            if group_index is not None:
+                groups[group_index].append(document)
+                continue
+
+        title_key = _document_title_key(document)
+        group_index = _find_similar_title_group(title_key, title_group_keys)
+        if group_index is None:
+            group_index = len(groups)
+            groups.append([document])
+            group_indexes.append(index)
+            title_group_keys.append(title_key)
+        else:
+            groups[group_index].append(document)
+
+        if url_key:
+            url_group_indexes[url_key] = group_index
+
+    selected = [
+        (group_indexes[index], _select_best_document(group))
+        for index, group in enumerate(groups)
+    ]
+    return [document for _, document in sorted(selected, key=lambda item: item[0])]
+
+
 def select_visible_report_documents(
     documents: Iterable[RawDocument],
     *,
@@ -370,6 +410,106 @@ def select_visible_report_documents(
         max_items=max_items,
     )
     return report_view.flatten()
+
+
+def _select_best_document(documents: list[RawDocument]) -> RawDocument:
+    return max(
+        documents,
+        key=lambda document: (
+            _document_text_quality_score(document),
+            _document_fact_score(document),
+            len(document.summary or ""),
+            int(_has_informative_title(document.title)),
+            _published_timestamp(document),
+            document.id or 0,
+        ),
+    )
+
+
+def _document_url_key(document: RawDocument) -> str | None:
+    if not document.url:
+        return None
+    parsed = urlsplit(document.url.strip())
+    if not parsed.scheme or not parsed.netloc:
+        return document.url.strip().lower().rstrip("/")
+    path = parsed.path.rstrip("/")
+    return urlunsplit(
+        (
+            parsed.scheme.lower(),
+            parsed.netloc.lower(),
+            path,
+            parsed.query,
+            "",
+        )
+    )
+
+
+def _document_title_key(document: RawDocument) -> str:
+    return _normalize_title_key(document.title)
+
+
+def _normalize_title_key(title: str | None) -> str:
+    normalized = re.sub(r"[^0-9a-zа-яё]+", " ", (title or "").lower(), flags=re.IGNORECASE)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
+
+
+def _find_similar_title_group(title_key: str, title_group_keys: list[str]) -> int | None:
+    if len(title_key) < 24:
+        return None
+    for index, existing_key in enumerate(title_group_keys):
+        if len(existing_key) < 24:
+            continue
+        if title_key == existing_key:
+            return index
+        if _numeric_tokens(title_key) != _numeric_tokens(existing_key):
+            continue
+        if SequenceMatcher(None, title_key, existing_key).ratio() >= TITLE_SIMILARITY_THRESHOLD:
+            return index
+    return None
+
+
+def _document_text_quality_score(document: RawDocument) -> int:
+    text_length = len((document.raw_text or "").strip())
+    if text_length >= 5000:
+        return 3
+    if text_length >= 1000:
+        return 2
+    if text_length >= 100:
+        return 1
+    return 0
+
+
+def _numeric_tokens(text: str) -> tuple[str, ...]:
+    return tuple(re.findall(r"\d+", text))
+
+
+def _document_fact_score(document: RawDocument) -> int:
+    score = 0
+    if document.deadline_text:
+        score += 3
+    if document.application_status and document.application_status != "unknown":
+        score += 2
+    if document.support_status and document.support_status != "unknown":
+        score += 1
+    if document.npa_number:
+        score += 1
+    if document.terms_text:
+        score += 1
+    if document.business_signal:
+        score += 1
+    return score
+
+
+def _has_informative_title(title: str | None) -> bool:
+    title_key = _normalize_title_key(title)
+    return len(title_key) >= 12 and title_key not in BAD_TITLE_VALUES
+
+
+def _published_timestamp(document: RawDocument) -> float:
+    if document.published_at is None:
+        return 0.0
+    return document.published_at.timestamp()
 
 
 def _build_display_sections(documents: Iterable[RawDocument]) -> dict[str, list[RawDocument]]:

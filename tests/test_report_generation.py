@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 from app.models import RawDocument
 from app.reports.markdown_report import (
@@ -252,6 +253,112 @@ class ReportGenerationSmokeTest(unittest.TestCase):
 
         self.assertIn("Published date coverage: 0/1", markdown)
 
+    def test_report_deduplicates_documents_with_same_url(self) -> None:
+        older_document = self._doc(
+            doc_id=1,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Пошлина на экспорт пшеницы останется нулевой",
+            url="https://www.zol.ru/n/41337",
+            action_level="watchlist",
+            page_type="news_background",
+            summary="Короткая версия.",
+        )
+        better_document = self._doc(
+            doc_id=2,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Пошлина на экспорт пшеницы останется нулевой",
+            url="https://www.zol.ru/n/41337",
+            action_level="watchlist",
+            page_type="news_background",
+            summary="Более подробная версия с параметрами экспортной пошлины для отчета.",
+        )
+        better_document.raw_text = "Полный текст " * 120
+
+        report_view = build_report_view(
+            [older_document, better_document],
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        visible_documents = report_view.flatten()
+        self.assertEqual(len(visible_documents), 1)
+        self.assertEqual(visible_documents[0].id, 2)
+
+    def test_report_selects_more_informative_version(self) -> None:
+        partial_document = self._doc(
+            doc_id=1,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="Просмотр",
+            url="https://admkrai.krasnodar.ru/upload/subsidy.pdf",
+            action_level="watchlist",
+            page_type="new_rule",
+            summary="Короткий OCR-фрагмент.",
+        )
+        full_document = self._doc(
+            doc_id=2,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="О внесении изменений в порядок предоставления субсидий",
+            url="https://admkrai.krasnodar.ru/upload/subsidy.pdf",
+            action_level="watchlist",
+            page_type="new_rule",
+            summary="Полная версия документа с описанием изменений порядка предоставления субсидий.",
+        )
+        full_document.raw_text = "Полный текст постановления. " * 300
+        full_document.deadline_text = "Срок подачи заявок до 30.06.2026."
+        full_document.application_status = "open"
+
+        report_view = build_report_view(
+            [partial_document, full_document],
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        visible_documents = report_view.flatten()
+        self.assertEqual(len(visible_documents), 1)
+        self.assertEqual(
+            visible_documents[0].title,
+            "О внесении изменений в порядок предоставления субсидий",
+        )
+        self.assertEqual(visible_documents[0].deadline_text, "Срок подачи заявок до 30.06.2026.")
+
+    def test_report_deduplicates_documents_with_same_title(self) -> None:
+        short_document = self._doc(
+            doc_id=1,
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            region="krasnodar",
+            title="Объявлен отбор заявок на субсидии для АПК Краснодарского края",
+            url="https://msh.krasnodar.ru/documents/subsidy-short",
+            action_level="watchlist",
+            page_type="selection_announcement",
+            summary="Объявлен отбор заявок.",
+        )
+        detailed_document = self._doc(
+            doc_id=2,
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            region="krasnodar",
+            title="Объявлен отбор заявок на субсидии для АПК Краснодарского края",
+            url="https://msh.krasnodar.ru/documents/subsidy-full",
+            action_level="watchlist",
+            page_type="selection_announcement",
+            summary="Объявлен отбор заявок на субсидии с описанием участников, условий и порядка подачи.",
+        )
+        detailed_document.application_status = "open"
+        detailed_document.deadline_text = "Прием заявок до 20 мая 2026 года."
+
+        report_view = build_report_view(
+            [short_document, detailed_document],
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        visible_documents = report_view.flatten()
+        self.assertEqual(len(visible_documents), 1)
+        self.assertEqual(visible_documents[0].url, "https://msh.krasnodar.ru/documents/subsidy-full")
+
     def test_global_background_is_hidden_from_telegram_digest(self) -> None:
         from app.notify import telegram
 
@@ -284,7 +391,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             captured.append(text)
             return True
 
-        with unittest.mock.patch("app.notify.telegram.send_message", side_effect=_capture):
+        with patch("app.notify.telegram.send_message", side_effect=_capture):
             sent = telegram.send_digest(documents)
 
         self.assertTrue(sent)
@@ -315,7 +422,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             captured.append(text)
             return True
 
-        with unittest.mock.patch("app.notify.telegram.send_message", side_effect=_capture):
+        with patch("app.notify.telegram.send_message", side_effect=_capture):
             sent = telegram.send_digest(documents)
 
         self.assertTrue(sent)
@@ -354,7 +461,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             captured.append(text)
             return True
 
-        with unittest.mock.patch("app.notify.telegram.send_message", side_effect=_capture):
+        with patch("app.notify.telegram.send_message", side_effect=_capture):
             sent = telegram.send_digest([inactive_document, reference_document])
 
         self.assertTrue(sent)
@@ -489,7 +596,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             captured.append(text)
             return True
 
-        with unittest.mock.patch("app.notify.telegram.send_message", side_effect=_capture):
+        with patch("app.notify.telegram.send_message", side_effect=_capture):
             sent = telegram.send_digest([document])
 
         self.assertTrue(sent)
