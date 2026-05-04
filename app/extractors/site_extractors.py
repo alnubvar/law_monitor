@@ -206,7 +206,16 @@ def clean_text_for_analysis(
         return _clean_zol_text(title, normalized_text)
     if "gisp.gov.ru" in source_key or "гисп - меры поддержки апк" in source_key:
         return _clean_gisp_text(title, url or "", normalized_text)
-    if any(marker in source_key for marker in ("mcx.donland.ru", "msh.krasnodar.ru", "mshsk.ru", "admkrai.krasnodar.ru")):
+    if any(
+        marker in source_key
+        for marker in (
+            "mcx.donland.ru",
+            "pravo.donland.ru",
+            "msh.krasnodar.ru",
+            "mshsk.ru",
+            "admkrai.krasnodar.ru",
+        )
+    ):
         return _clean_regional_portal_text(title, normalized_text)
     if normalized_text.startswith("SERVICE_PAGE"):
         return ExtractedContent(

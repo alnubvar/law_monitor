@@ -1,0 +1,13 @@
+{
+  "id": "mcx_donland_real_selection_announcement",
+  "source_name": "Минсельхоз Ростовской области - господдержка",
+  "source_role": "support_documents",
+  "expected_source_role": "support_documents",
+  "level": "regional",
+  "region": "rostov",
+  "title": "Объявление о проведении отбора на предоставление субсидии сельхозтоваропроизводителям",
+  "url": "https://mcx.donland.ru/presscenter/events/72822/",
+  "raw_text": "Объявление о проведении отбора на предоставление субсидии сельхозтоваропроизводителям. Прием заявок открыт до 20 мая 2026 года. Субсидия предоставляется за счет средств областного бюджета.",
+  "expected_action_level": "watchlist",
+  "expected_page_type": "selection_announcement"
+}

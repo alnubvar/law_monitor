@@ -8,6 +8,7 @@ def extract_domain(source_name: str | None, url: str | None) -> str:
     combined = f"{source_name or ''} {url or ''}".lower()
     for candidate in (
         "mcx.donland.ru",
+        "pravo.donland.ru",
         "admkrai.krasnodar.ru",
         "msh.krasnodar.ru",
         "mshsk.ru",

@@ -1,0 +1,13 @@
+{
+  "id": "pravo_donland_listing_reference",
+  "source_name": "Право Ростовской области",
+  "source_role": "regional_npa",
+  "expected_source_role": "regional_npa",
+  "level": "regional",
+  "region": "rostov",
+  "title": "ОФИЦИАЛЬНОЕ ОПУБЛИКОВАНИЕ",
+  "url": "https://pravo.donland.ru/doc/list/clear/1/",
+  "raw_text": "Официальное опубликование правовых актов. Найдено документов: 51330. Документ за сегодня, за неделю, за месяц, все. Номер опубликования: 6112202604290020, дата опубликования: 29.04.2026.",
+  "expected_action_level": "background",
+  "expected_page_type": "reference_page"
+}

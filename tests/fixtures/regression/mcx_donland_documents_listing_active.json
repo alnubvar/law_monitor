@@ -1,0 +1,13 @@
+{
+  "id": "mcx_donland_documents_listing_active",
+  "source_name": "Минсельхоз Ростовской области - господдержка",
+  "source_role": "support_documents",
+  "expected_source_role": "support_documents",
+  "level": "regional",
+  "region": "rostov",
+  "title": "Действующие документы",
+  "url": "https://mcx.donland.ru/documents/active/",
+  "raw_text": "Действующие документы Приказ от 23.04.2026 № П-117 О внесении изменений в приказ министерства. Постановление Правительства Ростовской области от 09.04.2026 № 8. Раздел: Действующие документы Тип: Приказ Скачать.",
+  "expected_action_level": "background",
+  "expected_page_type": "reference_page"
+}
