@@ -7,8 +7,8 @@
   "raw_text": "Публичные консультации по проекту порядка предоставления субсидий в АПК Краснодарского края.",
   "level": "regional",
   "region": "krasnodar",
-  "expected_action_level": "watchlist",
-  "expected_page_type": "news_background",
+  "expected_action_level": "background",
+  "expected_page_type": "reference_page",
   "expected_source_role": "regional_npa",
   "expected_business_signal_contains": "публичные консультации"
 }

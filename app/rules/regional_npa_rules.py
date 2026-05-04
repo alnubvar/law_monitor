@@ -93,6 +93,12 @@ RESULTS_LIKE_TITLES = (
     "список получателей",
     "реестр получателей",
 )
+KRASNODAR_PUBLIC_CONSULTATION_LISTING_TITLES = (
+    "сводный отчёт о результатах проведения публичных консультаций",
+    "сводный отчет о результатах проведения публичных консультаций",
+    "перечень вопросов для проведения публичных консультаций",
+    "уведомления о проведении публичных консультаций проектов нормативных правовых актов",
+)
 DOMAIN_SECTION_TITLE_HINTS = {
     "mcx.donland.ru": SECTION_PAGE_TITLES
     | {
@@ -291,6 +297,20 @@ def looks_orders_listing_page(
         and title.startswith("приказы ")
         and "/documents/" in url.lower()
     )
+
+
+def looks_krasnodar_public_consultation_listing(
+    title: str,
+    *,
+    url: str,
+    domain: str,
+) -> bool:
+    if domain != "admkrai.krasnodar.ru":
+        return False
+    normalized_title = title.lower().strip()
+    if normalized_title not in KRASNODAR_PUBLIC_CONSULTATION_LISTING_TITLES:
+        return False
+    return "/content/" in url.lower()
 
 
 def is_generic_regional_section_title(title: str) -> bool:

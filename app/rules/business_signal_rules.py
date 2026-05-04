@@ -17,6 +17,7 @@ from app.rules.regional_npa_rules import (
     REGIONAL_DOMAINS,
     is_generic_regional_section_title,
     looks_generic_regional_section_page,
+    looks_krasnodar_public_consultation_listing,
     looks_low_value_regional_section_page,
     looks_low_value_support_or_npa_page,
 )
@@ -193,6 +194,12 @@ def detect_action_level(
 
     if page_type in {"registry", "results_protocol", "reference_page"}:
         if source_role == "regional_npa":
+            if looks_krasnodar_public_consultation_listing(
+                title_text,
+                url=url or "",
+                domain=domain,
+            ):
+                return "background"
             if (
                 page_type == "reference_page"
                 and has_project_discussion_signal

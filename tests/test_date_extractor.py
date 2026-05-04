@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import unittest
 
+from bs4 import BeautifulSoup
+
 from app.extractors.date_extractor import (
+    extract_published_at_from_link_tag,
     extract_published_at_from_html,
     infer_published_at,
     normalize_date_to_iso,
@@ -70,6 +73,48 @@ class DateExtractorSmokeTest(unittest.TestCase):
         )
         self.assertIsNotNone(inferred)
         self.assertEqual(normalize_date_to_iso(inferred), "2026-04-30")
+
+    def test_krasnodar_link_publication_marker_extracts_published_at(self) -> None:
+        soup = BeautifulSoup(
+            """
+            <article>
+              <span>Дата публикации: 02.05.2026</span>
+              <a href="/upload/order.pdf">О внесении изменений в приказ</a>
+            </article>
+            """,
+            "html.parser",
+        )
+        link = soup.find("a")
+        self.assertIsNotNone(link)
+
+        parsed = extract_published_at_from_link_tag(
+            link,  # type: ignore[arg-type]
+            source_name="Нормативные акты Краснодарского края",
+            url="https://admkrai.krasnodar.ru/upload/order.pdf",
+        )
+
+        self.assertEqual(normalize_date_to_iso(parsed), "2026-05-02")
+
+    def test_krasnodar_link_npa_and_deadline_dates_are_not_published_at(self) -> None:
+        soup = BeautifulSoup(
+            """
+            <article>
+              <span>Приказ от 30.04.2026. Прием заявок до 20.05.2026.</span>
+              <a href="/upload/order.pdf">О внесении изменений в приказ</a>
+            </article>
+            """,
+            "html.parser",
+        )
+        link = soup.find("a")
+        self.assertIsNotNone(link)
+
+        parsed = extract_published_at_from_link_tag(
+            link,  # type: ignore[arg-type]
+            source_name="Нормативные акты Краснодарского края",
+            url="https://admkrai.krasnodar.ru/upload/order.pdf",
+        )
+
+        self.assertIsNone(parsed)
 
 
 if __name__ == "__main__":

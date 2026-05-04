@@ -14,6 +14,7 @@ from app.rules.regional_npa_rules import (
     SERVICE_BODY_FRAGMENTS,
     YEAR_TITLE_RE,
     looks_generic_regional_section_page,
+    looks_krasnodar_public_consultation_listing,
     looks_low_value_regional_section_page,
     looks_low_value_support_or_npa_page,
     looks_orders_listing_page,
@@ -182,6 +183,14 @@ def detect_page_type(
         return "section_page"
     if looks_orders_listing_page(title_text, url=url or "", domain=domain):
         return "reference_page"
+    if looks_krasnodar_public_consultation_listing(
+        title_text,
+        url=url or "",
+        domain=domain,
+    ):
+        return "reference_page"
+    if domain == "admkrai.krasnodar.ru" and (url or "").lower().endswith((".pdf", ".doc", ".docx")):
+        return "new_rule"
     if looks_low_value_regional_section_page(
         title_text,
         lead_text,
@@ -283,6 +292,14 @@ def detect_source_specific_page_type(
 
     if domain in REGIONAL_DOMAINS:
         lower_url = url.lower()
+        if domain == "admkrai.krasnodar.ru" and lower_url.endswith((".pdf", ".doc", ".docx")):
+            return "new_rule"
+        if (
+            domain == "msh.krasnodar.ru"
+            and "/subsidirovanie-i-finansirovanie" in lower_url
+            and YEAR_TITLE_RE.search(title)
+        ):
+            return "reference_page"
         if title.startswith("приказы ") and "/documents/" in lower_url:
             return "reference_page"
         if any(

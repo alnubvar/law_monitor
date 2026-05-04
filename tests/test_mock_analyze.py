@@ -780,7 +780,7 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         self.assertEqual(result.action_level, "watchlist")
         self.assertNotEqual(result.page_type, "navigation")
 
-    def test_regional_npa_public_consultation_is_visible_watchlist(self) -> None:
+    def test_regional_npa_public_consultation_listing_is_background(self) -> None:
         client = MockLLMClient(["публичные консультации", "государственная поддержка АПК"])
 
         result = client.analyze_document(
@@ -792,7 +792,42 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
             region="krasnodar",
         )
 
+        self.assertEqual(result.page_type, "reference_page")
+        self.assertEqual(result.action_level, "background")
+
+    def test_admkrai_real_pdf_npa_is_not_unknown_page_type(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Просмотр",
+            (
+                "МИНИСТЕРСТВО СЕЛЬСКОГО ХОЗЯЙСТВА КРАСНОДАРСКОГО КРАЯ "
+                "О внесении изменений в приказ министерства сельского хозяйства "
+                "Краснодарского края о предоставлении субсидий."
+            ),
+            source_name="Нормативные акты Краснодарского края",
+            url="https://admkrai.krasnodar.ru/upload/iblock/261/subsidy-order.pdf",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertEqual(result.page_type, "new_rule")
         self.assertEqual(result.action_level, "watchlist")
+
+    def test_msh_krasnodar_subsidy_pdf_is_not_unknown_page_type(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Приказ о предоставлении субсидий сельхозтоваропроизводителям",
+            "Приказ министерства сельского хозяйства Краснодарского края о предоставлении субсидий.",
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://msh.krasnodar.ru/upload/prikaz-subsidy-2026.pdf",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertEqual(result.page_type, "new_rule")
+        self.assertIn(result.action_level, {"watchlist", "requires_attention"})
 
     def test_regional_npa_archive_listing_is_background_or_irrelevant(self) -> None:
         client = MockLLMClient(["сельское хозяйство"])

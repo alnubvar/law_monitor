@@ -1,0 +1,14 @@
+{
+  "id": "msh_krasnodar_real_selection_announcement",
+  "source_name": "Минсельхоз Краснодарского края - субсидирование и финансирование",
+  "source_role": "support_documents",
+  "title": "Объявлен отбор заявок на субсидии для АПК Краснодарского края",
+  "url": "https://msh.krasnodar.ru/documents/subsidy-open-2026",
+  "raw_text": "Прием заявок до 20 мая 2026 года. Субсидия предоставляется сельхозтоваропроизводителям Краснодарского края.",
+  "level": "regional",
+  "region": "krasnodar",
+  "expected_action_level": "watchlist",
+  "expected_page_type": "selection_announcement",
+  "expected_source_role": "support_documents",
+  "expected_business_signal_contains": "Найден признак приема заявок"
+}
