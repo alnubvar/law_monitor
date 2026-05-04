@@ -15,6 +15,7 @@ from app.pipeline.deduplicate import compute_content_hash
 from app.sources.base import BaseSource
 from app.sources.generic_html_source import GenericHTMLSource
 from app.sources.government_source import GovernmentSource
+from app.sources.krasnodar_source import KrasnodarSource
 from app.sources.regional_law_source import RegionalLawSource
 from app.storage import (
     update_document_published_at_by_url,
@@ -32,6 +33,7 @@ PROGRESS_LOG_EVERY = 25
 PARSER_REGISTRY: dict[str, type[BaseSource]] = {
     "generic_html": GenericHTMLSource,
     "government": GovernmentSource,
+    "krasnodar": KrasnodarSource,
     "regional_law": RegionalLawSource,
 }
 
