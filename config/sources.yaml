@@ -51,7 +51,7 @@
   source_role: strategy
   source_type: html_listing
   enabled: true
-  parser: generic_html
+  parser: donland
   verify_ssl: true
   request_timeout: 30
   request_headers:
@@ -117,6 +117,8 @@
     - "/documents/all/"
   allow_patterns:
     - "/activity/"
+    - "/documents/"
+    - "/presscenter/events/"
     - "support"
     - "subsid"
     - ".pdf"
@@ -153,7 +155,7 @@
   source_role: regional_npa
   source_type: html_listing
   enabled: true
-  parser: regional_law
+  parser: donland
   verify_ssl: false
   request_timeout: 30
   request_headers:

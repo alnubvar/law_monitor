@@ -13,6 +13,7 @@ from app.extractors.pdf_extractor import extract_text_from_pdf
 from app.models import CollectedItem, ExtractionResult, RawDocument, SourceConfig
 from app.pipeline.deduplicate import compute_content_hash
 from app.sources.base import BaseSource
+from app.sources.donland_source import DonlandSource
 from app.sources.generic_html_source import GenericHTMLSource
 from app.sources.government_source import GovernmentSource
 from app.sources.krasnodar_source import KrasnodarSource
@@ -32,6 +33,7 @@ PROGRESS_LOG_EVERY = 25
 
 PARSER_REGISTRY: dict[str, type[BaseSource]] = {
     "generic_html": GenericHTMLSource,
+    "donland": DonlandSource,
     "government": GovernmentSource,
     "krasnodar": KrasnodarSource,
     "regional_law": RegionalLawSource,
