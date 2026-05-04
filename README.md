@@ -22,6 +22,20 @@ Production-like MVP для GR-мониторинга НПА, мер поддер
 - формирует daily markdown-report и Telegram digest;
 - хранит историю в SQLite.
 
+## Источники (MVP)
+
+- `Правительство РФ - документы` (`government.ru/docs`)
+- `Правительство РФ - новости` (`government.ru/news`)
+- `Regulation.gov.ru`
+- `ГИСП - меры поддержки АПК`
+- `Минсельхоз Краснодарского края - субсидирование и финансирование`
+- `Минсельхоз Ростовской области - господдержка`
+- `Минсельхоз Ставропольского края - господдержка`
+- `Нормативные акты Краснодарского края`
+- `Право Ростовской области`
+- `Право Ставропольского края`
+- `ZOL.ru - зерновые новости`
+
 ## Архитектура
 
 - `collect`
@@ -104,6 +118,13 @@ python main.py diagnostics --days 7
 - global / market background по умолчанию в Telegram digest не показывается.
 - proxy используется только для Telegram API, а не для парсинга источников.
 
+Команды в Telegram:
+
+- `/today` — visible документы за сегодня;
+- `/urgent` — только `requires_attention`;
+- `/sources` — статус источников;
+- `/help` — список команд.
+
 ## Структура Проекта
 
 ```text
@@ -175,6 +196,17 @@ python -m unittest discover -s tests -v
 ```
 
 Рекомендуемый текущий MVP-вариант: Windows host + SQLite + Task Scheduler + регулярный `run-scheduler --once`.
+
+## Production Checklist (Short)
+
+1. Подготовить env: заполнить `.env` (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, опционально `TELEGRAM_PROXY_URL`).
+2. Инициализировать БД: `python main.py init-db`.
+3. Проверить контур: `python main.py smoke-check`.
+4. Прогнать pipeline вручную:
+   `python main.py analyze --force`
+   `python main.py report --days 7 --action-level requires_attention watchlist --max-items 25`
+5. Проверить Telegram доставку: `python main.py telegram-check`.
+6. Включить scheduler: `python main.py run-scheduler --once` (через Task Scheduler по расписанию).
 
 ## Demo Report
 
@@ -249,3 +281,10 @@ TELEGRAM_PROXY_URL=http://login:password@ip:port
 - PostgreSQL для production deployment
 - LLM summaries поверх очищенного source text
 - RAG / archive search по историческим документам
+
+## Ограничения MVP
+
+- Анализ полностью rule-based (LLM не используется).
+- OCR и PostgreSQL не используются в runtime.
+- Scheduler/Telegram transport и schema стабилизированы и не меняются в рамках текущих фаз.
+- Отчет ориентирован на ежедневную GR-работу, не на полноценный BI-дашборд.
