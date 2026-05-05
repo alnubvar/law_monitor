@@ -154,6 +154,39 @@ class TelegramBotTest(unittest.TestCase):
 
         self.assertGreaterEqual(sleep_mock.call_count, 1)
 
+    def test_report_command_sends_document_attachment(self) -> None:
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"ok": True, "result": {"message_id": 1}}
+        report_path = self._offset_path("gr_monitoring_2026-05-05.md")
+        report_path.write_text("report", encoding="utf-8")
+
+        update = {"update_id": 1, "message": {"chat": {"id": 123}, "text": "/report"}}
+        with patch.multiple(telegram_bot.config, TELEGRAM_CHAT_ID="123", TELEGRAM_BOT_TOKEN="token"):
+            with patch("app.notify.telegram_bot.get_latest_report_file_path", return_value=report_path):
+                with patch("app.notify.telegram_bot.dispatch_input_text", return_value=telegram_bot.DispatchResult(command="/report", response_text="summary")):
+                    with patch("app.notify.telegram_bot._send_response", return_value=True) as send_response:
+                        with patch("app.notify.telegram_bot.requests.post", return_value=response) as post:
+                            telegram_bot._process_update(update, db_path=None, proxies=None)
+
+        self.assertGreaterEqual(send_response.call_count, 2)
+        post.assert_called_once()
+        self.assertIn("/sendDocument", post.call_args.args[0])
+
+    def test_report_command_fallback_when_file_missing(self) -> None:
+        update = {"update_id": 1, "message": {"chat": {"id": 123}, "text": "/report"}}
+        with patch.multiple(telegram_bot.config, TELEGRAM_CHAT_ID="123"):
+            with patch("app.notify.telegram_bot.get_latest_report_file_path", return_value=None):
+                with patch("app.notify.telegram_bot.dispatch_input_text", return_value=telegram_bot.DispatchResult(command="/report", response_text="summary")):
+                    with patch("app.notify.telegram_bot._send_response", return_value=True) as send_response:
+                        telegram_bot._process_update(update, db_path=None, proxies=None)
+
+        self.assertGreaterEqual(send_response.call_count, 2)
+        self.assertIn(
+            "Полный отчет временно недоступен, используйте краткую сводку выше",
+            str(send_response.call_args_list[-1]),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

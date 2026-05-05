@@ -11,7 +11,11 @@ from typing import Any
 import requests
 
 from app import config
-from app.notify.telegram import TELEGRAM_COMMANDS, build_command_response
+from app.notify.telegram import (
+    TELEGRAM_COMMANDS,
+    build_command_response,
+    get_latest_report_file_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -234,6 +238,8 @@ def _process_update(
     text = str(message.get("text") or "")
     dispatch_result = dispatch_input_text(text, db_path=db_path)
     _send_response(chat_id=chat_id, text=dispatch_result.response_text, proxies=proxies)
+    if dispatch_result.command == "/report":
+        _send_report_attachment(chat_id=chat_id, proxies=proxies)
 
 
 def _extract_next_offset(
@@ -335,6 +341,57 @@ def _send_response(
             logger.exception("Failed to send Telegram response.")
             return False
     return True
+
+
+def _send_report_attachment(
+    *,
+    chat_id: int | str,
+    proxies: dict[str, str] | None,
+) -> bool:
+    report_path = get_latest_report_file_path()
+    if report_path is None or not report_path.exists():
+        return _send_response(
+            chat_id=chat_id,
+            text="Полный отчет временно недоступен, используйте краткую сводку выше",
+            proxies=proxies,
+        )
+
+    if not _send_response(chat_id=chat_id, text="📎 Полный отчет во вложении", proxies=proxies):
+        return False
+
+    timeout = max(config.TELEGRAM_API_TIMEOUT + 5, 10)
+    token = config.TELEGRAM_BOT_TOKEN
+    url = f"{TELEGRAM_API_BASE_URL}/bot{token}/sendDocument"
+    for attempt in range(1, TELEGRAM_SEND_ATTEMPTS + 1):
+        try:
+            with report_path.open("rb") as document_file:
+                response = requests.post(
+                    url,
+                    data={"chat_id": str(chat_id)},
+                    files={"document": (report_path.name, document_file, "text/markdown")},
+                    timeout=timeout,
+                    proxies=proxies,
+                )
+            response.raise_for_status()
+            payload = response.json()
+            if not payload.get("ok"):
+                raise RuntimeError(payload.get("description", "sendDocument failed"))
+            return True
+        except Exception:
+            logger.exception(
+                "Failed to send report attachment via Telegram (attempt %s/%s).",
+                attempt,
+                TELEGRAM_SEND_ATTEMPTS,
+            )
+            if attempt < TELEGRAM_SEND_ATTEMPTS:
+                time.sleep(attempt)
+                continue
+
+    return _send_response(
+        chat_id=chat_id,
+        text="Полный отчет временно недоступен, используйте краткую сводку выше",
+        proxies=proxies,
+    )
 
 
 def _call_telegram_api(

@@ -142,7 +142,7 @@ def _build_daily_digest(
 def _build_daily_summary_line(sections: dict[str, list[RawDocument]]) -> str:
     summary_parts: list[str] = []
     label_map = {
-        "requires_attention": "urgent",
+        "requires_attention": "Требует внимания",
         "active_support_measures": "меры",
         "regional_npa": "НПА",
         "strategy_signals": "стратегия",
@@ -169,9 +169,15 @@ def _format_digest_item(
     lines = [f"- {document.title}"]
     details: list[str] = []
     if document.support_status and document.support_status != "unknown":
-        details.append(f"статус: {document.support_status}")
+        status_label = "активна" if document.support_status == "active" else document.support_status
+        details.append(f"статус: {status_label}")
     if document.application_status and document.application_status != "unknown":
-        details.append(f"режим: {document.application_status}")
+        app_status = (
+            "регулярная мера"
+            if document.application_status == "regular"
+            else document.application_status
+        )
+        details.append(f"режим: {app_status}")
     if details:
         lines.append(f"  {'; '.join(details)}")
     if document.deadline_text and not _is_inactive_or_closed(document):

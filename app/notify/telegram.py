@@ -290,7 +290,7 @@ def _build_watchlist_message(db_path: Path | str) -> str:
         )
     )
     if len(watchlist_documents) > shown_count:
-        lines.append(f"Показано {shown_count} из {len(watchlist_documents)}. Полная версия — в /report")
+        lines.append(f"Показано {shown_count} из {len(watchlist_documents)}. Для общей сводки нажмите 📄 Отчёт.")
     return _cap_message("\n".join(lines))
 
 
@@ -309,9 +309,10 @@ def _build_report_message(db_path: Path | str) -> str:
     )
     short_digest = build_digest_message(visible_documents)
     prefix = [
-        "🧾 Последняя сводка (7 дней)",
-        "Полный отчет сохранен на сервере.",
-        "Краткая версия ниже:",
+        "🧾 GR-сводка за 7 дней",
+        "",
+        "Это краткая версия отчета прямо в Telegram.",
+        "Для деталей используйте кнопки ниже: 🚨 Срочное, 👀 Наблюдение, 🛰 Источники.",
     ]
     return _cap_message("\n".join(prefix + ["", short_digest]))
 
@@ -329,9 +330,9 @@ def _build_sources_message(db_path: Path | str) -> str:
             continue
         hints: list[str] = []
         if row.noisy_ratio >= 0.7:
-            hints.append("много шума")
+            hints.append("много нерелевантных материалов")
         if row.total_documents > 0 and row.missing_published_at_count / row.total_documents >= 0.6:
-            hints.append("мало дат")
+            hints.append("часть дат не определена")
         hint_suffix = f" ({', '.join(hints)})" if hints else ""
         lines.append(f"✅ {source.name} — найдено {row.total_documents} документов{hint_suffix}")
     return _cap_message("\n".join(lines))
@@ -443,6 +444,13 @@ def _find_latest_report_file() -> str | None:
     if not report_files:
         return None
     return str(report_files[0])
+
+
+def get_latest_report_file_path() -> Path | None:
+    latest = _find_latest_report_file()
+    if latest is None:
+        return None
+    return Path(latest)
 
 
 def _cap_message(text: str) -> str:

@@ -637,8 +637,8 @@ class ReportGenerationSmokeTest(unittest.TestCase):
 
         self.assertTrue(sent)
         self.assertEqual(len(captured), 1)
-        self.assertIn("статус: active", captured[0])
-        self.assertIn("режим: regular", captured[0])
+        self.assertIn("статус: активна", captured[0])
+        self.assertIn("режим: регулярная мера", captured[0])
         self.assertIn("Сигнал: Активная федеральная мера поддержки", captured[0])
         self.assertNotIn("Срок кредита", captured[0])
 

@@ -131,8 +131,8 @@ class TelegramFormatterTest(unittest.TestCase):
 
         text = build_digest_message([urgent])
 
-        self.assertIn("статус: active", text)
-        self.assertIn("режим: regular", text)
+        self.assertIn("статус: активна", text)
+        self.assertIn("режим: регулярная мера", text)
         self.assertIn("Сигнал: Активная федеральная мера поддержки", text)
         self.assertIn("https://gisp.gov.ru/nmp/measure/9512857", text)
 

@@ -270,7 +270,9 @@ class TelegramNotifySmokeTest(unittest.TestCase):
     def test_report_command_does_not_show_local_report_path(self) -> None:
         text = telegram.build_command_response("/report")
 
-        self.assertIn("Полный отчет сохранен на сервере", text)
+        self.assertIn("GR-сводка", text)
+        self.assertNotIn("сервер", text.lower())
+        self.assertNotIn("urgent:", text)
         self.assertNotIn("reports\\", text)
         self.assertNotIn("reports/", text)
 
@@ -293,8 +295,16 @@ class TelegramNotifySmokeTest(unittest.TestCase):
 
         text = telegram.build_command_response("/watchlist", db_path=db_path)
 
-        self.assertIn("Показано 5 из 7. Полная версия — в /report", text)
+        self.assertIn("Показано 5 из 7. Для общей сводки нажмите 📄 Отчёт.", text)
         self.assertEqual(text.count("Уровень: наблюдение"), 5)
+
+    def test_sources_does_not_use_old_noise_wording(self) -> None:
+        db_path = self._db_path("telegram_sources_wording.db")
+        init_db(db_path)
+
+        text = telegram.build_command_response("/sources", db_path=db_path)
+
+        self.assertNotIn("много шума", text)
 
     def test_missing_published_date_is_hidden_from_user(self) -> None:
         db_path = self._db_path("telegram_missing_date.db")
