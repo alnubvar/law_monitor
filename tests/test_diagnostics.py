@@ -7,6 +7,7 @@ from pathlib import Path
 from app.models import RawDocument
 from app.pipeline.diagnostics import run_diagnostics
 from app.pipeline.digest import run_demo_report
+from unittest.mock import patch
 from app.storage import init_db, save_document
 
 
@@ -254,6 +255,30 @@ class DiagnosticsSmokeTest(unittest.TestCase):
         self.assertIn("- strategy", output)
         self.assertIn("- news_signals", output)
         self.assertIn("coverage=1/1", output)
+
+    def test_diagnostics_includes_source_coverage_audit_errors(self) -> None:
+        db_path = self._db_path("diagnostics_source_audit.db")
+        init_db(db_path)
+        with patch(
+            "app.pipeline.diagnostics.list_latest_source_audit",
+            return_value=[
+                {
+                    "source_name": "ZOL.ru - зерновые новости",
+                    "attempted_at": datetime.now(timezone.utc),
+                    "success_at": None,
+                    "error_at": datetime.now(timezone.utc),
+                    "error_message": "timeout",
+                    "fetched_count": 0,
+                    "saved_count": 0,
+                    "existing_count": 0,
+                    "duplicates_count": 0,
+                    "item_errors_count": 1,
+                }
+            ],
+        ):
+            output = run_diagnostics(db_path=db_path, days=7)
+        self.assertIn("Source coverage audit:", output)
+        self.assertIn("last_error_message=timeout", output)
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ from app.storage import (
     init_db,
     list_recent_documents,
     list_recent_source_errors,
+    mark_runtime_event,
 )
 
 
@@ -72,6 +73,7 @@ def run_digest(
     else:
         path = REPORTS_DIR / f"gr_monitoring_{report_date}.md"
     save_markdown_report(markdown, path)
+    mark_runtime_event("report", details=str(path))
     return path
 
 

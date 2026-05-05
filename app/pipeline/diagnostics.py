@@ -5,9 +5,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
-from app.config import DB_PATH, get_source_role
+from app.config import DB_PATH, get_source_role, load_sources
 from app.models import RawDocument
-from app.storage import backfill_missing_published_at, init_db, list_documents
+from app.storage import backfill_missing_published_at, init_db, list_documents, list_latest_source_audit
 
 NOISY_PAGE_TYPES = {
     "reference_page",
@@ -371,4 +371,40 @@ def run_diagnostics(
     documents = list_documents(db_path=resolved_db_path, days=days)
     snapshot = build_diagnostics_snapshot(documents, days=days)
     snapshot.backfilled_count = backfilled_count
-    return format_diagnostics(snapshot)
+    diagnostics_text = format_diagnostics(snapshot)
+    audit_text = format_source_coverage_audit(db_path=resolved_db_path)
+    return f"{diagnostics_text}\n\n{audit_text}".strip()
+
+
+def format_source_coverage_audit(*, db_path: Path | str) -> str:
+    rows = list_latest_source_audit(db_path=db_path)
+    by_name = {row["source_name"]: row for row in rows}
+    lines = ["Source coverage audit:"]
+    for source in load_sources():
+        row = by_name.get(source.name)
+        if row is None:
+            lines.append(
+                f"- {source.name} | enabled={source.enabled} | url={source.url} | "
+                "last_attempt_at=n/a | last_success_at=n/a | last_error_at=n/a | "
+                "fetched_count=0 | saved_count=0 | existing_count=0 | duplicates_count=0 | item_errors=0"
+            )
+            continue
+        lines.append(
+            f"- {source.name} | enabled={source.enabled} | url={source.url} | "
+            f"last_attempt_at={_fmt_dt(row.get('attempted_at'))} | "
+            f"last_success_at={_fmt_dt(row.get('success_at'))} | "
+            f"last_error_at={_fmt_dt(row.get('error_at'))} | "
+            f"last_error_message={str(row.get('error_message') or 'n/a')[:120]} | "
+            f"fetched_count={row.get('fetched_count', 0)} | "
+            f"saved_count={row.get('saved_count', 0)} | "
+            f"existing_count={row.get('existing_count', 0)} | "
+            f"duplicates_count={row.get('duplicates_count', 0)} | "
+            f"item_errors={row.get('item_errors_count', 0)}"
+        )
+    return "\n".join(lines)
+
+
+def _fmt_dt(value: datetime | None) -> str:
+    if value is None:
+        return "n/a"
+    return value.strftime("%Y-%m-%d %H:%M:%S")

@@ -25,9 +25,12 @@ from app.storage import (
     document_exists_by_hash,
     document_exists_by_url,
     init_db,
+    mark_runtime_event,
+    save_source_audit_record,
     save_source_error,
     save_document,
 )
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 PROGRESS_LOG_EVERY = 25
@@ -123,16 +126,45 @@ def run_collect(source_name: str | None = None, limit: int | None = None) -> int
     for source_config in sources:
         logger.info("Collecting from source: %s", source_config.name)
         clear_source_errors(source_name=source_config.name)
+        attempted_at = datetime.now(timezone.utc)
         try:
             source = create_source(source_config)
             items = source.fetch_items()
         except RequestException as exc:
             logger.warning("Source collection failed for %s: %s", source_config.name, exc)
             save_source_error(source_config.name, source_config.url, str(exc))
+            save_source_audit_record(
+                source_name=source_config.name,
+                source_url=source_config.url,
+                enabled=source_config.enabled,
+                attempted_at=attempted_at,
+                success_at=None,
+                error_at=datetime.now(timezone.utc),
+                error_message=str(exc),
+                fetched_count=0,
+                saved_count=0,
+                existing_count=0,
+                duplicates_count=0,
+                item_errors_count=0,
+            )
             continue
         except Exception as exc:
             logger.exception("Source collection failed for %s: %s", source_config.name, exc)
             save_source_error(source_config.name, source_config.url, str(exc))
+            save_source_audit_record(
+                source_name=source_config.name,
+                source_url=source_config.url,
+                enabled=source_config.enabled,
+                attempted_at=attempted_at,
+                success_at=None,
+                error_at=datetime.now(timezone.utc),
+                error_message=str(exc),
+                fetched_count=0,
+                saved_count=0,
+                existing_count=0,
+                duplicates_count=0,
+                item_errors_count=0,
+            )
             continue
 
         effective_limit = limit if limit is not None else source_config.max_items
@@ -216,6 +248,20 @@ def run_collect(source_name: str | None = None, limit: int | None = None) -> int
                 source_config.url,
                 f"Item processing errors: {source_errors}",
             )
+        save_source_audit_record(
+            source_name=source_config.name,
+            source_url=source_config.url,
+            enabled=source_config.enabled,
+            attempted_at=attempted_at,
+            success_at=datetime.now(timezone.utc),
+            error_at=datetime.now(timezone.utc) if source_errors > 0 else None,
+            error_message=f"Item processing errors: {source_errors}" if source_errors > 0 else None,
+            fetched_count=total_items,
+            saved_count=source_saved,
+            existing_count=source_skipped_existing,
+            duplicates_count=source_skipped_duplicates,
+            item_errors_count=source_errors,
+        )
         logger.info(
             "Source finished [%s]: total=%s, saved=%s, existing=%s, duplicates=%s, errors=%s",
             source_config.name,
@@ -227,4 +273,5 @@ def run_collect(source_name: str | None = None, limit: int | None = None) -> int
         )
 
     logger.info("Collection completed. Saved %s new documents.", saved_count)
+    mark_runtime_event("collect", details=f"saved={saved_count}")
     return saved_count

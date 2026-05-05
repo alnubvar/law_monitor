@@ -148,6 +148,37 @@ def init_db(db_path: Path | str = DB_PATH) -> None:
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_source_errors_collected_at ON source_errors(collected_at)"
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS source_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_name TEXT NOT NULL,
+                source_url TEXT NOT NULL,
+                enabled INTEGER NOT NULL,
+                attempted_at TEXT NOT NULL,
+                success_at TEXT,
+                error_at TEXT,
+                error_message TEXT,
+                fetched_count INTEGER DEFAULT 0,
+                saved_count INTEGER DEFAULT 0,
+                existing_count INTEGER DEFAULT 0,
+                duplicates_count INTEGER DEFAULT 0,
+                item_errors_count INTEGER DEFAULT 0
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_source_audit_source_attempted_at ON source_audit(source_name, attempted_at DESC)"
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS runtime_events (
+                event_name TEXT PRIMARY KEY,
+                updated_at TEXT NOT NULL,
+                details TEXT
+            )
+            """
+        )
         connection.commit()
     logger.info("Database initialized at %s", db_path)
 
@@ -538,3 +569,113 @@ def count_documents_by_action_level(
             (action_level,),
         ).fetchone()
     return int(row["total"]) if row else 0
+
+
+def save_source_audit_record(
+    *,
+    source_name: str,
+    source_url: str,
+    enabled: bool,
+    attempted_at: datetime,
+    success_at: datetime | None,
+    error_at: datetime | None,
+    error_message: str | None,
+    fetched_count: int,
+    saved_count: int,
+    existing_count: int,
+    duplicates_count: int,
+    item_errors_count: int,
+    db_path: Path | str = DB_PATH,
+) -> int:
+    with _connect_db(db_path) as connection:
+        cursor = connection.execute(
+            """
+            INSERT INTO source_audit (
+                source_name, source_url, enabled, attempted_at, success_at, error_at, error_message,
+                fetched_count, saved_count, existing_count, duplicates_count, item_errors_count
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                source_name,
+                source_url,
+                int(enabled),
+                _serialize_dt(attempted_at),
+                _serialize_dt(success_at),
+                _serialize_dt(error_at),
+                error_message,
+                fetched_count,
+                saved_count,
+                existing_count,
+                duplicates_count,
+                item_errors_count,
+            ),
+        )
+        connection.commit()
+        return int(cursor.lastrowid)
+
+
+def list_latest_source_audit(
+    db_path: Path | str = DB_PATH,
+) -> list[dict[str, Any]]:
+    with _connect_db(db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT sa.*
+            FROM source_audit sa
+            JOIN (
+                SELECT source_name, MAX(attempted_at) AS max_attempted_at
+                FROM source_audit
+                GROUP BY source_name
+            ) latest
+              ON latest.source_name = sa.source_name
+             AND latest.max_attempted_at = sa.attempted_at
+            ORDER BY sa.source_name ASC
+            """
+        ).fetchall()
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        payload = dict(row)
+        payload["attempted_at"] = _parse_dt(payload.get("attempted_at"))
+        payload["success_at"] = _parse_dt(payload.get("success_at"))
+        payload["error_at"] = _parse_dt(payload.get("error_at"))
+        payload["enabled"] = bool(payload.get("enabled"))
+        results.append(payload)
+    return results
+
+
+def mark_runtime_event(
+    event_name: str,
+    *,
+    details: str | None = None,
+    occurred_at: datetime | None = None,
+    db_path: Path | str = DB_PATH,
+) -> None:
+    timestamp = occurred_at or datetime.now(timezone.utc)
+    with _connect_db(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO runtime_events(event_name, updated_at, details)
+            VALUES (?, ?, ?)
+            ON CONFLICT(event_name) DO UPDATE SET
+                updated_at=excluded.updated_at,
+                details=excluded.details
+            """,
+            (event_name, _serialize_dt(timestamp), details),
+        )
+        connection.commit()
+
+
+def get_runtime_event(
+    event_name: str,
+    db_path: Path | str = DB_PATH,
+) -> dict[str, Any] | None:
+    with _connect_db(db_path) as connection:
+        row = connection.execute(
+            "SELECT event_name, updated_at, details FROM runtime_events WHERE event_name = ?",
+            (event_name,),
+        ).fetchone()
+    if row is None:
+        return None
+    payload = dict(row)
+    payload["updated_at"] = _parse_dt(payload.get("updated_at"))
+    return payload

@@ -8,6 +8,7 @@ from app.storage import (
     count_documents_by_action_level,
     init_db,
     list_unanalyzed_documents,
+    mark_runtime_event,
     update_analysis,
 )
 
@@ -52,4 +53,5 @@ def run_analyze(limit: int | None = None, *, reanalyze: bool = False) -> int:
         analyzed_count,
         requires_attention_count,
     )
+    mark_runtime_event("analyze", details=f"processed={analyzed_count}")
     return analyzed_count
