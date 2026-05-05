@@ -149,8 +149,9 @@ class TelegramNotifySmokeTest(unittest.TestCase):
 
         text = telegram.build_command_response("/urgent", db_path=db_path)
 
-        self.assertIn("Срочные документы", text)
-        self.assertIn("requires_attention=1", text)
+        self.assertIn("Требует внимания GR", text)
+        self.assertIn("Найдено документов: 1", text)
+        self.assertIn("Уровень: требует внимания", text)
         self.assertIn("Льготное кредитование АПК", text)
 
     def test_today_command_returns_visible_today_documents(self) -> None:
@@ -185,7 +186,8 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         text = telegram.build_command_response("/today", db_path=db_path)
 
         self.assertIn("Сегодня", text)
-        self.assertIn("visible=1", text)
+        self.assertIn("Сегодня новых срочных документов нет", text)
+        self.assertIn("Отраслевые сигналы", text)
         self.assertIn("Пошлина на экспорт пшеницы останется нулевой", text)
         self.assertNotIn("Старый документ", text)
 
@@ -208,7 +210,7 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         text = telegram.build_command_response("/watchlist", db_path=db_path)
 
         self.assertIn("Документы на наблюдении", text)
-        self.assertIn("watchlist=1", text)
+        self.assertIn("Уровень: наблюдение", text)
         self.assertIn("Пошлина на экспорт пшеницы останется нулевой", text)
 
     def test_status_command_contains_main_counters(self) -> None:
@@ -229,10 +231,12 @@ class TelegramNotifySmokeTest(unittest.TestCase):
 
         text = telegram.build_command_response("/status", db_path=db_path)
 
-        self.assertIn("Статус AHSTEP GR-monitoring", text)
+        self.assertIn("Статус AHSTEP GR Monitor", text)
         self.assertIn("Документов в базе: 1", text)
-        self.assertIn("requires_attention=1", text)
-        self.assertIn("watchlist=0", text)
+        self.assertIn("требует внимания", text)
+        self.assertNotIn("RTZ", text)
+        self.assertNotIn("зима", text)
+        self.assertNotIn("scheduler-state", text)
 
     def test_sources_command_includes_enabled_sources(self) -> None:
         db_path = self._db_path("telegram_sources.db")
@@ -243,6 +247,10 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         self.assertIn("Источники (", text)
         self.assertIn("ZOL.ru - зерновые новости", text)
         self.assertIn("ГИСП - меры поддержки АПК", text)
+        self.assertNotIn("RA=", text)
+        self.assertNotIn("WL=", text)
+        self.assertNotIn("BG=", text)
+        self.assertNotIn("IRR=", text)
 
     def test_send_command_response_uses_send_message(self) -> None:
         with patch("app.notify.telegram.send_message", return_value=True) as send_message:
@@ -257,7 +265,56 @@ class TelegramNotifySmokeTest(unittest.TestCase):
 
         text = telegram.build_command_response("/urgent", db_path=db_path)
 
-        self.assertEqual(text, "🚨 Срочных документов сейчас нет.")
+        self.assertEqual(text, "🚨 Требует внимания GR: новых документов нет.")
+
+    def test_report_command_does_not_show_local_report_path(self) -> None:
+        text = telegram.build_command_response("/report")
+
+        self.assertIn("Полный отчет сохранен на сервере", text)
+        self.assertNotIn("reports\\", text)
+        self.assertNotIn("reports/", text)
+
+    def test_watchlist_is_limited_for_user_and_has_tail_hint(self) -> None:
+        db_path = self._db_path("telegram_watchlist_limit.db")
+        init_db(db_path)
+        for idx in range(1, 8):
+            save_document(
+                self._doc(
+                    doc_id=idx,
+                    source_name="ZOL.ru - зерновые новости",
+                    region="federal",
+                    title=f"Новость {idx}",
+                    url=f"https://www.zol.ru/n/{idx}",
+                    action_level="watchlist",
+                    page_type="news_background",
+                ),
+                db_path,
+            )
+
+        text = telegram.build_command_response("/watchlist", db_path=db_path)
+
+        self.assertIn("Показано 5 из 7. Полная версия — в /report", text)
+        self.assertEqual(text.count("Уровень: наблюдение"), 5)
+
+    def test_missing_published_date_is_hidden_from_user(self) -> None:
+        db_path = self._db_path("telegram_missing_date.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=1,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Документ без даты",
+            url="https://example.com/no-date",
+            action_level="requires_attention",
+            page_type="measure_card",
+        )
+        document.published_at = None
+        save_document(document, db_path)
+
+        text = telegram.build_command_response("/urgent", db_path=db_path)
+
+        self.assertNotIn("Дата: n/a", text)
+        self.assertNotIn("n/a", text)
 
     def test_long_message_is_split_to_multiple_chunks(self) -> None:
         with patch.multiple(

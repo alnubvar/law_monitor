@@ -32,6 +32,7 @@ TELEGRAM_COMMANDS = (
 TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 TELEGRAM_SAFE_MESSAGE_LENGTH = 3900
 TELEGRAM_LIST_LIMIT = 10
+TELEGRAM_WATCHLIST_USER_LIMIT = 5
 
 
 def is_configured() -> bool:
@@ -204,16 +205,20 @@ def _build_status_message(db_path: Path | str) -> str:
     requires_attention_count = count_documents_by_action_level("requires_attention", db_path=db_path)
     watchlist_count = count_documents_by_action_level("watchlist", db_path=db_path)
     lines = [
-        "📊 Статус AHSTEP GR-monitoring",
-        f"Дата/время: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}",
+        "📊 Статус AHSTEP GR Monitor",
+        f"Обновлено: {now.strftime('%Y-%m-%d %H:%M')}",
         f"Документов в базе: {len(all_documents)}",
-        f"Счетчики: requires_attention={requires_attention_count} | watchlist={watchlist_count} | visible(7d)={len(visible_documents)}",
-        f"Источники: {len(sources)} enabled, с активностью за 7 дн: {len(active_source_rows)}",
-        f"Последний collect: {_fmt_dt(latest_collect)}",
-        f"Последний published_at в базе: {_fmt_dt(latest_publish)}",
-        f"Последний report: {latest_report or 'не найден'}",
-        f"Telegram/proxy: {'configured' if is_configured() else 'not configured'} / {'configured' if is_proxy_configured() else 'not configured'}",
-        "Примечание: scheduler-state по циклам не хранится, поэтому показываются вычислимые runtime-метрики.",
+        (
+            "Уровни за 7 дней: "
+            f"требует внимания — {requires_attention_count}, "
+            f"наблюдение — {watchlist_count}, "
+            f"всего видимых — {len(visible_documents)}"
+        ),
+        f"Источники: активных {len(sources)}, с новыми публикациями за 7 дней — {len(active_source_rows)}",
+        f"Последний сбор: {_fmt_dt(latest_collect) or 'дата не определена'}",
+        f"Последняя публикация: {_fmt_dt(latest_publish) or 'дата не определена'}",
+        f"Отчет: {'доступен' if latest_report else 'пока не сформирован'}",
+        f"Telegram-уведомления: {'включены' if is_configured() else 'не настроены'}",
     ]
     return _cap_message("\n".join(lines))
 
@@ -221,14 +226,22 @@ def _build_status_message(db_path: Path | str) -> str:
 def _build_today_message(db_path: Path | str) -> str:
     today_documents = _select_today_visible_documents(db_path)
     if not today_documents:
-        return "📅 Сегодня: видимых документов нет."
+        return "📅 Сегодня новых срочных документов нет."
     urgent_count = sum(1 for document in today_documents if document.action_level == "requires_attention")
-    watchlist_count = sum(1 for document in today_documents if document.action_level == "watchlist")
+    watchlist_documents = [document for document in today_documents if document.action_level == "watchlist"]
+    urgent_documents = [document for document in today_documents if document.action_level == "requires_attention"]
     lines = [
         f"📅 Сегодня ({_today_utc().isoformat()})",
-        f"Счетчики: requires_attention={urgent_count} | watchlist={watchlist_count} | visible={len(today_documents)}",
     ]
-    lines.extend(_format_document_lines(today_documents, include_summary=True))
+    if urgent_count == 0:
+        lines.append("Сегодня новых срочных документов нет.")
+    else:
+        lines.append(f"Требует внимания GR: {urgent_count}")
+        lines.extend(_format_document_lines(urgent_documents, include_summary=False))
+    if watchlist_documents:
+        lines.append("")
+        lines.append(f"📰 Отраслевые сигналы: {len(watchlist_documents)}")
+        lines.extend(_format_document_lines(watchlist_documents, include_summary=False))
     return _cap_message("\n".join(lines))
 
 
@@ -246,35 +259,38 @@ def _build_urgent_message(db_path: Path | str) -> str:
         include_market_background=False,
     )
     if not urgent_documents:
-        return "🚨 Срочных документов сейчас нет."
+        return "🚨 Требует внимания GR: новых документов нет."
     lines = [
-        "🚨 Срочные документы (requires_attention)",
-        f"Счетчики: requires_attention={len(urgent_documents)} | watchlist=0 | visible={len(urgent_documents)}",
+        "🚨 Требует внимания GR",
+        f"Найдено документов: {len(urgent_documents)}",
     ]
-    lines.extend(_format_document_lines(urgent_documents, include_summary=True))
+    lines.extend(_format_document_lines(urgent_documents, include_summary=False))
     return _cap_message("\n".join(lines))
 
 
 def _build_watchlist_message(db_path: Path | str) -> str:
-    documents = list_recent_documents(
+    watchlist_documents = list_recent_documents(
         db_path=db_path,
         days=7,
         relevant_only=False,
         action_levels=["watchlist"],
     )
-    watchlist_documents = select_visible_report_documents(
-        documents,
-        relevant_only=False,
-        action_levels=["watchlist"],
-        include_market_background=False,
-    )
     if not watchlist_documents:
-        return "👀 Документов watchlist сейчас нет."
+        return "👀 Документов на наблюдении сейчас нет."
+    shown_count = min(TELEGRAM_WATCHLIST_USER_LIMIT, len(watchlist_documents))
     lines = [
-        "👀 Документы на наблюдении (watchlist)",
-        f"Счетчики: requires_attention=0 | watchlist={len(watchlist_documents)} | visible={len(watchlist_documents)}",
+        "👀 Документы на наблюдении",
     ]
-    lines.extend(_format_document_lines(watchlist_documents, include_summary=True))
+    lines.extend(
+        _format_document_lines(
+            watchlist_documents[:TELEGRAM_WATCHLIST_USER_LIMIT],
+            include_summary=False,
+            max_items=TELEGRAM_WATCHLIST_USER_LIMIT,
+            include_hidden_hint=False,
+        )
+    )
+    if len(watchlist_documents) > shown_count:
+        lines.append(f"Показано {shown_count} из {len(watchlist_documents)}. Полная версия — в /report")
     return _cap_message("\n".join(lines))
 
 
@@ -292,10 +308,11 @@ def _build_report_message(db_path: Path | str) -> str:
         include_market_background=False,
     )
     short_digest = build_digest_message(visible_documents)
-    latest_report = _find_latest_report_file()
-    prefix = ["🧾 Последняя сводка (7 дней)"]
-    if latest_report:
-        prefix.append(f"Файл отчета: {latest_report}")
+    prefix = [
+        "🧾 Последняя сводка (7 дней)",
+        "Полный отчет сохранен на сервере.",
+        "Краткая версия ниже:",
+    ]
     return _cap_message("\n".join(prefix + ["", short_digest]))
 
 
@@ -304,17 +321,19 @@ def _build_sources_message(db_path: Path | str) -> str:
     recent_documents = list_documents(db_path=db_path, days=7)
     snapshot = build_diagnostics_snapshot(recent_documents, days=7)
     rows_by_name = {row.source_name: row for row in snapshot.rows}
-    lines = [f"🛰 Источники ({len(sources)} enabled)"]
+    lines = [f"🛰 Источники (активных: {len(sources)})"]
     for source in sources:
         row = rows_by_name.get(source.name)
-        if row is None:
-            lines.append(f"- {source.name} [{source.source_role}] 7d=0")
+        if row is None or row.total_documents == 0:
+            lines.append(f"⚠️ {source.name} — нет документов за 7 дней")
             continue
-        lines.append(
-            f"- {source.name} [{source.source_role}] "
-            f"7d={row.total_documents}; RA={row.requires_attention_count}; "
-            f"WL={row.watchlist_count}; BG={row.background_count}; IRR={row.irrelevant_count}"
-        )
+        hints: list[str] = []
+        if row.noisy_ratio >= 0.7:
+            hints.append("много шума")
+        if row.total_documents > 0 and row.missing_published_at_count / row.total_documents >= 0.6:
+            hints.append("мало дат")
+        hint_suffix = f" ({', '.join(hints)})" if hints else ""
+        lines.append(f"✅ {source.name} — найдено {row.total_documents} документов{hint_suffix}")
     return _cap_message("\n".join(lines))
 
 
@@ -323,12 +342,12 @@ def _build_help_message() -> str:
         [
             "🤖 AHSTEP GR-monitoring команды:",
             "/start — открыть меню GR-монитора",
-            "/status — состояние системы и счетчики",
-            "/today — видимые документы за сегодня",
-            "/urgent — срочные документы (requires_attention)",
+            "/status — состояние мониторинга",
+            "/today — сводка за сегодня",
+            "/urgent — документы, требующие внимания GR",
             "/watchlist — документы на наблюдении",
-            "/report — краткая сводка за 7 дней + путь к последнему report",
-            "/sources — источники и счетчики за 7 дней",
+            "/report — краткая сводка за 7 дней",
+            "/sources — статус источников за 7 дней",
             "/help — список команд",
         ]
     ))
@@ -370,31 +389,46 @@ def _format_document_lines(
     documents: Sequence[RawDocument],
     *,
     include_summary: bool,
+    max_items: int = TELEGRAM_LIST_LIMIT,
+    include_hidden_hint: bool = True,
 ) -> list[str]:
     lines: list[str] = []
-    for document in documents[:TELEGRAM_LIST_LIMIT]:
+    for document in documents[:max_items]:
         published_label = _fmt_dt(document.published_at)
-        lines.append(f"- {document.title}")
-        lines.append(
-            f"  Источник: {document.source_name} | Дата: {published_label} | Action: {document.action_level or 'n/a'}"
-        )
-        if document.business_signal:
-            lines.append(f"  Причина: {document.business_signal[:180]}")
+        lines.append(f"- {document.title[:160]}")
+        meta_parts = [f"Источник: {document.source_name}"]
+        if published_label:
+            meta_parts.append(f"Дата: {published_label}")
+        meta_parts.append(f"Уровень: {_format_action_level(document.action_level)}")
+        lines.append(f"  {' | '.join(meta_parts)}")
+        reason = (document.business_signal or document.summary or "").strip()
+        if reason:
+            lines.append(f"  Почему важно: {reason[:140]}")
         if include_summary and document.summary:
-            lines.append(f"  {document.summary[:180]}")
+            lines.append(f"  Кратко: {document.summary[:120]}")
         lines.append(f"  {document.url}")
-    hidden_count = len(documents) - min(len(documents), TELEGRAM_LIST_LIMIT)
-    if hidden_count > 0:
+    hidden_count = len(documents) - min(len(documents), max_items)
+    if include_hidden_hint and hidden_count > 0:
         lines.append(f"... и еще {hidden_count}.")
     return lines
 
 
-def _fmt_dt(value: datetime | None) -> str:
+def _fmt_dt(value: datetime | None) -> str | None:
     if value is None:
-        return "n/a"
+        return None
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.astimezone().strftime("%Y-%m-%d")
+
+
+def _format_action_level(action_level: str | None) -> str:
+    labels = {
+        "requires_attention": "требует внимания",
+        "watchlist": "наблюдение",
+        "background": "фон",
+        "irrelevant": "скрыто",
+    }
+    return labels.get(action_level or "", "наблюдение")
 
 
 def _find_latest_report_file() -> str | None:
