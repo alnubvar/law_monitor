@@ -13,6 +13,7 @@ from app.config import load_sources
 from app.models import RawDocument
 from app.notify.telegram_formatter import build_digest_message
 from app.pipeline.diagnostics import build_diagnostics_snapshot
+from app.reports.markdown_report import generate_markdown_report
 from app.reports.markdown_report import select_visible_report_documents
 from app.storage import count_documents_by_action_level, init_db, list_documents, list_recent_documents
 
@@ -307,14 +308,14 @@ def _build_report_message(db_path: Path | str) -> str:
         action_levels=["requires_attention", "watchlist"],
         include_market_background=False,
     )
-    short_digest = build_digest_message(visible_documents)
-    prefix = [
-        "🧾 GR-сводка за 7 дней",
-        "",
-        "Это краткая версия отчета прямо в Telegram.",
-        "Для деталей используйте кнопки ниже: 🚨 Срочное, 👀 Наблюдение, 🛰 Источники.",
-    ]
-    return _cap_message("\n".join(prefix + ["", short_digest]))
+    report_text = generate_markdown_report(
+        visible_documents,
+        report_date=datetime.now().strftime("%Y-%m-%d"),
+        period_days=7,
+        relevant_only=False,
+        action_levels=["requires_attention", "watchlist"],
+    )
+    return _cap_message(report_text)
 
 
 def _build_sources_message(db_path: Path | str) -> str:

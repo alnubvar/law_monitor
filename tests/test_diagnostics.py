@@ -202,8 +202,8 @@ class DiagnosticsSmokeTest(unittest.TestCase):
         self.assertTrue(path.exists())
         self.assertIn("# AHSTEP Demo Report", markdown)
         self.assertIn("Льготное кредитование АПК", markdown)
-        self.assertIn("НПА: 22-68850-00258-Р", markdown)
-        self.assertIn("Сигнал: Активная федеральная мера поддержки", markdown)
+        self.assertIn("Почему важно:", markdown)
+        self.assertIn("Активная федеральная мера поддержки", markdown)
 
     def test_diagnostics_includes_parser_quality_hints(self) -> None:
         db_path = self._db_path("diagnostics_hints.db")

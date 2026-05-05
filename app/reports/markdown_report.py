@@ -96,30 +96,24 @@ EMPTY_BUCKET_MESSAGES = {
 }
 DISPLAY_SECTION_ORDER = (
     "requires_attention",
-    "active_support_measures",
-    "support_documents",
+    "measures_and_selections",
     "regional_npa",
     "strategy_signals",
     "news_signals",
-    "background_reference",
 )
 DISPLAY_SECTION_TITLES = {
-    "requires_attention": "## Требует внимания GR",
-    "active_support_measures": "## Объявленные меры / отборы",
-    "support_documents": "## Документы по мерам поддержки",
-    "regional_npa": "## Региональные НПА",
-    "strategy_signals": "## Стратегические федеральные сигналы",
-    "news_signals": "## Новостные предвестники изменений",
-    "background_reference": "## Фон / справочно",
+    "requires_attention": "## 🚨 Требует внимания",
+    "measures_and_selections": "## 📢 Меры и отборы",
+    "regional_npa": "## ⚖️ Региональные изменения",
+    "strategy_signals": "## 🏛 Стратегические сигналы",
+    "news_signals": "## 📰 Отраслевые сигналы",
 }
 DISPLAY_EMPTY_MESSAGES = {
-    "requires_attention": "Документов, требующих внимания GR, за выбранный период не найдено.",
-    "active_support_measures": "Подходящих объявленных мер поддержки и отборов не найдено.",
-    "support_documents": "Подходящих документов по мерам поддержки не найдено.",
-    "regional_npa": "Подходящих региональных НПА для показа не найдено.",
-    "strategy_signals": "Стратегических федеральных сигналов для показа не найдено.",
-    "news_signals": "Новостных предвестников изменений для показа не найдено.",
-    "background_reference": "Фоновых и справочных материалов для показа не найдено.",
+    "requires_attention": "Новых пунктов, требующих внимания, не найдено.",
+    "measures_and_selections": "Новых мер и отборов не найдено.",
+    "regional_npa": "Новых региональных изменений не найдено.",
+    "strategy_signals": "Новых стратегических сигналов не найдено.",
+    "news_signals": "Новых отраслевых сигналов не найдено.",
 }
 BAD_TITLE_VALUES = {"просмотр", "скачать", "документ", "pdf"}
 TITLE_SIMILARITY_THRESHOLD = 0.92
@@ -204,7 +198,7 @@ def generate_markdown_report(
     error_records = list(source_errors or [])
 
     generated_at_value = generated_at or datetime.now()
-    lines: list[str] = [report_title or f"# GR-мониторинг за {report_date}", ""]
+    lines: list[str] = [report_title or f"# GR-дайджест за {report_date}", ""]
     if intro_note:
         lines.extend([intro_note, ""])
     lines.extend(
@@ -222,28 +216,12 @@ def generate_markdown_report(
         if documents_for_bucket:
             for document in documents_for_bucket:
                 digest_item = _to_digest_item(document)
-                if section == "requires_attention":
-                    lines.extend(_format_detailed_item(digest_item))
-                else:
-                    lines.extend(
-                        _format_compact_item(
-                            digest_item,
-                            include_business_facts=section in {"active_support_measures", "support_documents", "regional_npa"},
-                        )
-                    )
+                lines.extend(_format_human_item(digest_item, require_action=section == "requires_attention"))
         else:
             lines.append(DISPLAY_EMPTY_MESSAGES[section])
             lines.append("")
 
-    lines.extend(
-        _format_stats(
-            document_list,
-            error_records,
-            report_view=report_view,
-            display_sections=display_sections,
-            include_market_background=include_market_background,
-        )
-    )
+    lines.extend(_format_human_outro(display_sections))
     return "\n".join(lines).strip() + "\n"
 
 
@@ -515,7 +493,9 @@ def _published_timestamp(document: RawDocument) -> float:
 def _build_display_sections(documents: Iterable[RawDocument]) -> dict[str, list[RawDocument]]:
     sections = {section: [] for section in DISPLAY_SECTION_ORDER}
     for document in documents:
-        sections[classify_display_section(document)].append(document)
+        section = classify_display_section(document)
+        if section in sections:
+            sections[section].append(document)
     return sections
 
 
@@ -523,17 +503,15 @@ def classify_display_section(document: RawDocument) -> str:
     if document.action_level == "requires_attention":
         return "requires_attention"
     source_role = get_source_role(document.source_name)
-    if source_role == "active_support_measures":
-        return "active_support_measures"
-    if source_role == "support_documents":
-        return "support_documents"
+    if source_role in {"active_support_measures", "support_documents"}:
+        return "measures_and_selections"
     if source_role == "regional_npa":
         return "regional_npa"
     if source_role == "strategy":
         return "strategy_signals"
-    if source_role == "news_signals":
+    if source_role in {"news_signals", "unknown"}:
         return "news_signals"
-    return "background_reference"
+    return "news_signals"
 
 
 def classify_document_bucket(document: RawDocument) -> str:
@@ -650,67 +628,41 @@ def _shorten_summary(text: str | None) -> str:
     return f"{normalized[: SHORT_SUMMARY_MAX_CHARS - 3].rstrip(' ,.;:-')}..."
 
 
-def _format_detailed_item(item: DigestItem) -> list[str]:
+def _format_human_item(item: DigestItem, *, require_action: bool) -> list[str]:
     lines = [
         f"### {item.title}",
-        f"- Регион: {item.region}",
-        f"- Источник: {item.source_name}",
-        f"- Ссылка: {item.url}",
-        f"- Action level: {item.action_level or 'n/a'}",
-        f"- Тип страницы: {item.page_type or 'unknown'}",
-        f"- Важность: {item.importance or 'n/a'}",
-        f"- Кратко: {_shorten_summary(item.summary)}",
+        f"- Почему важно: {_build_human_importance_text(item)}",
     ]
-    lines.extend(_format_business_fact_lines(item))
+    action_text = _build_human_action_text(item)
+    if require_action or action_text:
+        lines.append(f"- Что сделать: {action_text or 'Оценить влияние и держать на контроле'}")
     lines.extend(
         [
-            f"- Почему важно / влияние: {item.impact or 'Не определено'}",
-            f"- Причина релевантности: {item.relevance_reason or 'Не определена'}",
+            f"- Ссылка: {item.url}",
             "",
         ]
     )
     return lines
 
 
-def _format_compact_item(
-    item: DigestItem,
-    *,
-    include_business_facts: bool = False,
-) -> list[str]:
-    lines = [
-        f"- {item.title}",
-        f"  Источник: {item.source_name} | Регион: {item.region} | Action level: {item.action_level or 'n/a'} | Тип страницы: {item.page_type or 'unknown'} | Ссылка: {item.url}",
-        f"  Кратко: {_shorten_summary(item.summary)}",
-    ]
-    if include_business_facts:
-        for fact_line in _format_business_fact_lines(item, compact=True):
-            lines.append(fact_line)
-    lines.append("")
-    return lines
-
-
-def _format_business_fact_lines(item: DigestItem, *, compact: bool = False) -> list[str]:
-    prefix = "  " if compact else "- "
-    lines: list[str] = []
-    is_inactive_or_closed = (
-        item.support_status == "inactive"
-        or item.application_status == "closed"
-    )
-    if item.support_status and item.support_status != "unknown":
-        lines.append(f"{prefix}Статус меры: {item.support_status}")
-    if item.application_status and item.application_status != "unknown":
-        lines.append(f"{prefix}Режим: {item.application_status}")
-    if item.npa_number:
-        lines.append(f"{prefix}НПА: {item.npa_number}")
-    if item.deadline_text and not is_inactive_or_closed:
-        lines.append(f"{prefix}Дедлайн/срок подачи: {_shorten_summary(item.deadline_text)}")
-    if item.terms_text:
-        lines.append(f"{prefix}Условия/срок действия: {_shorten_summary(item.terms_text)}")
+def _build_human_importance_text(item: DigestItem) -> str:
     if item.business_signal:
-        lines.append(f"{prefix}Сигнал: {item.business_signal}")
-    if item.risk_notes:
-        lines.append(f"{prefix}Примечание: {item.risk_notes}")
-    return lines
+        return _shorten_summary(item.business_signal)
+    if item.impact:
+        return _shorten_summary(item.impact)
+    if item.summary:
+        return _shorten_summary(item.summary)
+    return "Важный сигнал для мониторинга GR."
+
+
+def _build_human_action_text(item: DigestItem) -> str:
+    if item.application_status == "open" and item.deadline_text:
+        return f"Проверить сроки: {_shorten_summary(item.deadline_text)}"
+    if item.application_status == "open":
+        return "Проверить условия участия и возможные сроки подачи."
+    if item.action_level == "requires_attention":
+        return "Проверить влияние на текущие GR-планы и подготовить позицию."
+    return "Добавить в наблюдение и отслеживать обновления."
 
 
 def _format_stats(
@@ -822,18 +774,30 @@ def _format_header_summary(
     reaction_text = _build_reaction_summary(report_view)
     return [
         "## Сводка",
-        f"- Дата генерации: {generated_at.strftime('%Y-%m-%d %H:%M:%S')}",
+        f"- Дата: {generated_at.strftime('%Y-%m-%d %H:%M')}",
         f"- Период: {period_text}",
-        f"- Total documents: {len(documents)}",
-        f"- Published date coverage: {published_with_date_count}/{len(documents)}",
-        f"- Visible documents: {report_view.total_visible}",
-        f"- Requires attention count: {requires_attention_count}",
-        f"- Watchlist count: {watchlist_count}",
-        f"- Support/reference count: {report_view.total_bucket_counts['support_reference']}",
-        f"- Скрыто как background/irrelevant: {hidden_background_irrelevant_count}",
-        f"- Что требует реакции сегодня: {reaction_text}",
+        f"- Всего документов: {len(documents)}",
+        f"- Требует внимания: {requires_attention_count}",
+        f"- На наблюдении: {watchlist_count}",
+        f"- Видимых в дайджесте: {report_view.total_visible}",
+        f"- Ключевой фокус: {reaction_text}",
         "",
     ]
+
+
+def _format_human_outro(display_sections: dict[str, list[RawDocument]]) -> list[str]:
+    total_requires_attention = len(display_sections.get("requires_attention", []))
+    total_other = sum(
+        len(display_sections.get(section, []))
+        for section in ("measures_and_selections", "regional_npa", "strategy_signals", "news_signals")
+    )
+    if total_requires_attention:
+        result = "Есть приоритетные вопросы для GR-реакции в ближайшее время."
+    elif total_other:
+        result = "Критичных изменений не выявлено, продолжаем плановое наблюдение."
+    else:
+        result = "Новых значимых сигналов за период не обнаружено."
+    return ["## Итог", result, ""]
 
 
 def _build_reaction_summary(report_view: ReportView) -> str:

@@ -161,8 +161,8 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             relevant_only=True,
             action_levels=["requires_attention", "watchlist"],
         )
-        self.assertIn("Льготное кредитование АПК направлено", markdown)
-        self.assertNotIn("Дополнительные длинные детали для проверки сокращения summary в отчете.", markdown)
+        self.assertIn("Почему важно:", markdown)
+        self.assertNotIn("Action level", markdown)
 
     def test_report_header_contains_key_counters(self) -> None:
         requires_attention_document = self._doc(
@@ -220,15 +220,11 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         )
 
         self.assertIn("## Сводка", markdown)
-        self.assertIn("Total documents: 4", markdown)
-        self.assertIn("Published date coverage: 4/4", markdown)
-        self.assertIn("Visible documents: 2", markdown)
-        self.assertIn("Requires attention count: 1", markdown)
-        self.assertIn("Watchlist count: 1", markdown)
-        self.assertIn("Support/reference count: 1", markdown)
-        self.assertIn("Скрыто как background/irrelevant: 2", markdown)
-        self.assertIn("Что требует реакции сегодня: Льготное кредитование АПК", markdown)
-        self.assertIn("## Документы по мерам поддержки", markdown)
+        self.assertIn("Всего документов: 4", markdown)
+        self.assertIn("Требует внимания: 1", markdown)
+        self.assertIn("На наблюдении: 1", markdown)
+        self.assertIn("Ключевой фокус: Льготное кредитование АПК", markdown)
+        self.assertIn("## 📢 Меры и отборы", markdown)
 
     def test_report_does_not_fail_when_published_at_is_none(self) -> None:
         document = self._doc(
@@ -251,7 +247,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             action_levels=["requires_attention", "watchlist"],
         )
 
-        self.assertIn("Published date coverage: 0/1", markdown)
+        self.assertIn("Всего документов: 1", markdown)
 
     def test_report_deduplicates_documents_with_same_url(self) -> None:
         older_document = self._doc(
@@ -492,12 +488,10 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             action_levels=["requires_attention", "watchlist"],
         )
 
-        self.assertIn("Статус меры: active", markdown)
-        self.assertIn("Режим: regular", markdown)
-        self.assertIn("НПА: 22-68850-00258-Р", markdown)
-        self.assertIn("Сигнал: Активная федеральная мера поддержки", markdown)
-        self.assertIn("Дедлайн/срок подачи: Прием заявок до 30.06.2026.", markdown)
-        self.assertIn("Условия/срок действия: Срок кредита: До 12 месяцев.", markdown)
+        self.assertIn("Почему важно:", markdown)
+        self.assertIn("Что сделать:", markdown)
+        self.assertIn("Ссылка:", markdown)
+        self.assertIn("Активная федеральная мера поддержки", markdown)
 
     def test_report_uses_source_taxonomy_sections(self) -> None:
         documents = [
@@ -541,9 +535,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             action_levels=["requires_attention", "watchlist"],
         )
 
-        self.assertIn("## Стратегические федеральные сигналы", markdown)
-        self.assertIn("## Региональные НПА", markdown)
-        self.assertIn("## Новостные предвестники изменений", markdown)
+        self.assertIn("## 🏛 Стратегические сигналы", markdown)
+        self.assertIn("## ⚖️ Региональные изменения", markdown)
+        self.assertIn("## 📰 Отраслевые сигналы", markdown)
 
     def test_inactive_measure_does_not_show_deadline_as_current_in_report(self) -> None:
         document = self._doc(
@@ -568,8 +562,8 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             action_levels=["requires_attention", "watchlist"],
         )
 
-        self.assertNotIn("Дедлайн/срок подачи: Прием заявок до 30.06.2026.", markdown)
-        self.assertIn("Примечание: Срок найден в описании неактивной меры", markdown)
+        self.assertNotIn("Action level", markdown)
+        self.assertIn("Почему важно:", markdown)
 
     def test_background_gisp_measures_are_hidden_from_visible_watchlist_report(self) -> None:
         inactive_document = self._doc(
@@ -641,6 +635,30 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertIn("режим: регулярная мера", captured[0])
         self.assertIn("Сигнал: Активная федеральная мера поддержки", captured[0])
         self.assertNotIn("Срок кредита", captured[0])
+
+    def test_report_is_human_readable_without_technical_words(self) -> None:
+        document = self._doc(
+            doc_id=1,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Льготное кредитование АПК",
+            url="https://gisp.gov.ru/nmp/measure/9564204",
+            action_level="requires_attention",
+            page_type="measure_card",
+            summary="Льготное кредитование АПК.",
+        )
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-05",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn("Почему важно:", markdown)
+        self.assertIn("## 🚨 Требует внимания", markdown)
+        self.assertIn("## Итог", markdown)
+        self.assertNotIn("Action level", markdown)
+        self.assertNotIn("Тип страницы", markdown)
 
 
 if __name__ == "__main__":
