@@ -124,11 +124,16 @@ python main.py diagnostics --days 7
 - `/start` — открыть меню GR-монитора;
 - `/help` — список команд;
 - `/today` — visible документы за сегодня;
-- `/urgent` — срочные документы (`requires_attention`);
-- `/watchlist` — документы на наблюдении;
+- `/urgent [days]` — документы `requires_attention` за период;
+- `/watchlist [days]` — документы на наблюдении за период;
+- `/report [days]` — краткая сводка за период + вложение `.txt`;
+- `/search <query>` — поиск по архиву;
 - `/sources` — статус источников;
 - `/status` — состояние системы и счетчики;
-- `/report` — краткая сводка за 7 дней.
+- `/refresh` — ручной collect/analyze/report с cooldown;
+- `/track <url>` — добавить документ в отслеживание;
+- `/untrack <url>` — убрать документ из отслеживания;
+- `/tracked` — показать активное отслеживание.
 
 ## Структура Проекта
 
@@ -179,6 +184,7 @@ python main.py report --days 7 --action-level requires_attention watchlist --max
 python main.py demo-report
 python main.py run-scheduler --once
 python main.py run-telegram-bot
+python main.py check-tracked
 python main.py telegram-check
 python main.py notify-test
 python -m unittest discover -s tests -v

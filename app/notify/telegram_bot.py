@@ -17,7 +17,6 @@ from app import config
 from app.notify.telegram import (
     TELEGRAM_COMMANDS,
     build_command_response,
-    redact_telegram_secrets,
     sanitize_telegram_exception_message,
 )
 from app.reports.markdown_report import generate_markdown_report
@@ -69,13 +68,16 @@ BOT_COMMANDS: tuple[tuple[str, str], ...] = (
     ("report", "последний отчет"),
     ("sources", "источники"),
     ("search", "поиск по архиву"),
+    ("track", "добавить в отслеживание"),
+    ("untrack", "убрать из отслеживания"),
+    ("tracked", "отслеживаемые документы"),
     ("refresh", "обновить данные"),
 )
 REPLY_KEYBOARD_LAYOUT: tuple[tuple[str, ...], ...] = (
     ("📊 Статус", "🚨 Срочное"),
     ("📅 Сегодня", "👀 Наблюдение"),
     ("📄 Отчёт", "🛰 Источники"),
-    ("🔎 Поиск",),
+    ("🔎 Поиск", "⭐ Отслеживаемое"),
     ("🔄 Обновить данные",),
     ("ℹ️ Помощь",),
 )
@@ -87,6 +89,7 @@ BUTTON_TO_COMMAND: Mapping[str, str] = {
     "📄 Отчёт": "/report",
     "🛰 Источники": "/sources",
     "🔎 Поиск": "/search",
+    "⭐ Отслеживаемое": "/tracked",
     "🔄 Обновить данные": "/refresh",
     "ℹ️ Помощь": "/help",
 }
@@ -218,6 +221,7 @@ def dispatch_input_text(
     *,
     db_path: Path | str | None = None,
     default_days: int = 7,
+    chat_id: str | int | None = None,
 ) -> DispatchResult:
     command = normalize_incoming_command(text)
     if command == "/start":
@@ -225,7 +229,12 @@ def dispatch_input_text(
     if command == "/refresh":
         return DispatchResult(command=command, response_text="⏳ Обновляю данные, подождите...")
     if command in TELEGRAM_COMMANDS:
-        response = build_command_response(text, db_path=db_path, default_days=default_days)
+        response = build_command_response(
+            text,
+            db_path=db_path,
+            default_days=default_days,
+            chat_id=chat_id,
+        )
         return DispatchResult(command=command, response_text=response)
     return DispatchResult(command=None, response_text=UNKNOWN_COMMAND_MESSAGE)
 
@@ -288,6 +297,7 @@ def _process_update(
         resolved_text,
         db_path=db_path,
         default_days=default_days,
+        chat_id=chat_id,
     )
     _send_response(chat_id=chat_id, text=dispatch_result.response_text, proxies=proxies)
     if dispatch_result.command == "/report":

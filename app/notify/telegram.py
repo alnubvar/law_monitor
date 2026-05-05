@@ -16,10 +16,17 @@ from app.notify.telegram_formatter import build_digest_message
 from app.pipeline.diagnostics import build_diagnostics_snapshot
 from app.reports.markdown_report import classify_display_section, select_visible_report_documents
 from app.storage import (
+    create_tracking_item,
+    deactivate_tracking_item,
     count_documents_by_action_level,
+    get_active_tracking_item,
+    get_document_by_url,
     init_db,
+    list_active_tracking_items,
     list_documents,
     list_recent_documents,
+    save_tracking_snapshot,
+    compute_tracking_status_hash,
     search_documents,
 )
 from app.storage import get_runtime_event, list_latest_source_audit
@@ -37,6 +44,9 @@ TELEGRAM_COMMANDS = (
     "/report",
     "/sources",
     "/search",
+    "/track",
+    "/untrack",
+    "/tracked",
     "/help",
 )
 TELEGRAM_MAX_MESSAGE_LENGTH = 4096
@@ -109,13 +119,30 @@ def send_message(text: str) -> bool:
     return True
 
 
-def _send_message_chunk(text: str, *, proxies: dict[str, str] | None) -> bool:
+def send_message_to_chat(*, chat_id: str | int, text: str) -> bool:
+    if not config.TELEGRAM_BOT_TOKEN:
+        logger.info("Telegram token is not configured. Skipping message send.")
+        return False
+    proxies = _build_proxies()
+    chunks = _split_message_chunks(text)
+    for chunk in chunks:
+        if not _send_message_chunk(chunk, proxies=proxies, chat_id=str(chat_id)):
+            return False
+    return True
+
+
+def _send_message_chunk(
+    text: str,
+    *,
+    proxies: dict[str, str] | None,
+    chat_id: str | None = None,
+) -> bool:
     for attempt in range(1, TELEGRAM_SEND_ATTEMPTS + 1):
         try:
             response = requests.post(
                 f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage",
                 json={
-                    "chat_id": config.TELEGRAM_CHAT_ID,
+                    "chat_id": chat_id or config.TELEGRAM_CHAT_ID,
                     "text": text,
                     "disable_web_page_preview": True,
                 },
@@ -161,6 +188,7 @@ def build_command_response(
     *,
     db_path: Path | str | None = None,
     default_days: int = 7,
+    chat_id: str | int | None = None,
 ) -> str:
     normalized_command, command_args = _parse_command_request(command_text)
     resolved_db_path = Path(db_path) if db_path is not None else config.DB_PATH
@@ -181,6 +209,12 @@ def build_command_response(
         return _build_sources_message(resolved_db_path)
     if normalized_command == "/search":
         return _build_search_message(resolved_db_path, query=" ".join(command_args).strip())
+    if normalized_command == "/track":
+        return _build_track_message(resolved_db_path, chat_id=chat_id, url_arg=" ".join(command_args).strip())
+    if normalized_command == "/untrack":
+        return _build_untrack_message(resolved_db_path, chat_id=chat_id, url_arg=" ".join(command_args).strip())
+    if normalized_command == "/tracked":
+        return _build_tracked_message(resolved_db_path, chat_id=chat_id)
     return _build_help_message()
 
 
@@ -468,11 +502,108 @@ def _build_help_message() -> str:
             "/watchlist [days] — наблюдение (например, /watchlist 30)",
             "/report [days] — краткая сводка (например, /report 30)",
             "/search <запрос> — поиск по архиву",
+            "/track <url> — добавить документ в отслеживание",
+            "/untrack <url> — убрать документ из отслеживания",
+            "/tracked — список отслеживаемых документов",
             "/sources — статус источников за 7 дней",
             "/refresh — обновить collect/analyze/report (не чаще 1 раза в час)",
             "/help — список команд",
         ]
     ))
+
+
+def _build_track_message(
+    db_path: Path | str,
+    *,
+    chat_id: str | int | None,
+    url_arg: str,
+) -> str:
+    normalized_url = _normalize_track_url(url_arg)
+    if chat_id is None:
+        return "⭐ Отслеживание доступно в интерактивном Telegram-боте."
+    if not normalized_url:
+        return "⭐ Укажи ссылку: /track <url>"
+    existing_item = get_active_tracking_item(chat_id, normalized_url, db_path=db_path)
+    if existing_item is not None:
+        return "⭐ Этот документ уже в отслеживании."
+
+    document = get_document_by_url(normalized_url, db_path=db_path)
+    if document is None:
+        return "⭐ Документ не найден в базе. Сначала запусти /refresh или найди его через /search."
+
+    tracking_item_id = create_tracking_item(
+        chat_id=chat_id,
+        document_url=normalized_url,
+        document_id=document.id,
+        db_path=db_path,
+    )
+    initial_hash = compute_tracking_status_hash(
+        support_status=document.support_status,
+        application_status=document.application_status,
+        deadline_text=document.deadline_text,
+        terms_text=document.terms_text,
+        is_active=document.is_active,
+        title=document.title,
+        summary=document.summary,
+    )
+    save_tracking_snapshot(
+        tracking_item_id=tracking_item_id,
+        status_hash=initial_hash,
+        support_status=document.support_status,
+        application_status=document.application_status,
+        deadline_text=document.deadline_text,
+        terms_text=document.terms_text,
+        is_active=document.is_active,
+        title=document.title,
+        summary=document.summary,
+        db_path=db_path,
+    )
+    return "⭐ Документ добавлен в отслеживание."
+
+
+def _build_untrack_message(
+    db_path: Path | str,
+    *,
+    chat_id: str | int | None,
+    url_arg: str,
+) -> str:
+    normalized_url = _normalize_track_url(url_arg)
+    if chat_id is None:
+        return "⭐ Отслеживание доступно в интерактивном Telegram-боте."
+    if not normalized_url:
+        return "⭐ Укажи ссылку: /untrack <url>"
+    updated = deactivate_tracking_item(chat_id=chat_id, document_url=normalized_url, db_path=db_path)
+    if updated == 0:
+        return "⭐ Этот документ не найден в активном отслеживании."
+    return "⭐ Документ убран из отслеживания."
+
+
+def _build_tracked_message(
+    db_path: Path | str,
+    *,
+    chat_id: str | int | None,
+) -> str:
+    if chat_id is None:
+        return "⭐ Отслеживание доступно в интерактивном Telegram-боте."
+    items = list_active_tracking_items(chat_id=chat_id, limit=10, db_path=db_path)
+    if not items:
+        return "⭐ Активных отслеживаемых документов пока нет."
+    lines = ["⭐ Отслеживаемые документы (до 10):"]
+    for item in items:
+        title = str(item.get("document_title") or item.get("document_url"))
+        source_name = str(item.get("source_name") or "источник не определен")
+        last_checked_at = item.get("last_checked_at")
+        last_checked = _fmt_dt(last_checked_at) if isinstance(last_checked_at, datetime) else "еще не проверялся"
+        lines.append(f"- {title[:140]}")
+        lines.append(f"  Источник: {source_name}")
+        lines.append(f"  Последняя проверка: {last_checked}")
+        lines.append(f"  {item.get('document_url')}")
+    return _cap_message("\n".join(lines))
+
+
+def _normalize_track_url(url: str) -> str:
+    normalized = (url or "").strip()
+    return normalized.rstrip(".,;")
 
 
 def _select_today_visible_documents(db_path: Path | str) -> list[RawDocument]:

@@ -10,6 +10,7 @@ from app.pipeline.analyze import run_analyze
 from app.pipeline.collect import run_collect_with_options
 from app.pipeline.diagnostics import run_diagnostics
 from app.pipeline.digest import run_demo_report, run_digest
+from app.pipeline.tracking import run_check_tracked
 from app.pipeline.run import run_pipeline
 from app.pipeline.smoke import run_smoke_check
 from app.scheduler import run_scheduler, send_test_notification
@@ -227,6 +228,10 @@ def build_parser() -> argparse.ArgumentParser:
         "run-telegram-bot",
         help="Запустить polling listener для интерактивного Telegram-бота.",
     )
+    subparsers.add_parser(
+        "check-tracked",
+        help="Проверить отслеживаемые документы и отправить уведомления об изменениях.",
+    )
 
     return parser
 
@@ -340,6 +345,15 @@ def main() -> int:
 
     if args.command == "run-telegram-bot":
         run_polling_listener()
+        return 0
+
+    if args.command == "check-tracked":
+        result = run_check_tracked()
+        print(
+            "Tracked check finished. "
+            f"Checked={result.checked}, Changed={result.changed}, "
+            f"Notified={result.notified}, Errors={result.errors}"
+        )
         return 0
 
     parser.print_help()

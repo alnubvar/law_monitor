@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from hashlib import sha256
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -265,6 +266,61 @@ def init_db(db_path: Path | str = DB_PATH) -> None:
                 updated_at TEXT NOT NULL
             )
             """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tracking_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id TEXT NOT NULL,
+                document_url TEXT NOT NULL,
+                document_id INTEGER,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                last_checked_at TEXT
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tracking_items_chat_active ON tracking_items(chat_id, active)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tracking_items_url_active ON tracking_items(document_url, active)"
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tracking_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tracking_item_id INTEGER NOT NULL,
+                checked_at TEXT NOT NULL,
+                status_hash TEXT NOT NULL,
+                support_status TEXT,
+                application_status TEXT,
+                deadline_text TEXT,
+                terms_text TEXT,
+                is_active INTEGER,
+                title TEXT,
+                summary TEXT
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tracking_snapshots_item_checked ON tracking_snapshots(tracking_item_id, checked_at DESC)"
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tracking_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tracking_item_id INTEGER NOT NULL,
+                detected_at TEXT NOT NULL,
+                change_summary TEXT NOT NULL,
+                old_hash TEXT,
+                new_hash TEXT,
+                notified_at TEXT
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tracking_events_item_detected ON tracking_events(tracking_item_id, detected_at DESC)"
         )
         connection.commit()
     logger.info("Database initialized at %s", db_path)
@@ -993,3 +1049,351 @@ def search_documents(
     if len(ranked) < safe_limit:
         ranked.extend(background[: safe_limit - len(ranked)])
     return ranked[:safe_limit]
+
+
+def get_document_by_url(
+    url: str,
+    *,
+    db_path: Path | str = DB_PATH,
+) -> RawDocument | None:
+    normalized_url = (url or "").strip()
+    if not normalized_url:
+        return None
+    with _connect_db(db_path) as connection:
+        row = connection.execute(
+            "SELECT * FROM documents WHERE url = ? LIMIT 1",
+            (normalized_url,),
+        ).fetchone()
+    if row is None:
+        return None
+    return _row_to_document(row)
+
+
+def update_document_from_tracking_refresh(
+    *,
+    document_url: str,
+    raw_text: str,
+    content_hash: str,
+    document_type: str,
+    published_at: datetime | None,
+    analysis: AnalysisResult,
+    db_path: Path | str = DB_PATH,
+) -> int:
+    normalized_url = (document_url or "").strip()
+    if not normalized_url:
+        return 0
+    with _connect_db(db_path) as connection:
+        cursor = connection.execute(
+            """
+            UPDATE documents
+            SET title = ?,
+                raw_text = ?,
+                content_hash = ?,
+                document_type = ?,
+                published_at = COALESCE(?, published_at),
+                is_relevant = ?,
+                relevance_reason = ?,
+                topic = ?,
+                importance = ?,
+                action_level = ?,
+                page_type = ?,
+                summary = ?,
+                impact = ?,
+                support_status = ?,
+                is_active = ?,
+                is_continuous = ?,
+                application_status = ?,
+                npa_number = ?,
+                deadline_text = ?,
+                terms_text = ?,
+                business_signal = ?,
+                risk_notes = ?,
+                status = 'analyzed'
+            WHERE url = ?
+            """,
+            (
+                analysis.normalized_title or "",
+                raw_text,
+                content_hash,
+                document_type,
+                _serialize_dt(published_at),
+                int(analysis.is_relevant),
+                analysis.relevance_reason,
+                analysis.topic,
+                analysis.importance,
+                analysis.action_level,
+                analysis.page_type,
+                analysis.summary,
+                analysis.impact,
+                analysis.support_status,
+                None if analysis.is_active is None else int(analysis.is_active),
+                None if analysis.is_continuous is None else int(analysis.is_continuous),
+                analysis.application_status,
+                analysis.npa_number,
+                analysis.deadline_text,
+                analysis.terms_text,
+                analysis.business_signal,
+                analysis.risk_notes,
+                normalized_url,
+            ),
+        )
+        connection.commit()
+        return int(cursor.rowcount or 0)
+
+
+def compute_tracking_status_hash(
+    *,
+    support_status: str | None,
+    application_status: str | None,
+    deadline_text: str | None,
+    terms_text: str | None,
+    is_active: bool | None,
+    title: str | None,
+    summary: str | None,
+) -> str:
+    payload = "||".join(
+        [
+            (support_status or "").strip(),
+            (application_status or "").strip(),
+            (deadline_text or "").strip(),
+            (terms_text or "").strip(),
+            "" if is_active is None else ("1" if is_active else "0"),
+            (title or "").strip(),
+            (summary or "").strip(),
+        ]
+    )
+    return sha256(payload.encode("utf-8")).hexdigest()
+
+
+def get_active_tracking_item(
+    chat_id: str | int,
+    document_url: str,
+    *,
+    db_path: Path | str = DB_PATH,
+) -> dict[str, Any] | None:
+    with _connect_db(db_path) as connection:
+        row = connection.execute(
+            """
+            SELECT *
+            FROM tracking_items
+            WHERE chat_id = ? AND document_url = ? AND active = 1
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (str(chat_id), document_url.strip()),
+        ).fetchone()
+    if row is None:
+        return None
+    payload = dict(row)
+    payload["active"] = bool(payload.get("active"))
+    payload["created_at"] = _parse_dt(payload.get("created_at"))
+    payload["last_checked_at"] = _parse_dt(payload.get("last_checked_at"))
+    return payload
+
+
+def create_tracking_item(
+    *,
+    chat_id: str | int,
+    document_url: str,
+    document_id: int | None,
+    db_path: Path | str = DB_PATH,
+) -> int:
+    with _connect_db(db_path) as connection:
+        cursor = connection.execute(
+            """
+            INSERT INTO tracking_items(chat_id, document_url, document_id, active, created_at)
+            VALUES (?, ?, ?, 1, ?)
+            """,
+            (
+                str(chat_id),
+                document_url.strip(),
+                document_id,
+                _serialize_dt(datetime.now(timezone.utc)),
+            ),
+        )
+        connection.commit()
+        return int(cursor.lastrowid)
+
+
+def deactivate_tracking_item(
+    *,
+    chat_id: str | int,
+    document_url: str,
+    db_path: Path | str = DB_PATH,
+) -> int:
+    with _connect_db(db_path) as connection:
+        cursor = connection.execute(
+            """
+            UPDATE tracking_items
+            SET active = 0
+            WHERE chat_id = ? AND document_url = ? AND active = 1
+            """,
+            (str(chat_id), document_url.strip()),
+        )
+        connection.commit()
+        return int(cursor.rowcount or 0)
+
+
+def list_active_tracking_items(
+    *,
+    chat_id: str | int,
+    limit: int = 10,
+    db_path: Path | str = DB_PATH,
+) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(int(limit), 100))
+    with _connect_db(db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT ti.*,
+                   d.title AS document_title,
+                   d.source_name AS source_name
+            FROM tracking_items ti
+            LEFT JOIN documents d ON d.id = ti.document_id
+            WHERE ti.chat_id = ? AND ti.active = 1
+            ORDER BY ti.created_at DESC
+            LIMIT ?
+            """,
+            (str(chat_id), safe_limit),
+        ).fetchall()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        payload = dict(row)
+        payload["active"] = bool(payload.get("active"))
+        payload["created_at"] = _parse_dt(payload.get("created_at"))
+        payload["last_checked_at"] = _parse_dt(payload.get("last_checked_at"))
+        result.append(payload)
+    return result
+
+
+def list_all_active_tracking_items(
+    *,
+    db_path: Path | str = DB_PATH,
+) -> list[dict[str, Any]]:
+    with _connect_db(db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT * FROM tracking_items
+            WHERE active = 1
+            ORDER BY id ASC
+            """
+        ).fetchall()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        payload = dict(row)
+        payload["active"] = bool(payload.get("active"))
+        payload["created_at"] = _parse_dt(payload.get("created_at"))
+        payload["last_checked_at"] = _parse_dt(payload.get("last_checked_at"))
+        result.append(payload)
+    return result
+
+
+def update_tracking_item_last_checked(
+    tracking_item_id: int,
+    *,
+    checked_at: datetime | None = None,
+    db_path: Path | str = DB_PATH,
+) -> None:
+    with _connect_db(db_path) as connection:
+        connection.execute(
+            """
+            UPDATE tracking_items
+            SET last_checked_at = ?
+            WHERE id = ?
+            """,
+            (_serialize_dt(checked_at or datetime.now(timezone.utc)), tracking_item_id),
+        )
+        connection.commit()
+
+
+def save_tracking_snapshot(
+    *,
+    tracking_item_id: int,
+    status_hash: str,
+    support_status: str | None,
+    application_status: str | None,
+    deadline_text: str | None,
+    terms_text: str | None,
+    is_active: bool | None,
+    title: str | None,
+    summary: str | None,
+    checked_at: datetime | None = None,
+    db_path: Path | str = DB_PATH,
+) -> int:
+    with _connect_db(db_path) as connection:
+        cursor = connection.execute(
+            """
+            INSERT INTO tracking_snapshots(
+                tracking_item_id, checked_at, status_hash, support_status, application_status,
+                deadline_text, terms_text, is_active, title, summary
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                tracking_item_id,
+                _serialize_dt(checked_at or datetime.now(timezone.utc)),
+                status_hash,
+                support_status,
+                application_status,
+                deadline_text,
+                terms_text,
+                None if is_active is None else int(is_active),
+                title,
+                summary,
+            ),
+        )
+        connection.commit()
+        return int(cursor.lastrowid)
+
+
+def get_latest_tracking_snapshot(
+    tracking_item_id: int,
+    *,
+    db_path: Path | str = DB_PATH,
+) -> dict[str, Any] | None:
+    with _connect_db(db_path) as connection:
+        row = connection.execute(
+            """
+            SELECT *
+            FROM tracking_snapshots
+            WHERE tracking_item_id = ?
+            ORDER BY checked_at DESC, id DESC
+            LIMIT 1
+            """,
+            (tracking_item_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    payload = dict(row)
+    payload["checked_at"] = _parse_dt(payload.get("checked_at"))
+    if payload.get("is_active") is not None:
+        payload["is_active"] = bool(payload["is_active"])
+    return payload
+
+
+def save_tracking_event(
+    *,
+    tracking_item_id: int,
+    change_summary: str,
+    old_hash: str | None,
+    new_hash: str | None,
+    detected_at: datetime | None = None,
+    notified_at: datetime | None = None,
+    db_path: Path | str = DB_PATH,
+) -> int:
+    with _connect_db(db_path) as connection:
+        cursor = connection.execute(
+            """
+            INSERT INTO tracking_events(
+                tracking_item_id, detected_at, change_summary, old_hash, new_hash, notified_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                tracking_item_id,
+                _serialize_dt(detected_at or datetime.now(timezone.utc)),
+                change_summary,
+                old_hash,
+                new_hash,
+                _serialize_dt(notified_at),
+            ),
+        )
+        connection.commit()
+        return int(cursor.lastrowid)

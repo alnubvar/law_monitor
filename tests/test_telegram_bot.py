@@ -61,6 +61,9 @@ class TelegramBotTest(unittest.TestCase):
                     {"command": "report", "description": "последний отчет"},
                     {"command": "sources", "description": "источники"},
                     {"command": "search", "description": "поиск по архиву"},
+                    {"command": "track", "description": "добавить в отслеживание"},
+                    {"command": "untrack", "description": "убрать из отслеживания"},
+                    {"command": "tracked", "description": "отслеживаемые документы"},
                     {"command": "refresh", "description": "обновить данные"},
                 ]
             },
@@ -77,6 +80,7 @@ class TelegramBotTest(unittest.TestCase):
         self.assertEqual(keyboard[2][0]["text"], "📄 Отчёт")
         self.assertEqual(keyboard[2][1]["text"], "🛰 Источники")
         self.assertEqual(keyboard[3][0]["text"], "🔎 Поиск")
+        self.assertEqual(keyboard[3][1]["text"], "⭐ Отслеживаемое")
         self.assertEqual(keyboard[4][0]["text"], "🔄 Обновить данные")
         self.assertEqual(keyboard[5][0]["text"], "ℹ️ Помощь")
         self.assertTrue(payload["resize_keyboard"])
@@ -94,13 +98,14 @@ class TelegramBotTest(unittest.TestCase):
 
         self.assertEqual(result.command, "/status")
         self.assertEqual(result.response_text, "ok")
-        build.assert_called_once_with("/status", db_path=None, default_days=7)
+        build.assert_called_once_with("/status", db_path=None, default_days=7, chat_id=None)
 
     def test_button_text_maps_to_command(self) -> None:
         self.assertEqual(telegram_bot.normalize_incoming_command("📊 Статус"), "/status")
         self.assertEqual(telegram_bot.normalize_incoming_command("🚨 Срочное"), "/urgent")
         self.assertEqual(telegram_bot.normalize_incoming_command("🔄 Обновить данные"), "/refresh")
         self.assertEqual(telegram_bot.normalize_incoming_command("🔎 Поиск"), "/search")
+        self.assertEqual(telegram_bot.normalize_incoming_command("⭐ Отслеживаемое"), "/tracked")
 
         with patch("app.notify.telegram_bot.build_command_response", return_value="mapped"):
             result = telegram_bot.dispatch_input_text("📄 Отчёт")
@@ -295,6 +300,12 @@ class TelegramBotTest(unittest.TestCase):
 
         self.assertEqual(build.call_args_list[0].kwargs["default_days"], 30)
         self.assertEqual(build.call_args_list[1].kwargs["default_days"], 30)
+
+    def test_tracked_button_dispatches_tracked_command(self) -> None:
+        with patch("app.notify.telegram_bot.build_command_response", return_value="tracked"):
+            result = telegram_bot.dispatch_input_text("⭐ Отслеживаемое")
+        self.assertEqual(result.command, "/tracked")
+        self.assertEqual(result.response_text, "tracked")
 
     def test_report_command_sends_attachment_with_requested_period(self) -> None:
         update = {"update_id": 1, "message": {"chat": {"id": 123}, "text": "/report 30"}}

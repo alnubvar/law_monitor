@@ -9,7 +9,11 @@ import requests
 
 from app.models import RawDocument
 from app.notify import telegram
-from app.storage import init_db, save_document
+from app.storage import (
+    init_db,
+    list_active_tracking_items,
+    save_document,
+)
 
 
 class TelegramNotifySmokeTest(unittest.TestCase):
@@ -506,6 +510,104 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         sanitized = telegram.sanitize_telegram_exception_message(RuntimeError(raw))
         self.assertIn("bot<redacted>/sendMessage", sanitized)
         self.assertNotIn("bot123:ABCDEF", sanitized)
+
+    def test_track_existing_url_creates_item(self) -> None:
+        db_path = self._db_path("telegram_track_create.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=1,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Льготное кредитование АПК",
+            url="https://gisp.gov.ru/nmp/measure/9564204",
+            action_level="requires_attention",
+            page_type="measure_card",
+        )
+        save_document(document, db_path)
+
+        text = telegram.build_command_response(
+            "/track https://gisp.gov.ru/nmp/measure/9564204",
+            db_path=db_path,
+            chat_id="123",
+        )
+
+        self.assertIn("добавлен", text.lower())
+        active = list_active_tracking_items(chat_id="123", db_path=db_path)
+        self.assertEqual(len(active), 1)
+
+    def test_track_duplicate_is_handled(self) -> None:
+        db_path = self._db_path("telegram_track_duplicate.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=1,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Льготное кредитование АПК",
+            url="https://gisp.gov.ru/nmp/measure/9564204",
+            action_level="requires_attention",
+            page_type="measure_card",
+        )
+        save_document(document, db_path)
+        telegram.build_command_response(
+            "/track https://gisp.gov.ru/nmp/measure/9564204",
+            db_path=db_path,
+            chat_id="123",
+        )
+        text = telegram.build_command_response(
+            "/track https://gisp.gov.ru/nmp/measure/9564204",
+            db_path=db_path,
+            chat_id="123",
+        )
+        self.assertIn("уже", text.lower())
+
+    def test_untrack_deactivates_item(self) -> None:
+        db_path = self._db_path("telegram_untrack.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=1,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Льготное кредитование АПК",
+            url="https://gisp.gov.ru/nmp/measure/9564204",
+            action_level="requires_attention",
+            page_type="measure_card",
+        )
+        save_document(document, db_path)
+        telegram.build_command_response(
+            "/track https://gisp.gov.ru/nmp/measure/9564204",
+            db_path=db_path,
+            chat_id="123",
+        )
+        text = telegram.build_command_response(
+            "/untrack https://gisp.gov.ru/nmp/measure/9564204",
+            db_path=db_path,
+            chat_id="123",
+        )
+        self.assertIn("убран", text.lower())
+        active = list_active_tracking_items(chat_id="123", db_path=db_path)
+        self.assertEqual(len(active), 0)
+
+    def test_tracked_lists_active_items(self) -> None:
+        db_path = self._db_path("telegram_tracked_list.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=1,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Льготное кредитование АПК",
+            url="https://gisp.gov.ru/nmp/measure/9564204",
+            action_level="requires_attention",
+            page_type="measure_card",
+        )
+        save_document(document, db_path)
+        telegram.build_command_response(
+            "/track https://gisp.gov.ru/nmp/measure/9564204",
+            db_path=db_path,
+            chat_id="123",
+        )
+        text = telegram.build_command_response("/tracked", db_path=db_path, chat_id="123")
+        self.assertIn("Отслеживаемые документы", text)
+        self.assertIn("Льготное кредитование АПК", text)
 
 
 if __name__ == "__main__":
