@@ -17,16 +17,24 @@ from app import config
 from app.notify.telegram import (
     TELEGRAM_COMMANDS,
     build_command_response,
-    get_latest_report_file_path,
+    redact_telegram_secrets,
+    sanitize_telegram_exception_message,
 )
+from app.reports.markdown_report import generate_markdown_report
 from app.pipeline.analyze import run_analyze
 from app.pipeline.collect import run_collect
 from app.pipeline.digest import run_digest
 from app.storage import (
+    backfill_missing_published_at,
     count_documents_by_action_level,
+    get_user_default_period_days,
     get_runtime_event,
+    init_db,
+    list_recent_documents,
+    list_recent_source_errors,
     list_latest_source_audit,
     mark_runtime_event,
+    set_user_default_period_days,
 )
 
 logger = logging.getLogger(__name__)
@@ -60,12 +68,14 @@ BOT_COMMANDS: tuple[tuple[str, str], ...] = (
     ("watchlist", "наблюдение"),
     ("report", "последний отчет"),
     ("sources", "источники"),
+    ("search", "поиск по архиву"),
     ("refresh", "обновить данные"),
 )
 REPLY_KEYBOARD_LAYOUT: tuple[tuple[str, ...], ...] = (
     ("📊 Статус", "🚨 Срочное"),
     ("📅 Сегодня", "👀 Наблюдение"),
     ("📄 Отчёт", "🛰 Источники"),
+    ("🔎 Поиск",),
     ("🔄 Обновить данные",),
     ("ℹ️ Помощь",),
 )
@@ -76,6 +86,7 @@ BUTTON_TO_COMMAND: Mapping[str, str] = {
     "👀 Наблюдение": "/watchlist",
     "📄 Отчёт": "/report",
     "🛰 Источники": "/sources",
+    "🔎 Поиск": "/search",
     "🔄 Обновить данные": "/refresh",
     "ℹ️ Помощь": "/help",
 }
@@ -110,8 +121,11 @@ def run_polling_listener(
                 "Telegram offset bootstrap failed (%s). Continue with live polling.",
                 _describe_request_error(exc),
             )
-        except Exception:
-            logger.exception("Telegram offset bootstrap failed. Continue with live polling.")
+        except Exception as exc:
+            logger.warning(
+                "Telegram offset bootstrap failed (%s). Continue with live polling.",
+                _describe_telegram_error(exc),
+            )
 
     failures = 0
     cycle = 0
@@ -139,8 +153,9 @@ def run_polling_listener(
                 TELEGRAM_POLL_BACKOFF_BASE_SECONDS * (2 ** (failures - 1)),
                 TELEGRAM_POLL_BACKOFF_MAX_SECONDS,
             )
-            logger.exception(
-                "Unexpected telegram polling error. Backoff %.1fs.",
+            logger.warning(
+                "Unexpected telegram polling error (%s). Backoff %.1fs.",
+                "telegram_api_error",
                 backoff,
             )
             sleep_fn(backoff)
@@ -155,7 +170,7 @@ def run_polling_listener(
             try:
                 _process_update(update, db_path=db_path, proxies=proxies)
             except Exception:
-                logger.exception("Failed to process update payload: %s", update)
+                logger.warning("Failed to process update payload (telegram_api_error).")
             finally:
                 if next_offset is not None and (offset is None or next_offset > offset):
                     offset = next_offset
@@ -202,6 +217,7 @@ def dispatch_input_text(
     text: str,
     *,
     db_path: Path | str | None = None,
+    default_days: int = 7,
 ) -> DispatchResult:
     command = normalize_incoming_command(text)
     if command == "/start":
@@ -209,7 +225,7 @@ def dispatch_input_text(
     if command == "/refresh":
         return DispatchResult(command=command, response_text="⏳ Обновляю данные, подождите...")
     if command in TELEGRAM_COMMANDS:
-        response = build_command_response(command, db_path=db_path)
+        response = build_command_response(text, db_path=db_path, default_days=default_days)
         return DispatchResult(command=command, response_text=response)
     return DispatchResult(command=None, response_text=UNKNOWN_COMMAND_MESSAGE)
 
@@ -256,14 +272,31 @@ def _process_update(
 
     text = str(message.get("text") or "")
     incoming_command = normalize_incoming_command(text)
+    resolved_text = text
+    default_days = 7
+    if incoming_command in {"/report", "/urgent", "/watchlist"}:
+        default_days, resolved_text = _resolve_period_command_text(
+            text=text,
+            chat_id=chat_id,
+            db_path=db_path,
+        )
     if incoming_command == "/refresh":
         refresh_text = _run_manual_refresh(db_path=db_path)
         _send_response(chat_id=chat_id, text=refresh_text, proxies=proxies)
         return
-    dispatch_result = dispatch_input_text(text, db_path=db_path)
+    dispatch_result = dispatch_input_text(
+        resolved_text,
+        db_path=db_path,
+        default_days=default_days,
+    )
     _send_response(chat_id=chat_id, text=dispatch_result.response_text, proxies=proxies)
     if dispatch_result.command == "/report":
-        _send_report_attachment(chat_id=chat_id, proxies=proxies)
+        _send_report_attachment(
+            chat_id=chat_id,
+            proxies=proxies,
+            days=_extract_report_days(resolved_text, default_days=default_days),
+            db_path=db_path,
+        )
 
 
 def _extract_next_offset(
@@ -287,7 +320,7 @@ def _configure_bot_commands(*, proxies: dict[str, str] | None) -> None:
         )
         logger.info("Telegram bot commands configured.")
     except Exception:
-        logger.exception("Failed to configure Telegram commands via setMyCommands.")
+        logger.warning("Failed to configure Telegram commands via setMyCommands (telegram_api_error).")
 
 
 def _bootstrap_offset(*, proxies: dict[str, str] | None) -> int | None:
@@ -361,8 +394,8 @@ def _send_response(
                 proxies=proxies,
                 attempts=TELEGRAM_SEND_ATTEMPTS,
             )
-        except Exception:
-            logger.exception("Failed to send Telegram response.")
+        except Exception as exc:
+            logger.warning("Failed to send Telegram response (%s).", _describe_telegram_error(exc))
             return False
     return True
 
@@ -371,9 +404,11 @@ def _send_report_attachment(
     *,
     chat_id: int | str,
     proxies: dict[str, str] | None,
+    days: int,
+    db_path: Path | str | None,
 ) -> bool:
-    report_path = get_latest_report_file_path()
-    if report_path is None or not report_path.exists():
+    txt_report_path = _build_period_report_attachment(days=days, db_path=db_path)
+    if txt_report_path is None or not txt_report_path.exists():
         return _send_response(
             chat_id=chat_id,
             text="Полный отчет временно недоступен, используйте краткую сводку выше",
@@ -386,15 +421,6 @@ def _send_report_attachment(
     timeout = max(config.TELEGRAM_API_TIMEOUT + 5, 10)
     token = config.TELEGRAM_BOT_TOKEN
     url = f"{TELEGRAM_API_BASE_URL}/bot{token}/sendDocument"
-    txt_report_path = report_path.with_suffix(".txt")
-    created_txt_copy = False
-    try:
-        markdown_content = report_path.read_text(encoding="utf-8")
-        txt_report_path.write_text(_markdown_to_plain_text(markdown_content), encoding="utf-8")
-        created_txt_copy = True
-    except Exception:
-        logger.exception("Failed to prepare .txt report copy from %s", report_path)
-        txt_report_path = report_path
 
     try:
         for attempt in range(1, TELEGRAM_SEND_ATTEMPTS + 1):
@@ -412,11 +438,12 @@ def _send_report_attachment(
                 if not payload.get("ok"):
                     raise RuntimeError(payload.get("description", "sendDocument failed"))
                 return True
-            except Exception:
-                logger.exception(
-                    "Failed to send report attachment via Telegram (attempt %s/%s).",
+            except Exception as exc:
+                logger.warning(
+                    "Failed to send report attachment via Telegram (attempt %s/%s, %s).",
                     attempt,
                     TELEGRAM_SEND_ATTEMPTS,
+                    _describe_telegram_error(exc),
                 )
                 if attempt < TELEGRAM_SEND_ATTEMPTS:
                     time.sleep(attempt)
@@ -428,11 +455,10 @@ def _send_report_attachment(
             proxies=proxies,
         )
     finally:
-        if created_txt_copy:
-            try:
-                txt_report_path.unlink(missing_ok=True)
-            except Exception:
-                logger.warning("Failed to remove temporary txt report: %s", txt_report_path)
+        try:
+            txt_report_path.unlink(missing_ok=True)
+        except Exception:
+            logger.warning("Failed to remove temporary txt report: %s", txt_report_path)
 
 
 def _markdown_to_plain_text(text: str) -> str:
@@ -447,6 +473,62 @@ def _markdown_to_plain_text(text: str) -> str:
     normalized = "\n".join(lines)
     normalized = re.sub(r"\n{3,}", "\n\n", normalized).strip()
     return normalized + "\n"
+
+
+def _resolve_period_command_text(
+    *,
+    text: str,
+    chat_id: int | str,
+    db_path: Path | str | None,
+) -> tuple[int, str]:
+    resolved_db_path = db_path or config.DB_PATH
+    init_db(resolved_db_path)
+    tokens = (text or "").strip().split()
+    if not tokens:
+        return 7, text
+    if len(tokens) > 1 and tokens[1].isdigit():
+        explicit_days = max(1, min(int(tokens[1]), 365))
+        set_user_default_period_days(chat_id, explicit_days, db_path=resolved_db_path)
+        return explicit_days, f"{tokens[0]} {explicit_days}"
+    default_days = get_user_default_period_days(chat_id, db_path=resolved_db_path, fallback=7)
+    return default_days, f"{tokens[0]} {default_days}"
+
+
+def _extract_report_days(text: str, *, default_days: int) -> int:
+    tokens = (text or "").strip().split()
+    if len(tokens) > 1 and tokens[1].isdigit():
+        return max(1, min(int(tokens[1]), 365))
+    return max(1, min(int(default_days), 365))
+
+
+def _build_period_report_attachment(*, days: int, db_path: Path | str | None) -> Path | None:
+    try:
+        resolved_db_path = db_path or config.DB_PATH
+        init_db(resolved_db_path)
+        backfill_missing_published_at(resolved_db_path)
+        documents = list_recent_documents(
+            db_path=resolved_db_path,
+            days=days,
+            relevant_only=False,
+            action_levels=None,
+        )
+        source_errors = list_recent_source_errors(db_path=resolved_db_path, days=days)
+        markdown = generate_markdown_report(
+            documents,
+            report_date=datetime.now().strftime("%Y-%m-%d"),
+            period_days=days,
+            source_errors=source_errors,
+        )
+        txt_content = _markdown_to_plain_text(markdown)
+        timestamp = datetime.now().strftime("%Y-%m-%d")
+        attachment_dir = config.DATA_DIR / "telegram_attachments"
+        attachment_dir.mkdir(parents=True, exist_ok=True)
+        txt_path = attachment_dir / f"gr_monitoring_{timestamp}_{days}d.txt"
+        txt_path.write_text(txt_content, encoding="utf-8")
+        return txt_path
+    except Exception:
+        logger.exception("Failed to build report attachment for %s days.", days)
+        return None
 
 
 def _run_manual_refresh(*, db_path: Path | str | None) -> str:
@@ -525,8 +607,7 @@ def _call_telegram_api(
             response.raise_for_status()
             data = response.json()
             if not data.get("ok"):
-                description = data.get("description", "unknown telegram error")
-                raise RuntimeError(f"Telegram API {method} failed: {description}")
+                raise RuntimeError("telegram_api_error")
             return data.get("result")
         except requests.RequestException as exc:
             last_exception = exc
@@ -585,17 +666,22 @@ def _build_proxies() -> dict[str, str] | None:
 def _describe_request_error(exc: requests.RequestException) -> str:
     response = getattr(exc, "response", None)
     if response is not None and response.status_code:
-        return f"http_{response.status_code}"
+        return "telegram_api_error"
     if isinstance(exc, requests.exceptions.ProxyError):
         return "proxy_error"
-    if isinstance(exc, requests.exceptions.ConnectTimeout):
-        return "connect_timeout"
-    if isinstance(exc, requests.exceptions.ReadTimeout):
-        return "read_timeout"
-    if isinstance(exc, requests.exceptions.Timeout):
+    if isinstance(exc, (requests.exceptions.ConnectTimeout, requests.exceptions.ReadTimeout, requests.exceptions.Timeout)):
         return "timeout"
     if isinstance(exc, requests.exceptions.ConnectionError):
         return "connection_error"
     if isinstance(exc, requests.exceptions.InvalidSchema):
-        return "invalid_proxy_schema_or_missing_socks_support"
-    return exc.__class__.__name__.lower()
+        return "proxy_error"
+    return "telegram_api_error"
+
+
+def _describe_telegram_error(exc: Exception) -> str:
+    if isinstance(exc, requests.RequestException):
+        return _describe_request_error(exc)
+    if isinstance(exc, RuntimeError):
+        return "telegram_api_error"
+    _ = sanitize_telegram_exception_message(exc)
+    return "telegram_api_error"

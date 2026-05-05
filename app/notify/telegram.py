@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections.abc import Sequence
 from datetime import date, datetime, timezone
@@ -14,10 +15,17 @@ from app.models import RawDocument
 from app.notify.telegram_formatter import build_digest_message
 from app.pipeline.diagnostics import build_diagnostics_snapshot
 from app.reports.markdown_report import classify_display_section, select_visible_report_documents
-from app.storage import count_documents_by_action_level, init_db, list_documents, list_recent_documents
+from app.storage import (
+    count_documents_by_action_level,
+    init_db,
+    list_documents,
+    list_recent_documents,
+    search_documents,
+)
 from app.storage import get_runtime_event, list_latest_source_audit
 
 logger = logging.getLogger(__name__)
+TELEGRAM_URL_TOKEN_RE = re.compile(r"(https://api\.telegram\.org/bot)[^/\s]+", re.IGNORECASE)
 
 TELEGRAM_SEND_ATTEMPTS = 3
 TELEGRAM_RETRY_BACKOFF_SECONDS = 1.0
@@ -28,6 +36,7 @@ TELEGRAM_COMMANDS = (
     "/watchlist",
     "/report",
     "/sources",
+    "/search",
     "/help",
 )
 TELEGRAM_MAX_MESSAGE_LENGTH = 4096
@@ -64,20 +73,24 @@ def _build_proxies() -> dict[str, str] | None:
 def _describe_request_error(exc: requests.RequestException) -> str:
     response = getattr(exc, "response", None)
     if response is not None and response.status_code:
-        return f"http_{response.status_code}"
+        return "telegram_api_error"
     if isinstance(exc, requests.exceptions.ProxyError):
         return "proxy_error"
-    if isinstance(exc, requests.exceptions.ConnectTimeout):
-        return "connect_timeout"
-    if isinstance(exc, requests.exceptions.ReadTimeout):
-        return "read_timeout"
-    if isinstance(exc, requests.exceptions.Timeout):
+    if isinstance(exc, (requests.exceptions.ConnectTimeout, requests.exceptions.ReadTimeout, requests.exceptions.Timeout)):
         return "timeout"
     if isinstance(exc, requests.exceptions.ConnectionError):
         return "connection_error"
     if isinstance(exc, requests.exceptions.InvalidSchema):
-        return "invalid_proxy_schema_or_missing_socks_support"
-    return exc.__class__.__name__.lower()
+        return "proxy_error"
+    return "telegram_api_error"
+
+
+def redact_telegram_secrets(text: str) -> str:
+    return TELEGRAM_URL_TOKEN_RE.sub(r"\1<redacted>", text or "")
+
+
+def sanitize_telegram_exception_message(exc: Exception) -> str:
+    return redact_telegram_secrets(str(exc))
 
 
 def send_message(text: str) -> bool:
@@ -147,23 +160,27 @@ def build_command_response(
     command_text: str,
     *,
     db_path: Path | str | None = None,
+    default_days: int = 7,
 ) -> str:
-    normalized_command = (command_text or "").strip().split()[0].lower()
+    normalized_command, command_args = _parse_command_request(command_text)
     resolved_db_path = Path(db_path) if db_path is not None else config.DB_PATH
     init_db(resolved_db_path)
+    period_days = _extract_period_days(command_args, default_days=default_days)
 
     if normalized_command == "/status":
         return _build_status_message(resolved_db_path)
     if normalized_command == "/today":
         return _build_today_message(resolved_db_path)
     if normalized_command == "/urgent":
-        return _build_urgent_message(resolved_db_path)
+        return _build_urgent_message(resolved_db_path, days=period_days)
     if normalized_command == "/watchlist":
-        return _build_watchlist_message(resolved_db_path)
+        return _build_watchlist_message(resolved_db_path, days=period_days)
     if normalized_command == "/report":
-        return _build_report_message(resolved_db_path)
+        return _build_report_message(resolved_db_path, days=period_days)
     if normalized_command == "/sources":
         return _build_sources_message(resolved_db_path)
+    if normalized_command == "/search":
+        return _build_search_message(resolved_db_path, query=" ".join(command_args).strip())
     return _build_help_message()
 
 
@@ -173,6 +190,25 @@ def send_command_response(
     db_path: Path | str | None = None,
 ) -> bool:
     return send_message(build_command_response(command_text, db_path=db_path))
+
+
+def _parse_command_request(command_text: str) -> tuple[str, list[str]]:
+    raw = (command_text or "").strip()
+    if not raw:
+        return "", []
+    parts = raw.split()
+    command = parts[0].lower().split("@", maxsplit=1)[0]
+    return command, parts[1:]
+
+
+def _extract_period_days(args: list[str], *, default_days: int) -> int:
+    safe_default = max(1, min(int(default_days), 365))
+    if not args:
+        return safe_default
+    first = args[0].strip()
+    if not first.isdigit():
+        return safe_default
+    return max(1, min(int(first), 365))
 
 
 def _build_status_message(db_path: Path | str) -> str:
@@ -247,10 +283,10 @@ def _build_today_message(db_path: Path | str) -> str:
     return _cap_message("\n".join(lines))
 
 
-def _build_urgent_message(db_path: Path | str) -> str:
+def _build_urgent_message(db_path: Path | str, *, days: int) -> str:
     documents = list_recent_documents(
         db_path=db_path,
-        days=30,
+        days=days,
         relevant_only=False,
         action_levels=["requires_attention"],
     )
@@ -261,27 +297,27 @@ def _build_urgent_message(db_path: Path | str) -> str:
         include_market_background=False,
     )
     if not urgent_documents:
-        return "🚨 Требует внимания GR: новых документов нет."
+        return f"🚨 Требует внимания GR: новых документов нет за {days} дней."
     lines = [
-        "🚨 Требует внимания GR",
+        f"🚨 Требует внимания GR (за {days} дней)",
         f"Найдено документов: {len(urgent_documents)}",
     ]
     lines.extend(_format_document_lines(urgent_documents, include_summary=False))
     return _cap_message("\n".join(lines))
 
 
-def _build_watchlist_message(db_path: Path | str) -> str:
+def _build_watchlist_message(db_path: Path | str, *, days: int) -> str:
     watchlist_documents = list_recent_documents(
         db_path=db_path,
-        days=7,
+        days=days,
         relevant_only=False,
         action_levels=["watchlist"],
     )
     if not watchlist_documents:
-        return "👀 Документов на наблюдении сейчас нет."
+        return f"👀 Документов на наблюдении за {days} дней нет."
     shown_count = min(TELEGRAM_WATCHLIST_USER_LIMIT, len(watchlist_documents))
     lines = [
-        "👀 Документы на наблюдении",
+        f"👀 Документы на наблюдении (за {days} дней)",
     ]
     lines.extend(
         _format_document_lines(
@@ -296,10 +332,10 @@ def _build_watchlist_message(db_path: Path | str) -> str:
     return _cap_message("\n".join(lines))
 
 
-def _build_report_message(db_path: Path | str) -> str:
+def _build_report_message(db_path: Path | str, *, days: int) -> str:
     documents = list_recent_documents(
         db_path=db_path,
-        days=7,
+        days=days,
         relevant_only=False,
         action_levels=["requires_attention", "watchlist"],
     )
@@ -309,10 +345,10 @@ def _build_report_message(db_path: Path | str) -> str:
         action_levels=["requires_attention", "watchlist"],
         include_market_background=False,
     )
-    return _cap_message(_build_short_report_text(visible_documents))
+    return _cap_message(_build_short_report_text(visible_documents, days=days))
 
 
-def _build_short_report_text(documents: Sequence[RawDocument]) -> str:
+def _build_short_report_text(documents: Sequence[RawDocument], *, days: int) -> str:
     sections = {
         "requires_attention": [],
         "measures_and_selections": [],
@@ -328,7 +364,7 @@ def _build_short_report_text(documents: Sequence[RawDocument]) -> str:
             sections[section].append(document)
 
     lines = [
-        "🧾 GR-сводка за 7 дней",
+        f"🧾 GR-сводка за {days} дней",
         f"📊 Всего видимых материалов: {len(documents)}",
         (
             f"🚨 Требует внимания: {len(sections['requires_attention'])} | "
@@ -398,6 +434,29 @@ def _build_sources_message(db_path: Path | str) -> str:
     return _cap_message("\n".join(lines))
 
 
+def _build_search_message(db_path: Path | str, *, query: str) -> str:
+    normalized_query = query.strip()
+    if not normalized_query:
+        return "🔎 Укажи поисковый запрос: /search <ключевые слова>"
+    results = search_documents(normalized_query, db_path=db_path, limit=5)
+    if not results:
+        return f"🔎 По запросу «{normalized_query}» ничего не найдено."
+    lines = [
+        f"🔎 Результаты поиска: {normalized_query}",
+        f"Найдено (показано до 5): {len(results)}",
+    ]
+    lines.extend(
+        _format_document_lines(
+            results,
+            include_summary=False,
+            max_items=5,
+            include_hidden_hint=False,
+        )
+    )
+    lines.append("Показано 5 результатов. Уточните запрос, чтобы сузить поиск.")
+    return _cap_message("\n".join(lines))
+
+
 def _build_help_message() -> str:
     return _cap_message("\n".join(
         [
@@ -405,9 +464,10 @@ def _build_help_message() -> str:
             "/start — открыть меню GR-монитора",
             "/status — состояние мониторинга",
             "/today — сводка за сегодня",
-            "/urgent — документы, требующие внимания GR",
-            "/watchlist — документы на наблюдении",
-            "/report — краткая сводка за 7 дней",
+            "/urgent [days] — требует внимания (например, /urgent 30)",
+            "/watchlist [days] — наблюдение (например, /watchlist 30)",
+            "/report [days] — краткая сводка (например, /report 30)",
+            "/search <запрос> — поиск по архиву",
             "/sources — статус источников за 7 дней",
             "/refresh — обновить collect/analyze/report (не чаще 1 раза в час)",
             "/help — список команд",

@@ -213,6 +213,132 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         self.assertIn("Уровень: наблюдение", text)
         self.assertIn("Пошлина на экспорт пшеницы останется нулевой", text)
 
+    def test_period_argument_overrides_default_for_urgent(self) -> None:
+        db_path = self._db_path("telegram_urgent_period.db")
+        init_db(db_path)
+        save_document(
+            self._doc(
+                doc_id=1,
+                source_name="ГИСП - меры поддержки АПК",
+                region="federal",
+                title="Новый документ",
+                url="https://example.com/new",
+                action_level="requires_attention",
+                page_type="measure_card",
+                days_ago=3,
+            ),
+            db_path,
+        )
+        save_document(
+            self._doc(
+                doc_id=2,
+                source_name="ГИСП - меры поддержки АПК",
+                region="federal",
+                title="Старый документ",
+                url="https://example.com/old",
+                action_level="requires_attention",
+                page_type="measure_card",
+                days_ago=20,
+            ),
+            db_path,
+        )
+
+        text_default = telegram.build_command_response("/urgent", db_path=db_path, default_days=7)
+        text_30 = telegram.build_command_response("/urgent 30", db_path=db_path, default_days=7)
+
+        self.assertIn("за 7 дней", text_default)
+        self.assertIn("Новый документ", text_default)
+        self.assertNotIn("Старый документ", text_default)
+        self.assertIn("за 30 дней", text_30)
+        self.assertIn("Старый документ", text_30)
+
+    def test_search_returns_top_results(self) -> None:
+        db_path = self._db_path("telegram_search.db")
+        init_db(db_path)
+        save_document(
+            self._doc(
+                doc_id=1,
+                source_name="Правительство РФ - документы",
+                region="federal",
+                title="Мера поддержки экспорта",
+                url="https://example.com/a",
+                action_level="watchlist",
+                page_type="new_rule",
+                days_ago=1,
+            ).model_copy(update={"raw_text": "Экспорт и логистика"}),
+            db_path,
+        )
+        save_document(
+            self._doc(
+                doc_id=2,
+                source_name="Правительство РФ - новости",
+                region="federal",
+                title="Новости по экспорту",
+                url="https://example.com/b",
+                action_level="watchlist",
+                page_type="news_background",
+                days_ago=0,
+            ).model_copy(update={"raw_text": "Экспорт растет"}),
+            db_path,
+        )
+
+        text = telegram.build_command_response("/search экспорт", db_path=db_path)
+
+        self.assertIn("Результаты поиска", text)
+        self.assertIn("Новости по экспорту", text)
+        self.assertIn("Мера поддержки экспорта", text)
+        self.assertNotIn("Показать ещё (скоро)", text)
+        self.assertIn("Показано 5 результатов", text)
+
+    def test_search_prioritizes_requires_attention_over_background(self) -> None:
+        db_path = self._db_path("telegram_search_priority.db")
+        init_db(db_path)
+        save_document(
+            self._doc(
+                doc_id=1,
+                source_name="ZOL.ru - зерновые новости",
+                region="federal",
+                title="Льготное кредитование обзор рынка",
+                url="https://www.zol.ru/n/1",
+                action_level="background",
+                page_type="news_background",
+            ).model_copy(update={"raw_text": "льготное кредитование в отрасли"}),
+            db_path,
+        )
+        save_document(
+            self._doc(
+                doc_id=2,
+                source_name="ГИСП - меры поддержки АПК",
+                region="federal",
+                title="Льготное кредитование АПК",
+                url="https://gisp.gov.ru/nmp/measure/9564204",
+                action_level="requires_attention",
+                page_type="measure_card",
+            ).model_copy(update={"raw_text": "льготное кредитование"}),
+            db_path,
+        )
+        save_document(
+            self._doc(
+                doc_id=3,
+                source_name="Шумовой источник",
+                region="federal",
+                title="Льготное кредитование",
+                url="https://example.com/irr",
+                action_level="irrelevant",
+                page_type="reference_page",
+            ).model_copy(update={"raw_text": "льготное кредитование"}),
+            db_path,
+        )
+
+        text = telegram.build_command_response("/search льготное кредитование", db_path=db_path)
+        gisp_pos = text.find("Льготное кредитование АПК")
+        bg_pos = text.find("Льготное кредитование обзор рынка")
+        irr_pos = text.find("Уровень: скрыто")
+        self.assertGreaterEqual(gisp_pos, 0)
+        self.assertGreaterEqual(bg_pos, 0)
+        self.assertLess(gisp_pos, bg_pos)
+        self.assertEqual(irr_pos, -1)
+
     def test_status_command_contains_main_counters(self) -> None:
         db_path = self._db_path("telegram_status.db")
         init_db(db_path)
@@ -278,7 +404,7 @@ class TelegramNotifySmokeTest(unittest.TestCase):
 
         text = telegram.build_command_response("/urgent", db_path=db_path)
 
-        self.assertEqual(text, "🚨 Требует внимания GR: новых документов нет.")
+        self.assertEqual(text, "🚨 Требует внимания GR: новых документов нет за 7 дней.")
 
     def test_report_command_does_not_show_local_report_path(self) -> None:
         text = telegram.build_command_response("/report")
@@ -374,6 +500,12 @@ class TelegramNotifySmokeTest(unittest.TestCase):
 
         self.assertTrue(sent)
         self.assertGreaterEqual(post.call_count, 3)
+
+    def test_telegram_exception_message_redacts_tokenized_url(self) -> None:
+        raw = "HTTPSConnectionPool('https://api.telegram.org/bot123:ABCDEF/sendMessage')"
+        sanitized = telegram.sanitize_telegram_exception_message(RuntimeError(raw))
+        self.assertIn("bot<redacted>/sendMessage", sanitized)
+        self.assertNotIn("bot123:ABCDEF", sanitized)
 
 
 if __name__ == "__main__":
