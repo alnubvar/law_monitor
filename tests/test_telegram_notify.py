@@ -229,7 +229,9 @@ class TelegramNotifySmokeTest(unittest.TestCase):
             db_path,
         )
 
-        text = telegram.build_command_response("/status", db_path=db_path)
+        fresh_event = {"event_name": "collect", "updated_at": datetime.now(timezone.utc), "details": "saved=1"}
+        with patch("app.notify.telegram.get_runtime_event", return_value=fresh_event):
+            text = telegram.build_command_response("/status", db_path=db_path)
 
         self.assertIn("Статус AHSTEP GR Monitor", text)
         self.assertIn("Документов в базе: 1", text)
@@ -237,12 +239,21 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         self.assertNotIn("RTZ", text)
         self.assertNotIn("зима", text)
         self.assertNotIn("scheduler-state", text)
+        self.assertIn("Данные свежие", text)
 
     def test_sources_command_includes_enabled_sources(self) -> None:
         db_path = self._db_path("telegram_sources.db")
         init_db(db_path)
-
-        text = telegram.build_command_response("/sources", db_path=db_path)
+        audits = [
+            {
+                "source_name": "ZOL.ru - зерновые новости",
+                "success_at": datetime.now(timezone.utc),
+                "error_at": None,
+                "error_message": None,
+            }
+        ]
+        with patch("app.notify.telegram.list_latest_source_audit", return_value=audits):
+            text = telegram.build_command_response("/sources", db_path=db_path)
 
         self.assertIn("Источники (", text)
         self.assertIn("ZOL.ru - зерновые новости", text)
@@ -251,6 +262,8 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         self.assertNotIn("WL=", text)
         self.assertNotIn("BG=", text)
         self.assertNotIn("IRR=", text)
+        self.assertIn("Последний успешный сбор", text)
+        self.assertTrue(("нет новых документов" in text) or ("работает" in text))
 
     def test_send_command_response_uses_send_message(self) -> None:
         with patch("app.notify.telegram.send_message", return_value=True) as send_message:
@@ -306,6 +319,25 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         text = telegram.build_command_response("/sources", db_path=db_path)
 
         self.assertNotIn("много шума", text)
+
+    def test_sources_hides_raw_exception_details(self) -> None:
+        db_path = self._db_path("telegram_sources_errors.db")
+        init_db(db_path)
+        audits = [
+            {
+                "source_name": "ZOL.ru - зерновые новости",
+                "success_at": None,
+                "error_at": datetime.now(timezone.utc),
+                "error_message": "HTTPSConnectionPool(host='x'): Max retries exceeded; 403 Client Error",
+            }
+        ]
+        with patch("app.notify.telegram.list_latest_source_audit", return_value=audits):
+            text = telegram.build_command_response("/sources", db_path=db_path)
+
+        self.assertIn("временно недоступен", text)
+        self.assertNotIn("HTTPSConnectionPool", text)
+        self.assertNotIn("Max retries", text)
+        self.assertNotIn("Client Error", text)
 
     def test_missing_published_date_is_hidden_from_user(self) -> None:
         db_path = self._db_path("telegram_missing_date.db")

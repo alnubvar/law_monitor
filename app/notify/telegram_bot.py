@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +19,15 @@ from app.notify.telegram import (
     build_command_response,
     get_latest_report_file_path,
 )
+from app.pipeline.analyze import run_analyze
+from app.pipeline.collect import run_collect
+from app.pipeline.digest import run_digest
+from app.storage import (
+    count_documents_by_action_level,
+    get_runtime_event,
+    list_latest_source_audit,
+    mark_runtime_event,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +38,8 @@ TELEGRAM_SEND_ATTEMPTS = 3
 TELEGRAM_POLL_BACKOFF_BASE_SECONDS = 1.0
 TELEGRAM_POLL_BACKOFF_MAX_SECONDS = 30.0
 TELEGRAM_POLL_IDLE_SLEEP_SECONDS = 0.3
+MANUAL_REFRESH_COOLDOWN_SECONDS = 3600
+_refresh_lock = threading.Lock()
 
 START_MESSAGE = (
     "AHSTEP GR Monitor запущен ✅\n\n"
@@ -47,11 +60,13 @@ BOT_COMMANDS: tuple[tuple[str, str], ...] = (
     ("watchlist", "наблюдение"),
     ("report", "последний отчет"),
     ("sources", "источники"),
+    ("refresh", "обновить данные"),
 )
 REPLY_KEYBOARD_LAYOUT: tuple[tuple[str, ...], ...] = (
     ("📊 Статус", "🚨 Срочное"),
     ("📅 Сегодня", "👀 Наблюдение"),
     ("📄 Отчёт", "🛰 Источники"),
+    ("🔄 Обновить данные",),
     ("ℹ️ Помощь",),
 )
 BUTTON_TO_COMMAND: Mapping[str, str] = {
@@ -61,6 +76,7 @@ BUTTON_TO_COMMAND: Mapping[str, str] = {
     "👀 Наблюдение": "/watchlist",
     "📄 Отчёт": "/report",
     "🛰 Источники": "/sources",
+    "🔄 Обновить данные": "/refresh",
     "ℹ️ Помощь": "/help",
 }
 @dataclass(frozen=True)
@@ -190,6 +206,8 @@ def dispatch_input_text(
     command = normalize_incoming_command(text)
     if command == "/start":
         return DispatchResult(command=command, response_text=START_MESSAGE)
+    if command == "/refresh":
+        return DispatchResult(command=command, response_text="⏳ Обновляю данные, подождите...")
     if command in TELEGRAM_COMMANDS:
         response = build_command_response(command, db_path=db_path)
         return DispatchResult(command=command, response_text=response)
@@ -237,6 +255,11 @@ def _process_update(
         return
 
     text = str(message.get("text") or "")
+    incoming_command = normalize_incoming_command(text)
+    if incoming_command == "/refresh":
+        refresh_text = _run_manual_refresh(db_path=db_path)
+        _send_response(chat_id=chat_id, text=refresh_text, proxies=proxies)
+        return
     dispatch_result = dispatch_input_text(text, db_path=db_path)
     _send_response(chat_id=chat_id, text=dispatch_result.response_text, proxies=proxies)
     if dispatch_result.command == "/report":
@@ -424,6 +447,51 @@ def _markdown_to_plain_text(text: str) -> str:
     normalized = "\n".join(lines)
     normalized = re.sub(r"\n{3,}", "\n\n", normalized).strip()
     return normalized + "\n"
+
+
+def _run_manual_refresh(*, db_path: Path | str | None) -> str:
+    if not _refresh_lock.acquire(blocking=False):
+        return "⏳ Обновление уже выполняется. Дождитесь завершения текущего запуска."
+    try:
+        last_refresh = get_runtime_event("manual_refresh", db_path=db_path or config.DB_PATH)
+        if last_refresh and last_refresh.get("updated_at") is not None:
+            refreshed_at = last_refresh["updated_at"]
+            if refreshed_at.tzinfo is None:
+                refreshed_at = refreshed_at.replace(tzinfo=timezone.utc)
+            elapsed_seconds = (datetime.now(timezone.utc) - refreshed_at.astimezone(timezone.utc)).total_seconds()
+            if elapsed_seconds < MANUAL_REFRESH_COOLDOWN_SECONDS:
+                wait_minutes = int((MANUAL_REFRESH_COOLDOWN_SECONDS - elapsed_seconds) // 60) + 1
+                return f"⏳ Обновление запускалось недавно. Повторите через {wait_minutes} мин."
+
+        collected = run_collect()
+        analyzed = run_analyze()
+        run_digest(days=7)
+        requires_attention = count_documents_by_action_level("requires_attention")
+        watchlist = count_documents_by_action_level("watchlist")
+        audit_rows = list_latest_source_audit(db_path=db_path or config.DB_PATH)
+        problematic_sources = sum(1 for row in audit_rows if row.get("error_message"))
+        mark_runtime_event(
+            "manual_refresh",
+            details=f"collected={collected}; analyzed={analyzed}",
+            db_path=db_path or config.DB_PATH,
+        )
+        lines = [
+            "✅ Обновление завершено\n"
+            f"Новых документов: {collected}\n"
+            f"Обработано: {analyzed}\n"
+            f"Требует внимания: {requires_attention}\n"
+            f"Наблюдение: {watchlist}"
+        ]
+        if problematic_sources > 0:
+            lines.append(f"Проблемных источников: {problematic_sources}")
+        else:
+            lines.append("Ошибки источников: 0")
+        return "\n".join(lines)
+    except Exception:
+        logger.exception("Manual refresh failed.")
+        return "❌ Обновление завершилось с ошибкой. Проверьте /sources и повторите позже."
+    finally:
+        _refresh_lock.release()
 
 
 def _call_telegram_api(

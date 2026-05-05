@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import unittest
 from unittest.mock import Mock, patch
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -32,6 +33,7 @@ class TelegramBotTest(unittest.TestCase):
                     {"command": "watchlist", "description": "наблюдение"},
                     {"command": "report", "description": "последний отчет"},
                     {"command": "sources", "description": "источники"},
+                    {"command": "refresh", "description": "обновить данные"},
                 ]
             },
         )
@@ -46,7 +48,8 @@ class TelegramBotTest(unittest.TestCase):
         self.assertEqual(keyboard[1][1]["text"], "👀 Наблюдение")
         self.assertEqual(keyboard[2][0]["text"], "📄 Отчёт")
         self.assertEqual(keyboard[2][1]["text"], "🛰 Источники")
-        self.assertEqual(keyboard[3][0]["text"], "ℹ️ Помощь")
+        self.assertEqual(keyboard[3][0]["text"], "🔄 Обновить данные")
+        self.assertEqual(keyboard[4][0]["text"], "ℹ️ Помощь")
         self.assertTrue(payload["resize_keyboard"])
         self.assertTrue(payload["is_persistent"])
 
@@ -67,6 +70,7 @@ class TelegramBotTest(unittest.TestCase):
     def test_button_text_maps_to_command(self) -> None:
         self.assertEqual(telegram_bot.normalize_incoming_command("📊 Статус"), "/status")
         self.assertEqual(telegram_bot.normalize_incoming_command("🚨 Срочное"), "/urgent")
+        self.assertEqual(telegram_bot.normalize_incoming_command("🔄 Обновить данные"), "/refresh")
 
         with patch("app.notify.telegram_bot.build_command_response", return_value="mapped"):
             result = telegram_bot.dispatch_input_text("📄 Отчёт")
@@ -196,6 +200,57 @@ class TelegramBotTest(unittest.TestCase):
         self.assertIn("Заголовок", plain)
         self.assertIn("Блок", plain)
         self.assertIn("Пункт", plain)
+
+    def test_refresh_starts_pipeline_if_allowed(self) -> None:
+        mock_lock = Mock()
+        mock_lock.acquire.return_value = True
+        with patch("app.notify.telegram_bot._refresh_lock", mock_lock):
+            with patch("app.notify.telegram_bot.get_runtime_event", return_value=None):
+                with patch("app.notify.telegram_bot.run_collect", return_value=3):
+                    with patch("app.notify.telegram_bot.run_analyze", return_value=2):
+                        with patch("app.notify.telegram_bot.run_digest"):
+                            with patch("app.notify.telegram_bot.count_documents_by_action_level", side_effect=[1, 4]):
+                                with patch("app.notify.telegram_bot.list_latest_source_audit", return_value=[]):
+                                    with patch("app.notify.telegram_bot.mark_runtime_event"):
+                                        text = telegram_bot._run_manual_refresh(db_path=None)
+        self.assertIn("Обновление завершено", text)
+        self.assertIn("Новых документов: 3", text)
+        self.assertIn("Ошибки источников: 0", text)
+
+    def test_refresh_blocked_if_called_too_often(self) -> None:
+        recent = {"updated_at": datetime.now(timezone.utc) - timedelta(minutes=10)}
+        mock_lock = Mock()
+        mock_lock.acquire.return_value = True
+        with patch("app.notify.telegram_bot._refresh_lock", mock_lock):
+            with patch("app.notify.telegram_bot.get_runtime_event", return_value=recent):
+                text = telegram_bot._run_manual_refresh(db_path=None)
+        self.assertIn("Обновление запускалось недавно", text)
+
+    def test_refresh_no_parallel_runs(self) -> None:
+        mock_lock = Mock()
+        mock_lock.acquire.return_value = False
+        with patch("app.notify.telegram_bot._refresh_lock", mock_lock):
+            text = telegram_bot._run_manual_refresh(db_path=None)
+        self.assertIn("уже выполняется", text)
+
+    def test_refresh_reports_problematic_sources_count(self) -> None:
+        mock_lock = Mock()
+        mock_lock.acquire.return_value = True
+        audits = [
+            {"source_name": "A", "error_message": None},
+            {"source_name": "B", "error_message": "timeout"},
+            {"source_name": "C", "error_message": "403"},
+        ]
+        with patch("app.notify.telegram_bot._refresh_lock", mock_lock):
+            with patch("app.notify.telegram_bot.get_runtime_event", return_value=None):
+                with patch("app.notify.telegram_bot.run_collect", return_value=1):
+                    with patch("app.notify.telegram_bot.run_analyze", return_value=1):
+                        with patch("app.notify.telegram_bot.run_digest"):
+                            with patch("app.notify.telegram_bot.count_documents_by_action_level", side_effect=[1, 2]):
+                                with patch("app.notify.telegram_bot.list_latest_source_audit", return_value=audits):
+                                    with patch("app.notify.telegram_bot.mark_runtime_event"):
+                                        text = telegram_bot._run_manual_refresh(db_path=None)
+        self.assertIn("Проблемных источников: 2", text)
 
 
 if __name__ == "__main__":

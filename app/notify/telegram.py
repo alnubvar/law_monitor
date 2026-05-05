@@ -15,6 +15,7 @@ from app.notify.telegram_formatter import build_digest_message
 from app.pipeline.diagnostics import build_diagnostics_snapshot
 from app.reports.markdown_report import classify_display_section, select_visible_report_documents
 from app.storage import count_documents_by_action_level, init_db, list_documents, list_recent_documents
+from app.storage import get_runtime_event, list_latest_source_audit
 
 logger = logging.getLogger(__name__)
 
@@ -220,6 +221,7 @@ def _build_status_message(db_path: Path | str) -> str:
         f"Отчет: {'доступен' if latest_report else 'пока не сформирован'}",
         f"Telegram-уведомления: {'включены' if is_configured() else 'не настроены'}",
     ]
+    lines.extend(_build_freshness_lines(db_path))
     return _cap_message("\n".join(lines))
 
 
@@ -367,19 +369,32 @@ def _build_sources_message(db_path: Path | str) -> str:
     recent_documents = list_documents(db_path=db_path, days=7)
     snapshot = build_diagnostics_snapshot(recent_documents, days=7)
     rows_by_name = {row.source_name: row for row in snapshot.rows}
+    audit_by_source = {row["source_name"]: row for row in list_latest_source_audit(db_path=db_path)}
     lines = [f"🛰 Источники (активных: {len(sources)})"]
     for source in sources:
         row = rows_by_name.get(source.name)
+        audit_row = audit_by_source.get(source.name)
+        last_success = _fmt_dt(audit_row["success_at"]) if audit_row else None
+        last_error = _fmt_dt(audit_row["error_at"]) if audit_row else None
+        if audit_row and audit_row.get("error_message"):
+            lines.append(f"❌ {source.name} — временно недоступен")
+            if last_error:
+                lines.append(f"  Последняя проблема: {last_error}")
+            continue
         if row is None or row.total_documents == 0:
-            lines.append(f"⚠️ {source.name} — нет документов за 7 дней")
+            lines.append(f"⚠️ {source.name} — нет новых документов")
+            if last_success:
+                lines.append(f"  Последний успешный сбор: {last_success}")
             continue
         hints: list[str] = []
         if row.noisy_ratio >= 0.7:
-            hints.append("много нерелевантных материалов")
+            hints.append("есть материалы для фильтрации")
         if row.total_documents > 0 and row.missing_published_at_count / row.total_documents >= 0.6:
-            hints.append("часть дат не определена")
+            hints.append("часть публикаций без даты")
         hint_suffix = f" ({', '.join(hints)})" if hints else ""
-        lines.append(f"✅ {source.name} — найдено {row.total_documents} документов{hint_suffix}")
+        lines.append(f"✅ {source.name} — работает{hint_suffix}")
+        if last_success:
+            lines.append(f"  Последний успешный сбор: {last_success}")
     return _cap_message("\n".join(lines))
 
 
@@ -394,6 +409,7 @@ def _build_help_message() -> str:
             "/watchlist — документы на наблюдении",
             "/report — краткая сводка за 7 дней",
             "/sources — статус источников за 7 дней",
+            "/refresh — обновить collect/analyze/report (не чаще 1 раза в час)",
             "/help — список команд",
         ]
     ))
@@ -475,6 +491,34 @@ def _format_action_level(action_level: str | None) -> str:
         "irrelevant": "скрыто",
     }
     return labels.get(action_level or "", "наблюдение")
+
+
+def _build_freshness_lines(db_path: Path | str) -> list[str]:
+    collect_event = get_runtime_event("collect", db_path=db_path)
+    analyze_event = get_runtime_event("analyze", db_path=db_path)
+    report_event = get_runtime_event("report", db_path=db_path)
+    collect_at = collect_event["updated_at"] if collect_event else None
+    analyze_at = analyze_event["updated_at"] if analyze_event else None
+    report_at = report_event["updated_at"] if report_event else None
+    latest = max((dt for dt in (collect_at, analyze_at, report_at) if dt is not None), default=None)
+    lines = [
+        f"Последний collect: {_fmt_dt(collect_at) or 'дата не определена'}",
+        f"Последний analyze: {_fmt_dt(analyze_at) or 'дата не определена'}",
+        f"Последний report: {_fmt_dt(report_at) or 'дата не определена'}",
+    ]
+    if latest is None:
+        lines.append("⚠️ Свежесть данных не определена.")
+        return lines
+    if latest.tzinfo is None:
+        latest = latest.replace(tzinfo=timezone.utc)
+    delta = datetime.now(timezone.utc) - latest.astimezone(timezone.utc)
+    minutes = int(delta.total_seconds() // 60)
+    if minutes <= 60:
+        lines.append(f"✅ Данные свежие: обновлены {minutes} минут назад")
+    else:
+        hours = max(1, minutes // 60)
+        lines.append(f"⚠️ Данные устарели: последнее обновление было {hours} часов назад")
+    return lines
 
 
 def _find_latest_report_file() -> str | None:
