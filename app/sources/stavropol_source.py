@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, time, timezone
+from pathlib import PurePosixPath
 from urllib.parse import urlparse
 
 from bs4 import NavigableString, Tag
@@ -75,6 +76,12 @@ PRAVO_STAV_DOCUMENT_TITLE_MARKERS = (
     "распоряжение",
     "решение",
     "указ",
+)
+PRAVO_STAV_DOCUMENT_FILENAME_MARKERS = PRAVO_STAV_DOCUMENT_TITLE_MARKERS + (
+    "subsid",
+    "support",
+    "apk",
+    "agro",
 )
 PRAVO_STAV_REFERENCE_TITLES = {
     "архив документов",
@@ -153,7 +160,7 @@ class StavropolSource(GenericHTMLSource):
         if any(fragment in path for fragment in PRAVO_STAV_REFERENCE_PATH_HINTS):
             return False
         if document_type in {"pdf", "doc", "docx"}:
-            return _has_pravo_document_title(title_text)
+            return _has_pravo_document_title(title_text) or _has_pravo_document_filename(path)
         if any(fragment in path for fragment in PRAVO_STAV_DOCUMENT_PATH_HINTS):
             return _has_pravo_document_title(title_text)
         return False
@@ -177,6 +184,11 @@ def _has_mshsk_actionable_title(text: str) -> bool:
 def _has_pravo_document_title(text: str) -> bool:
     lowered = text.lower()
     return any(marker in lowered for marker in PRAVO_STAV_DOCUMENT_TITLE_MARKERS)
+
+
+def _has_pravo_document_filename(path: str) -> bool:
+    filename = PurePosixPath(path).name.lower()
+    return any(marker in filename for marker in PRAVO_STAV_DOCUMENT_FILENAME_MARKERS)
 
 
 def _extract_safe_publication_date(link: Tag):

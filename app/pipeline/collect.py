@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 
+import requests
 from requests import RequestException
 
 from app.config import DB_PATH, ensure_directories, load_sources
@@ -140,6 +141,28 @@ def _attachment_url_for_item(item: CollectedItem) -> str | None:
     return None
 
 
+def _format_source_access_warning(exc: RequestException) -> str:
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if status_code == 403:
+        return "source access blocked (HTTP 403)"
+    if status_code == 429:
+        return "source rate-limited (HTTP 429)"
+    if status_code is not None and int(status_code) >= 500:
+        return f"source temporary server error (HTTP {status_code})"
+    if isinstance(exc, requests.exceptions.ConnectTimeout):
+        return "source timeout (connect timeout)"
+    if isinstance(exc, requests.exceptions.ReadTimeout):
+        return "source timeout (read timeout)"
+    if isinstance(exc, requests.exceptions.Timeout):
+        return "source timeout"
+    if isinstance(exc, requests.exceptions.ProxyError):
+        return "source proxy/network error"
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        return "source connection error"
+    return "source request error"
+
+
 def run_collect(source_name: str | None = None, limit: int | None = None) -> int:
     return run_collect_with_options(
         source_name=source_name,
@@ -174,7 +197,13 @@ def run_collect_with_options(
             source = create_source(source_config)
             items = source.fetch_items()
         except RequestException as exc:
-            logger.warning("Source collection failed for %s: %s", source_config.name, exc)
+            source_warning = _format_source_access_warning(exc)
+            logger.warning(
+                "Source collection failed for %s: %s (%s)",
+                source_config.name,
+                source_warning,
+                exc,
+            )
             save_source_error(source_config.name, source_config.url, str(exc), db_path=resolved_db_path)
             save_source_audit_record(
                 source_name=source_config.name,
@@ -183,7 +212,7 @@ def run_collect_with_options(
                 attempted_at=attempted_at,
                 success_at=None,
                 error_at=datetime.now(timezone.utc),
-                error_message=str(exc),
+                error_message=source_warning,
                 fetched_count=0,
                 saved_count=0,
                 existing_count=0,
@@ -202,7 +231,7 @@ def run_collect_with_options(
                 attempted_at=attempted_at,
                 success_at=None,
                 error_at=datetime.now(timezone.utc),
-                error_message=str(exc),
+                error_message="source runtime error",
                 fetched_count=0,
                 saved_count=0,
                 existing_count=0,

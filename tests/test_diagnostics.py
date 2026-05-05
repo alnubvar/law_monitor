@@ -324,6 +324,61 @@ class DiagnosticsSmokeTest(unittest.TestCase):
         self.assertIn("Document extraction quality", output)
         self.assertIn("DOCX: total=1; with_text=1", output)
 
+    def test_scan_candidate_is_not_treated_as_fully_extracted_and_shows_ocr_warning(self) -> None:
+        db_path = self._db_path("diagnostics_scan_candidate_warning.db")
+        init_db(db_path)
+        save_document_extraction_audit(
+            source_name="Нормативные акты Краснодарского края",
+            source_url="https://admkrai.krasnodar.ru/content/1291/",
+            document_url="https://admkrai.krasnodar.ru/upload/scan.pdf",
+            attachment_url="https://admkrai.krasnodar.ru/upload/scan.pdf",
+            file_type="pdf",
+            extracted_type="pdf",
+            raw_text_length=50,
+            has_text=True,
+            scan_candidate=True,
+            needs_ocr=True,
+            page_count=6,
+            extraction_error=None,
+            db_path=db_path,
+        )
+
+        output = run_diagnostics(db_path=db_path, days=7)
+        self.assertIn("PDF fully extracted (text-layer ok): 0/1", output)
+        self.assertIn("требуется OCR для полного анализа", output)
+
+    def test_scan_candidate_for_visible_document_raises_priority_warning(self) -> None:
+        db_path = self._db_path("diagnostics_scan_candidate_visible_warning.db")
+        init_db(db_path)
+        save_document(
+            self._doc(
+                doc_id=99,
+                source_name="Нормативные акты Краснодарского края",
+                title="Приказ о поддержке",
+                action_level="requires_attention",
+                page_type="new_rule",
+            ).model_copy(update={"document_type": "pdf", "url": "https://admkrai.krasnodar.ru/upload/important-scan.pdf"}),
+            db_path,
+        )
+        save_document_extraction_audit(
+            source_name="Нормативные акты Краснодарского края",
+            source_url="https://admkrai.krasnodar.ru/content/1291/",
+            document_url="https://admkrai.krasnodar.ru/upload/important-scan.pdf",
+            attachment_url="https://admkrai.krasnodar.ru/upload/important-scan.pdf",
+            file_type="pdf",
+            extracted_type="pdf",
+            raw_text_length=0,
+            has_text=False,
+            scan_candidate=True,
+            needs_ocr=True,
+            page_count=5,
+            extraction_error=None,
+            db_path=db_path,
+        )
+
+        output = run_diagnostics(db_path=db_path, days=7)
+        self.assertIn("Priority warning: среди видимых документов есть PDF/вложения, требующие OCR (1).", output)
+
     def test_missing_raw_text_appears_in_extraction_audit(self) -> None:
         db_path = self._db_path("diagnostics_missing_text.db")
         init_db(db_path)
@@ -395,6 +450,29 @@ class DiagnosticsSmokeTest(unittest.TestCase):
         self.assertIn("PDF links found but not extracted", output)
         self.assertIn("Нормативные акты Краснодарского края", output)
 
+    def test_source_depth_uses_updated_listing_wording(self) -> None:
+        db_path = self._db_path("diagnostics_listing_wording.db")
+        init_db(db_path)
+        now = datetime.now(timezone.utc)
+        save_source_audit_record(
+            source_name="Правительство РФ - документы",
+            source_url="http://government.ru/docs/",
+            enabled=True,
+            attempted_at=now,
+            success_at=now,
+            error_at=None,
+            error_message=None,
+            fetched_count=2,
+            saved_count=0,
+            existing_count=2,
+            duplicates_count=0,
+            item_errors_count=0,
+            pdf_links_count=2,
+            db_path=db_path,
+        )
+        output = run_diagnostics(db_path=db_path, days=7)
+        self.assertIn("note=no new saves in this run (existing-heavy or listing-heavy)", output)
+
     def test_high_filtered_ratio_produces_warning(self) -> None:
         db_path = self._db_path("diagnostics_filtered_warning.db")
         init_db(db_path)
@@ -418,6 +496,28 @@ class DiagnosticsSmokeTest(unittest.TestCase):
         )
         output = run_diagnostics(db_path=db_path, days=7)
         self.assertIn("warning=high filtered ratio", output)
+
+    def test_source_access_error_is_reflected_as_coverage_warning(self) -> None:
+        db_path = self._db_path("diagnostics_source_access_warning.db")
+        init_db(db_path)
+        now = datetime.now(timezone.utc)
+        save_source_audit_record(
+            source_name="Минсельхоз Ростовской области - господдержка",
+            source_url="https://mcx.donland.ru/activity/35217/",
+            enabled=True,
+            attempted_at=now,
+            success_at=None,
+            error_at=now,
+            error_message="source access blocked (HTTP 403)",
+            fetched_count=0,
+            saved_count=0,
+            existing_count=0,
+            duplicates_count=0,
+            item_errors_count=0,
+            db_path=db_path,
+        )
+        output = run_diagnostics(db_path=db_path, days=7)
+        self.assertIn("warning=source access blocked", output)
 
 
 if __name__ == "__main__":

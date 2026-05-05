@@ -120,6 +120,23 @@ class DonlandSourceTest(unittest.TestCase):
 
         self.assertEqual(normalize_date_to_iso(items[0].published_at), "2026-04-29")
 
+    def test_pravo_donland_pdf_is_kept_even_with_generic_download_title(self) -> None:
+        source = self._source(
+            name="Право Ростовской области",
+            url="https://pravo.donland.ru/",
+            source_role="regional_npa",
+            region="rostov",
+        )
+        soup = BeautifulSoup(
+            '<a href="/files/prikaz-apk-2026.pdf">Скачать файл</a>',
+            "html.parser",
+        )
+        items = source._extract_items_from_soup(soup, source.config.url)
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].document_type, "pdf")
+        self.assertEqual(items[0].url, "https://pravo.donland.ru/files/prikaz-apk-2026.pdf")
+
     def test_mcx_donland_publication_date_is_not_confused_with_deadline(self) -> None:
         source = self._source(
             name="Минсельхоз Ростовской области - господдержка",

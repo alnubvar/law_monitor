@@ -103,7 +103,7 @@
   source_role: support_documents
   source_type: html_listing
   enabled: true
-  parser: generic_html
+  parser: donland
   verify_ssl: true
   request_timeout: 30
   request_headers:

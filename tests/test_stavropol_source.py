@@ -134,6 +134,23 @@ class StavropolSourceTest(unittest.TestCase):
 
         self.assertEqual(normalize_date_to_iso(items[0].published_at), "2026-04-29")
 
+    def test_pravo_stavregion_docx_is_kept_even_with_generic_download_title(self) -> None:
+        source = self._source(
+            name="Право Ставропольского края",
+            url="https://pravo.stavregion.ru/",
+            source_role="regional_npa",
+            region="stavropol",
+        )
+        soup = BeautifulSoup(
+            '<a href="/files/postanovlenie-apk.docx">Скачать</a>',
+            "html.parser",
+        )
+        items = source._extract_items_from_soup(soup, source.config.url)
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].document_type, "docx")
+        self.assertEqual(items[0].url, "https://pravo.stavregion.ru/files/postanovlenie-apk.docx")
+
 
 if __name__ == "__main__":
     unittest.main()

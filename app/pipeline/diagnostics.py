@@ -415,6 +415,8 @@ def format_source_coverage_audit(*, db_path: Path | str) -> str:
                 "fetched_count=0 | saved_count=0 | existing_count=0 | duplicates_count=0 | item_errors=0"
             )
             continue
+        warning = _source_access_warning_text(str(row.get("error_message") or ""))
+        warning_suffix = f" | warning={warning}" if warning else ""
         lines.append(
             f"- {source.name} | enabled={source.enabled} | url={source.url} | "
             f"last_attempt_at={_fmt_dt(row.get('attempted_at'))} | "
@@ -428,6 +430,7 @@ def format_source_coverage_audit(*, db_path: Path | str) -> str:
             f"item_errors={row.get('item_errors_count', 0)} | "
             f"links_found={row.get('links_found_count', 0)} | "
             f"links_filtered={row.get('links_filtered_count', 0)}"
+            f"{warning_suffix}"
         )
     return "\n".join(lines)
 
@@ -441,6 +444,14 @@ def format_document_extraction_quality_audit(*, db_path: Path | str, days: int =
 
     pdf_rows = [row for row in rows if (row.get("file_type") or row.get("extracted_type")) == "pdf"]
     pdf_with_text = sum(1 for row in pdf_rows if row.get("has_text"))
+    pdf_fully_extracted = sum(
+        1
+        for row in pdf_rows
+        if row.get("has_text")
+        and not row.get("scan_candidate")
+        and not row.get("needs_ocr")
+        and not row.get("extraction_error")
+    )
     pdf_scan_candidates = sum(1 for row in pdf_rows if row.get("scan_candidate"))
     docx_rows = [row for row in rows if (row.get("file_type") or row.get("extracted_type")) == "docx"]
     docx_with_text = sum(1 for row in docx_rows if row.get("has_text"))
@@ -461,13 +472,29 @@ def format_document_extraction_quality_audit(*, db_path: Path | str, days: int =
         reverse=True,
     )[:5]
     ocr_rows = [row for row in rows if row.get("scan_candidate") or row.get("needs_ocr")]
+    recent_documents = list_documents(db_path=db_path, days=days)
+    visible_urls = {
+        document.url
+        for document in recent_documents
+        if document.action_level in {"requires_attention", "watchlist"}
+    }
+    visible_ocr_rows = [
+        row for row in ocr_rows if str(row.get("document_url") or "") in visible_urls
+    ]
     lines.extend(
         [
             f"- PDF: total={len(pdf_rows)}; with_text={pdf_with_text}; scan_candidates={pdf_scan_candidates}",
+            f"- PDF fully extracted (text-layer ok): {pdf_fully_extracted}/{len(pdf_rows)}",
             f"- DOCX: total={len(docx_rows)}; with_text={docx_with_text}",
             f"- HTML/XML without text: {html_no_text}",
         ]
     )
+    if pdf_scan_candidates > 0:
+        lines.append("- Warning: Есть PDF без текстового слоя; требуется OCR для полного анализа.")
+    if visible_ocr_rows:
+        lines.append(
+            f"- Priority warning: среди видимых документов есть PDF/вложения, требующие OCR ({len(visible_ocr_rows)})."
+        )
     if top_missing:
         lines.append("- Top sources by missing raw_text:")
         for source_name, count in top_missing:
@@ -506,7 +533,7 @@ def format_source_depth_audit(*, db_path: Path | str, days: int = 7) -> str:
         unknown_count = int(row.get("unknown_links_count", 0))
         listing_only_note = ""
         if int(row.get("saved_count", 0)) == 0 and (pdf_count + docx_count + html_count + xml_count) > 0:
-            listing_only_note = "; note=possible listing/reference-only run"
+            listing_only_note = "; note=no new saves in this run (existing-heavy or listing-heavy)"
         links_found = int(row.get("links_found_count", 0))
         links_filtered = int(row.get("links_filtered_count", 0))
         filtered_ratio = (links_filtered / links_found) if links_found > 0 else 0.0
@@ -634,3 +661,28 @@ def _fmt_dt(value: datetime | None) -> str:
     if value is None:
         return "n/a"
     return value.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _source_access_warning_text(error_message: str) -> str | None:
+    normalized = (error_message or "").lower()
+    if not normalized:
+        return None
+    if "source access blocked" in normalized:
+        return "source access blocked"
+    if "403" in normalized and ("client error" in normalized or "forbidden" in normalized):
+        return "source access blocked"
+    if "429" in normalized and ("client error" in normalized or "too many requests" in normalized):
+        return "source rate-limited"
+    if "source temporary server error" in normalized:
+        return "source temporary server error"
+    if "500" in normalized and ("server error" in normalized or "internal server error" in normalized):
+        return "source temporary server error"
+    if "source timeout" in normalized:
+        return "source timeout"
+    if "timeout" in normalized:
+        return "source timeout"
+    if "source proxy/network error" in normalized or "source connection error" in normalized:
+        return "source network issue"
+    if "connectionpool" in normalized or "max retries exceeded" in normalized:
+        return "source network issue"
+    return None
