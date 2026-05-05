@@ -13,8 +13,7 @@ from app.config import load_sources
 from app.models import RawDocument
 from app.notify.telegram_formatter import build_digest_message
 from app.pipeline.diagnostics import build_diagnostics_snapshot
-from app.reports.markdown_report import generate_markdown_report
-from app.reports.markdown_report import select_visible_report_documents
+from app.reports.markdown_report import classify_display_section, select_visible_report_documents
 from app.storage import count_documents_by_action_level, init_db, list_documents, list_recent_documents
 
 logger = logging.getLogger(__name__)
@@ -308,14 +307,59 @@ def _build_report_message(db_path: Path | str) -> str:
         action_levels=["requires_attention", "watchlist"],
         include_market_background=False,
     )
-    report_text = generate_markdown_report(
-        visible_documents,
-        report_date=datetime.now().strftime("%Y-%m-%d"),
-        period_days=7,
-        relevant_only=False,
-        action_levels=["requires_attention", "watchlist"],
-    )
-    return _cap_message(report_text)
+    return _cap_message(_build_short_report_text(visible_documents))
+
+
+def _build_short_report_text(documents: Sequence[RawDocument]) -> str:
+    sections = {
+        "requires_attention": [],
+        "measures_and_selections": [],
+        "regional_npa": [],
+        "strategy_signals": [],
+        "news_signals": [],
+    }
+    for document in documents:
+        section = classify_display_section(document)
+        if section in {"active_support_measures", "support_documents"}:
+            section = "measures_and_selections"
+        if section in sections:
+            sections[section].append(document)
+
+    lines = [
+        "🧾 GR-сводка за 7 дней",
+        f"📊 Всего видимых материалов: {len(documents)}",
+        (
+            f"🚨 Требует внимания: {len(sections['requires_attention'])} | "
+            f"📢 Меры: {len(sections['measures_and_selections'])} | "
+            f"⚖️ Региональные изменения: {len(sections['regional_npa'])}"
+        ),
+        "",
+    ]
+    block_order = [
+        ("🚨 Требует внимания", sections["requires_attention"]),
+        ("📢 Меры и отборы", sections["measures_and_selections"]),
+        ("⚖️ Региональные изменения", sections["regional_npa"]),
+        ("🏛 Стратегические сигналы", sections["strategy_signals"]),
+        ("📰 Отраслевые сигналы", sections["news_signals"]),
+    ]
+    shown_blocks = 0
+    for title, section_documents in block_order:
+        if not section_documents:
+            continue
+        if shown_blocks >= 3:
+            break
+        shown_blocks += 1
+        lines.append(title)
+        for document in section_documents[:2]:
+            reason = (document.business_signal or document.impact or document.summary or "").strip()
+            lines.append(f"- {document.title[:150]}")
+            if reason:
+                lines.append(f"  Почему важно: {reason[:120]}")
+            lines.append(f"  Ссылка: {document.url}")
+        lines.append("")
+
+    lines.append("Полная версия во вложении .txt")
+    return "\n".join(lines).strip()
 
 
 def _build_sources_message(db_path: Path | str) -> str:

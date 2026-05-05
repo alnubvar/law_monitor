@@ -270,11 +270,12 @@ class TelegramNotifySmokeTest(unittest.TestCase):
     def test_report_command_does_not_show_local_report_path(self) -> None:
         text = telegram.build_command_response("/report")
 
-        self.assertIn("GR-дайджест", text)
+        self.assertIn("GR-сводка", text)
         self.assertNotIn("сервер", text.lower())
         self.assertNotIn("urgent:", text)
         self.assertNotIn("reports\\", text)
         self.assertNotIn("reports/", text)
+        self.assertNotIn("#", text)
 
     def test_watchlist_is_limited_for_user_and_has_tail_hint(self) -> None:
         db_path = self._db_path("telegram_watchlist_limit.db")

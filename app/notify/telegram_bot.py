@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -365,7 +366,8 @@ def _send_report_attachment(
     txt_report_path = report_path.with_suffix(".txt")
     created_txt_copy = False
     try:
-        txt_report_path.write_text(report_path.read_text(encoding="utf-8"), encoding="utf-8")
+        markdown_content = report_path.read_text(encoding="utf-8")
+        txt_report_path.write_text(_markdown_to_plain_text(markdown_content), encoding="utf-8")
         created_txt_copy = True
     except Exception:
         logger.exception("Failed to prepare .txt report copy from %s", report_path)
@@ -408,6 +410,20 @@ def _send_report_attachment(
                 txt_report_path.unlink(missing_ok=True)
             except Exception:
                 logger.warning("Failed to remove temporary txt report: %s", txt_report_path)
+
+
+def _markdown_to_plain_text(text: str) -> str:
+    lines: list[str] = []
+    for raw_line in text.splitlines():
+        line = re.sub(r"^\s*#{1,6}\s*", "", raw_line)
+        line = line.replace("### ", "")
+        line = line.replace("**", "")
+        line = line.replace("__", "")
+        line = re.sub(r"^\s*-\s+", "- ", line)
+        lines.append(line.rstrip())
+    normalized = "\n".join(lines)
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized).strip()
+    return normalized + "\n"
 
 
 def _call_telegram_api(

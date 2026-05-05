@@ -189,6 +189,14 @@ class TelegramBotTest(unittest.TestCase):
             str(send_response.call_args_list[-1]),
         )
 
+    def test_markdown_to_plain_text_removes_headings(self) -> None:
+        markdown = "# Заголовок\n\n## Блок\n### Пункт\n- строка\n"
+        plain = telegram_bot._markdown_to_plain_text(markdown)
+        self.assertNotIn("#", plain)
+        self.assertIn("Заголовок", plain)
+        self.assertIn("Блок", plain)
+        self.assertIn("Пункт", plain)
+
 
 if __name__ == "__main__":
     unittest.main()
