@@ -257,6 +257,15 @@ def init_db(db_path: Path | str = DB_PATH) -> None:
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                chat_id TEXT PRIMARY KEY,
+                default_period_days INTEGER NOT NULL DEFAULT 7,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
         connection.commit()
     logger.info("Database initialized at %s", db_path)
 
@@ -873,3 +882,114 @@ def get_runtime_event(
     payload = dict(row)
     payload["updated_at"] = _parse_dt(payload.get("updated_at"))
     return payload
+
+
+def set_user_default_period_days(
+    chat_id: str | int,
+    days: int,
+    *,
+    db_path: Path | str = DB_PATH,
+) -> None:
+    normalized_days = max(1, min(int(days), 365))
+    with _connect_db(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO user_preferences(chat_id, default_period_days, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(chat_id) DO UPDATE SET
+                default_period_days=excluded.default_period_days,
+                updated_at=excluded.updated_at
+            """,
+            (
+                str(chat_id),
+                normalized_days,
+                _serialize_dt(datetime.now(timezone.utc)),
+            ),
+        )
+        connection.commit()
+
+
+def get_user_default_period_days(
+    chat_id: str | int,
+    *,
+    db_path: Path | str = DB_PATH,
+    fallback: int = 7,
+) -> int:
+    with _connect_db(db_path) as connection:
+        row = connection.execute(
+            "SELECT default_period_days FROM user_preferences WHERE chat_id = ?",
+            (str(chat_id),),
+        ).fetchone()
+    if row is None:
+        return fallback
+    try:
+        value = int(row["default_period_days"])
+    except (TypeError, ValueError):
+        return fallback
+    return max(1, min(value, 365))
+
+
+def search_documents(
+    query: str,
+    *,
+    db_path: Path | str = DB_PATH,
+    limit: int = 5,
+) -> list[RawDocument]:
+    normalized = (query or "").strip()
+    if not normalized:
+        return []
+    pattern = f"%{normalized}%"
+    normalized_like = f"%{normalized.lower()}%"
+    safe_limit = max(1, min(int(limit), 20))
+    fetch_limit = max(20, safe_limit * 10)
+    with _connect_db(db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM documents
+            WHERE title LIKE ? COLLATE NOCASE
+               OR lower(title) LIKE ? COLLATE NOCASE
+               OR source_name LIKE ? COLLATE NOCASE
+               OR summary LIKE ? COLLATE NOCASE
+               OR raw_text LIKE ? COLLATE NOCASE
+            ORDER BY
+                CASE action_level
+                    WHEN 'requires_attention' THEN 1
+                    WHEN 'watchlist' THEN 2
+                    WHEN 'background' THEN 3
+                    WHEN 'irrelevant' THEN 4
+                    ELSE 5
+                END ASC,
+                CASE
+                    WHEN lower(title) = lower(?) THEN 1
+                    WHEN lower(title) LIKE lower(?) THEN 2
+                    WHEN summary LIKE ? COLLATE NOCASE THEN 3
+                    WHEN source_name LIKE ? COLLATE NOCASE THEN 4
+                    ELSE 5
+                END ASC,
+                COALESCE(published_at, collected_at) DESC,
+                collected_at DESC
+            LIMIT ?
+            """,
+            (
+                pattern,
+                normalized_like,
+                pattern,
+                pattern,
+                pattern,
+                normalized,
+                pattern,
+                pattern,
+                pattern,
+                fetch_limit,
+            ),
+        ).fetchall()
+    documents = [_row_to_document(row) for row in rows]
+    preferred = [
+        document for document in documents if document.action_level in {"requires_attention", "watchlist"}
+    ]
+    background = [document for document in documents if document.action_level == "background"]
+    ranked = preferred[:safe_limit]
+    if len(ranked) < safe_limit:
+        ranked.extend(background[: safe_limit - len(ranked)])
+    return ranked[:safe_limit]
