@@ -60,4 +60,5 @@ def extract_text_from_docx(
         raw_text=text,
         local_file_path=str(file_path),
         document_type="docx",
+        extracted_text_length=len(text.strip()),
     )

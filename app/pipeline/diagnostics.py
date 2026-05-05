@@ -2,12 +2,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import json
 from pathlib import Path
 from typing import Iterable
 
 from app.config import DB_PATH, get_source_role, load_sources
 from app.models import RawDocument
-from app.storage import backfill_missing_published_at, init_db, list_documents, list_latest_source_audit
+from app.storage import (
+    backfill_missing_published_at,
+    init_db,
+    list_documents,
+    list_latest_source_audit,
+    list_recent_document_extraction_audit,
+)
 
 NOISY_PAGE_TYPES = {
     "reference_page",
@@ -373,7 +380,26 @@ def run_diagnostics(
     snapshot.backfilled_count = backfilled_count
     diagnostics_text = format_diagnostics(snapshot)
     audit_text = format_source_coverage_audit(db_path=resolved_db_path)
-    return f"{diagnostics_text}\n\n{audit_text}".strip()
+    extraction_text = format_document_extraction_quality_audit(
+        db_path=resolved_db_path,
+        days=days or 7,
+    )
+    audit_gaps_text = format_pdf_docx_audit_gaps(
+        db_path=resolved_db_path,
+        days=days or 7,
+    )
+    depth_text = format_source_depth_audit(
+        db_path=resolved_db_path,
+        days=days or 7,
+    )
+    filtered_links_text = format_filtered_links_review(
+        db_path=resolved_db_path,
+        days=days or 7,
+    )
+    return (
+        f"{diagnostics_text}\n\n{audit_text}\n\n{extraction_text}\n\n"
+        f"{audit_gaps_text}\n\n{depth_text}\n\n{filtered_links_text}"
+    ).strip()
 
 
 def format_source_coverage_audit(*, db_path: Path | str) -> str:
@@ -399,8 +425,208 @@ def format_source_coverage_audit(*, db_path: Path | str) -> str:
             f"saved_count={row.get('saved_count', 0)} | "
             f"existing_count={row.get('existing_count', 0)} | "
             f"duplicates_count={row.get('duplicates_count', 0)} | "
-            f"item_errors={row.get('item_errors_count', 0)}"
+            f"item_errors={row.get('item_errors_count', 0)} | "
+            f"links_found={row.get('links_found_count', 0)} | "
+            f"links_filtered={row.get('links_filtered_count', 0)}"
         )
+    return "\n".join(lines)
+
+
+def format_document_extraction_quality_audit(*, db_path: Path | str, days: int = 7) -> str:
+    rows = list_recent_document_extraction_audit(db_path=db_path, days=days)
+    lines = [f"Document extraction quality (last {days} days):"]
+    if not rows:
+        lines.append("- no extraction records in the selected period.")
+        return "\n".join(lines)
+
+    pdf_rows = [row for row in rows if (row.get("file_type") or row.get("extracted_type")) == "pdf"]
+    pdf_with_text = sum(1 for row in pdf_rows if row.get("has_text"))
+    pdf_scan_candidates = sum(1 for row in pdf_rows if row.get("scan_candidate"))
+    docx_rows = [row for row in rows if (row.get("file_type") or row.get("extracted_type")) == "docx"]
+    docx_with_text = sum(1 for row in docx_rows if row.get("has_text"))
+    html_rows = [
+        row for row in rows
+        if (row.get("file_type") or row.get("extracted_type")) in {"html", "xml"}
+    ]
+    html_no_text = sum(1 for row in html_rows if not row.get("has_text"))
+    missing_text_by_source: dict[str, int] = {}
+    for row in rows:
+        if row.get("has_text"):
+            continue
+        source_name = str(row.get("source_name") or "unknown")
+        missing_text_by_source[source_name] = missing_text_by_source.get(source_name, 0) + 1
+    top_missing = sorted(
+        missing_text_by_source.items(),
+        key=lambda pair: pair[1],
+        reverse=True,
+    )[:5]
+    ocr_rows = [row for row in rows if row.get("scan_candidate") or row.get("needs_ocr")]
+    lines.extend(
+        [
+            f"- PDF: total={len(pdf_rows)}; with_text={pdf_with_text}; scan_candidates={pdf_scan_candidates}",
+            f"- DOCX: total={len(docx_rows)}; with_text={docx_with_text}",
+            f"- HTML/XML without text: {html_no_text}",
+        ]
+    )
+    if top_missing:
+        lines.append("- Top sources by missing raw_text:")
+        for source_name, count in top_missing:
+            lines.append(f"  - {source_name}: {count}")
+    else:
+        lines.append("- Top sources by missing raw_text: none")
+    if ocr_rows:
+        lines.append("- Documents requiring OCR:")
+        for row in ocr_rows[:10]:
+            lines.append(
+                "  - "
+                f"{row.get('source_name')} | {row.get('document_url')} | "
+                f"file_type={row.get('file_type')} | text_length={row.get('raw_text_length', 0)}"
+            )
+    else:
+        lines.append("- Documents requiring OCR: none")
+    return "\n".join(lines)
+
+
+def format_source_depth_audit(*, db_path: Path | str, days: int = 7) -> str:
+    rows = list_latest_source_audit(db_path=db_path)
+    by_name = {row["source_name"]: row for row in rows}
+    lines = [f"Source depth audit (last snapshot, diagnostics window {days} days):"]
+    for source in load_sources():
+        row = by_name.get(source.name)
+        if row is None:
+            lines.append(
+                f"- {source.name}: links_found=0; links_filtered=0; fetched=0; saved=0; "
+                "docs(pdf/docx/html/xml)=0/0/0/0; note=no audit snapshot"
+            )
+            continue
+        pdf_count = int(row.get("pdf_links_count", 0))
+        docx_count = int(row.get("docx_links_count", 0))
+        html_count = int(row.get("html_links_count", 0))
+        xml_count = int(row.get("xml_links_count", 0))
+        unknown_count = int(row.get("unknown_links_count", 0))
+        listing_only_note = ""
+        if int(row.get("saved_count", 0)) == 0 and (pdf_count + docx_count + html_count + xml_count) > 0:
+            listing_only_note = "; note=possible listing/reference-only run"
+        links_found = int(row.get("links_found_count", 0))
+        links_filtered = int(row.get("links_filtered_count", 0))
+        filtered_ratio = (links_filtered / links_found) if links_found > 0 else 0.0
+        filtered_warning = ""
+        if links_found > 0 and filtered_ratio >= 0.9 and int(row.get("fetched_count", 0)) <= 3:
+            filtered_warning = "; warning=high filtered ratio"
+        lines.append(
+            f"- {source.name}: links_found={links_found}; "
+            f"links_filtered={links_filtered}; "
+            f"fetched={int(row.get('fetched_count', 0))}; saved={int(row.get('saved_count', 0))}; "
+            f"docs(pdf/docx/html/xml)={pdf_count}/{docx_count}/{html_count}/{xml_count}; "
+            f"unknown={unknown_count}{listing_only_note}{filtered_warning}"
+        )
+    return "\n".join(lines)
+
+
+def format_pdf_docx_audit_gaps(*, db_path: Path | str, days: int = 7) -> str:
+    extraction_rows = list_recent_document_extraction_audit(db_path=db_path, days=days)
+    extraction_rows_all = list_recent_document_extraction_audit(db_path=db_path, days=None)
+    source_rows = list_latest_source_audit(db_path=db_path)
+    documents = list_documents(db_path=db_path, days=days)
+    lines = [f"PDF/DOCX audit gaps (last {days} days):"]
+
+    extracted_by_source_pdf: dict[str, int] = {}
+    for row in extraction_rows:
+        file_type = str(row.get("file_type") or row.get("extracted_type") or "")
+        if file_type != "pdf":
+            continue
+        source_name = str(row.get("source_name") or "unknown")
+        extracted_by_source_pdf[source_name] = extracted_by_source_pdf.get(source_name, 0) + 1
+
+    pdf_link_gaps: list[str] = []
+    for source_row in source_rows:
+        source_name = str(source_row.get("source_name") or "unknown")
+        pdf_links = int(source_row.get("pdf_links_count", 0))
+        if pdf_links <= 0:
+            continue
+        extracted_count = extracted_by_source_pdf.get(source_name, 0)
+        if extracted_count < pdf_links:
+            pdf_link_gaps.append(
+                f"{source_name}: PDF links found but not extracted ({pdf_links - extracted_count} gap, found={pdf_links}, extracted={extracted_count})"
+            )
+
+    audit_urls_all = {
+        str(row.get("document_url"))
+        for row in extraction_rows_all
+        if row.get("document_url")
+    }
+    pdf_existing_without_audit = [
+        document
+        for document in documents
+        if (document.document_type or "").lower() == "pdf" and document.url not in audit_urls_all
+    ]
+    docx_existing_without_audit = [
+        document
+        for document in documents
+        if (document.document_type or "").lower() == "docx" and document.url not in audit_urls_all
+    ]
+
+    if pdf_link_gaps:
+        lines.append("- PDF links found but not extracted:")
+        for entry in pdf_link_gaps[:10]:
+            lines.append(f"  - {entry}")
+    else:
+        lines.append("- PDF links found but not extracted: none")
+
+    if pdf_existing_without_audit:
+        lines.append(f"- PDF existing without extraction audit: {len(pdf_existing_without_audit)}")
+    else:
+        lines.append("- PDF existing without extraction audit: 0")
+    if docx_existing_without_audit:
+        lines.append(f"- DOCX existing without extraction audit: {len(docx_existing_without_audit)}")
+    else:
+        lines.append("- DOCX existing without extraction audit: 0")
+    return "\n".join(lines)
+
+
+def format_filtered_links_review(*, db_path: Path | str, days: int = 7) -> str:
+    rows = list_latest_source_audit(db_path=db_path)
+    by_name = {row["source_name"]: row for row in rows}
+    lines = [f"Filtered links review (last snapshot, diagnostics window {days} days):"]
+    for source in load_sources():
+        row = by_name.get(source.name)
+        if row is None:
+            lines.append(f"- {source.name}: no filtered-links snapshot")
+            continue
+        samples_raw = str(row.get("filtered_samples") or "").strip()
+        samples_payload: dict[str, list[str]] = {}
+        if samples_raw:
+            try:
+                parsed = json.loads(samples_raw)
+                if isinstance(parsed, dict):
+                    samples_payload = {
+                        str(key): [str(item) for item in value[:2]]
+                        for key, value in parsed.items()
+                        if isinstance(value, list)
+                    }
+            except json.JSONDecodeError:
+                samples_payload = {}
+        lines.append(
+            f"- {source.name}: "
+            f"navigation={int(row.get('navigation_filtered_count', 0))}; "
+            f"archive={int(row.get('archive_filtered_count', 0))}; "
+            f"external={int(row.get('external_filtered_count', 0))}; "
+            f"duplicate={int(row.get('duplicate_filtered_count', 0))}; "
+            f"unsupported={int(row.get('unsupported_filtered_count', 0))}; "
+            f"pdf_kept={int(row.get('pdf_links_count', 0))}; "
+            f"pdf_filtered={int(row.get('pdf_filtered_count', 0))}; "
+            f"docx_kept={int(row.get('docx_links_count', 0))}; "
+            f"docx_filtered={int(row.get('docx_filtered_count', 0))}"
+        )
+        if samples_payload:
+            sample_parts = []
+            for key in ("navigation", "archive", "external", "duplicate", "unsupported", "pdf_filtered", "docx_filtered"):
+                values = samples_payload.get(key) or []
+                if not values:
+                    continue
+                sample_parts.append(f"{key}: {', '.join(values)}")
+            if sample_parts:
+                lines.append(f"  samples: {' | '.join(sample_parts)}")
     return "\n".join(lines)
 
 

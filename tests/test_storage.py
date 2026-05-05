@@ -30,6 +30,8 @@ class StorageSmokeTest(unittest.TestCase):
             }
         self.assertIn("documents", tables)
         self.assertIn("source_errors", tables)
+        self.assertIn("source_audit", tables)
+        self.assertIn("document_extraction_audit", tables)
 
         with closing(sqlite3.connect(db_path)) as connection:
             columns = {

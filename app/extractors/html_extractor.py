@@ -94,6 +94,7 @@ def extract_text_from_html(
             raw_text=extracted.text,
             document_type="xml" if _is_xml_like(content_type) else "html",
             published_at=published_at_value,
+            extracted_text_length=len((extracted.text or "").strip()),
             error=None
             if extracted.content_quality == "good"
             else f"content_quality={extracted.content_quality}",
@@ -104,6 +105,7 @@ def extract_text_from_html(
             raw_text=extracted.text,
             document_type="xml" if _is_xml_like(content_type) else "html",
             published_at=published_at_value,
+            extracted_text_length=len((extracted.text or "").strip()),
             error=None
             if extracted.content_quality == "good"
             else f"content_quality={extracted.content_quality}",
@@ -128,4 +130,5 @@ def extract_text_from_html(
         raw_text=text,
         document_type="xml" if _is_xml_like(content_type) else "html",
         published_at=published_at_value,
+        extracted_text_length=len(text.strip()),
     )

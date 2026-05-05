@@ -163,12 +163,90 @@ def init_db(db_path: Path | str = DB_PATH) -> None:
                 saved_count INTEGER DEFAULT 0,
                 existing_count INTEGER DEFAULT 0,
                 duplicates_count INTEGER DEFAULT 0,
-                item_errors_count INTEGER DEFAULT 0
+                item_errors_count INTEGER DEFAULT 0,
+                links_found_count INTEGER DEFAULT 0,
+                links_filtered_count INTEGER DEFAULT 0,
+                pdf_links_count INTEGER DEFAULT 0,
+                docx_links_count INTEGER DEFAULT 0,
+                doc_links_count INTEGER DEFAULT 0,
+                html_links_count INTEGER DEFAULT 0,
+                xml_links_count INTEGER DEFAULT 0,
+                unknown_links_count INTEGER DEFAULT 0,
+                navigation_filtered_count INTEGER DEFAULT 0,
+                archive_filtered_count INTEGER DEFAULT 0,
+                external_filtered_count INTEGER DEFAULT 0,
+                duplicate_filtered_count INTEGER DEFAULT 0,
+                unsupported_filtered_count INTEGER DEFAULT 0,
+                pdf_filtered_count INTEGER DEFAULT 0,
+                docx_filtered_count INTEGER DEFAULT 0,
+                filtered_samples TEXT
             )
             """
         )
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_source_audit_source_attempted_at ON source_audit(source_name, attempted_at DESC)"
+        )
+        source_audit_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(source_audit)").fetchall()
+        }
+        if "links_found_count" not in source_audit_columns:
+            connection.execute("ALTER TABLE source_audit ADD COLUMN links_found_count INTEGER DEFAULT 0")
+        if "links_filtered_count" not in source_audit_columns:
+            connection.execute("ALTER TABLE source_audit ADD COLUMN links_filtered_count INTEGER DEFAULT 0")
+        if "pdf_links_count" not in source_audit_columns:
+            connection.execute("ALTER TABLE source_audit ADD COLUMN pdf_links_count INTEGER DEFAULT 0")
+        if "docx_links_count" not in source_audit_columns:
+            connection.execute("ALTER TABLE source_audit ADD COLUMN docx_links_count INTEGER DEFAULT 0")
+        if "doc_links_count" not in source_audit_columns:
+            connection.execute("ALTER TABLE source_audit ADD COLUMN doc_links_count INTEGER DEFAULT 0")
+        if "html_links_count" not in source_audit_columns:
+            connection.execute("ALTER TABLE source_audit ADD COLUMN html_links_count INTEGER DEFAULT 0")
+        if "xml_links_count" not in source_audit_columns:
+            connection.execute("ALTER TABLE source_audit ADD COLUMN xml_links_count INTEGER DEFAULT 0")
+        if "unknown_links_count" not in source_audit_columns:
+            connection.execute("ALTER TABLE source_audit ADD COLUMN unknown_links_count INTEGER DEFAULT 0")
+        if "navigation_filtered_count" not in source_audit_columns:
+            connection.execute("ALTER TABLE source_audit ADD COLUMN navigation_filtered_count INTEGER DEFAULT 0")
+        if "archive_filtered_count" not in source_audit_columns:
+            connection.execute("ALTER TABLE source_audit ADD COLUMN archive_filtered_count INTEGER DEFAULT 0")
+        if "external_filtered_count" not in source_audit_columns:
+            connection.execute("ALTER TABLE source_audit ADD COLUMN external_filtered_count INTEGER DEFAULT 0")
+        if "duplicate_filtered_count" not in source_audit_columns:
+            connection.execute("ALTER TABLE source_audit ADD COLUMN duplicate_filtered_count INTEGER DEFAULT 0")
+        if "unsupported_filtered_count" not in source_audit_columns:
+            connection.execute("ALTER TABLE source_audit ADD COLUMN unsupported_filtered_count INTEGER DEFAULT 0")
+        if "pdf_filtered_count" not in source_audit_columns:
+            connection.execute("ALTER TABLE source_audit ADD COLUMN pdf_filtered_count INTEGER DEFAULT 0")
+        if "docx_filtered_count" not in source_audit_columns:
+            connection.execute("ALTER TABLE source_audit ADD COLUMN docx_filtered_count INTEGER DEFAULT 0")
+        if "filtered_samples" not in source_audit_columns:
+            connection.execute("ALTER TABLE source_audit ADD COLUMN filtered_samples TEXT")
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS document_extraction_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_name TEXT NOT NULL,
+                source_url TEXT NOT NULL,
+                document_url TEXT NOT NULL,
+                attachment_url TEXT,
+                file_type TEXT,
+                extracted_type TEXT,
+                raw_text_length INTEGER DEFAULT 0,
+                has_text INTEGER DEFAULT 0,
+                scan_candidate INTEGER DEFAULT 0,
+                needs_ocr INTEGER DEFAULT 0,
+                page_count INTEGER,
+                extraction_error TEXT,
+                collected_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_document_extraction_audit_collected_at ON document_extraction_audit(collected_at)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_document_extraction_audit_source ON document_extraction_audit(source_name, collected_at DESC)"
         )
         connection.execute(
             """
@@ -585,6 +663,22 @@ def save_source_audit_record(
     existing_count: int,
     duplicates_count: int,
     item_errors_count: int,
+    links_found_count: int = 0,
+    links_filtered_count: int = 0,
+    pdf_links_count: int = 0,
+    docx_links_count: int = 0,
+    doc_links_count: int = 0,
+    html_links_count: int = 0,
+    xml_links_count: int = 0,
+    unknown_links_count: int = 0,
+    navigation_filtered_count: int = 0,
+    archive_filtered_count: int = 0,
+    external_filtered_count: int = 0,
+    duplicate_filtered_count: int = 0,
+    unsupported_filtered_count: int = 0,
+    pdf_filtered_count: int = 0,
+    docx_filtered_count: int = 0,
+    filtered_samples: str | None = None,
     db_path: Path | str = DB_PATH,
 ) -> int:
     with _connect_db(db_path) as connection:
@@ -592,8 +686,13 @@ def save_source_audit_record(
             """
             INSERT INTO source_audit (
                 source_name, source_url, enabled, attempted_at, success_at, error_at, error_message,
-                fetched_count, saved_count, existing_count, duplicates_count, item_errors_count
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                fetched_count, saved_count, existing_count, duplicates_count, item_errors_count,
+                links_found_count, links_filtered_count, pdf_links_count, docx_links_count, doc_links_count,
+                html_links_count, xml_links_count, unknown_links_count,
+                navigation_filtered_count, archive_filtered_count, external_filtered_count,
+                duplicate_filtered_count, unsupported_filtered_count, pdf_filtered_count, docx_filtered_count,
+                filtered_samples
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 source_name,
@@ -608,6 +707,22 @@ def save_source_audit_record(
                 existing_count,
                 duplicates_count,
                 item_errors_count,
+                links_found_count,
+                links_filtered_count,
+                pdf_links_count,
+                docx_links_count,
+                doc_links_count,
+                html_links_count,
+                xml_links_count,
+                unknown_links_count,
+                navigation_filtered_count,
+                archive_filtered_count,
+                external_filtered_count,
+                duplicate_filtered_count,
+                unsupported_filtered_count,
+                pdf_filtered_count,
+                docx_filtered_count,
+                filtered_samples,
             ),
         )
         connection.commit()
@@ -641,6 +756,85 @@ def list_latest_source_audit(
         payload["enabled"] = bool(payload.get("enabled"))
         results.append(payload)
     return results
+
+
+def save_document_extraction_audit(
+    *,
+    source_name: str,
+    source_url: str,
+    document_url: str,
+    attachment_url: str | None,
+    file_type: str,
+    extracted_type: str,
+    raw_text_length: int,
+    has_text: bool,
+    scan_candidate: bool,
+    needs_ocr: bool,
+    page_count: int | None,
+    extraction_error: str | None,
+    collected_at: datetime | None = None,
+    db_path: Path | str = DB_PATH,
+) -> int:
+    with _connect_db(db_path) as connection:
+        cursor = connection.execute(
+            """
+            INSERT INTO document_extraction_audit (
+                source_name, source_url, document_url, attachment_url, file_type, extracted_type,
+                raw_text_length, has_text, scan_candidate, needs_ocr, page_count, extraction_error, collected_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                source_name,
+                source_url,
+                document_url,
+                attachment_url,
+                file_type,
+                extracted_type,
+                raw_text_length,
+                int(has_text),
+                int(scan_candidate),
+                int(needs_ocr),
+                page_count,
+                extraction_error,
+                _serialize_dt(collected_at or datetime.now(timezone.utc)),
+            ),
+        )
+        connection.commit()
+        return int(cursor.lastrowid)
+
+
+def list_recent_document_extraction_audit(
+    *,
+    days: int | None = 7,
+    db_path: Path | str = DB_PATH,
+) -> list[dict[str, Any]]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days or 0) if days is not None else None
+    with _connect_db(db_path) as connection:
+        if cutoff is None:
+            rows = connection.execute(
+                """
+                SELECT * FROM document_extraction_audit
+                ORDER BY collected_at DESC, source_name ASC
+                """
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                """
+                SELECT * FROM document_extraction_audit
+                WHERE collected_at >= ?
+                ORDER BY collected_at DESC, source_name ASC
+                """,
+                (_serialize_dt(cutoff),),
+            ).fetchall()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        payload = dict(row)
+        payload["has_text"] = bool(payload.get("has_text"))
+        payload["scan_candidate"] = bool(payload.get("scan_candidate"))
+        payload["needs_ocr"] = bool(payload.get("needs_ocr"))
+        payload["collected_at"] = _parse_dt(payload.get("collected_at"))
+        result.append(payload)
+    return result
 
 
 def mark_runtime_event(

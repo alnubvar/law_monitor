@@ -5,7 +5,7 @@ from collections.abc import Mapping
 
 from requests import RequestException
 
-from app.config import ensure_directories, load_sources
+from app.config import DB_PATH, ensure_directories, load_sources
 from app.extractors.docx_extractor import extract_text_from_docx
 from app.extractors.html_extractor import extract_text_from_html
 from app.extractors.ocr_extractor import extract_text_with_ocr
@@ -26,6 +26,7 @@ from app.storage import (
     document_exists_by_url,
     init_db,
     mark_runtime_event,
+    save_document_extraction_audit,
     save_source_audit_record,
     save_source_error,
     save_document,
@@ -112,9 +113,51 @@ def _should_log_progress(index: int, total_items: int) -> bool:
     return index % PROGRESS_LOG_EVERY == 0
 
 
+def _is_scan_candidate(
+    *,
+    file_type: str,
+    extracted: ExtractionResult,
+) -> bool:
+    normalized_type = (file_type or extracted.document_type or "").lower()
+    if normalized_type != "pdf":
+        return False
+    raw_text_length = extracted.extracted_text_length
+    if raw_text_length is None:
+        raw_text_length = len((extracted.raw_text or "").strip())
+    if raw_text_length == 0:
+        return True
+    if extracted.needs_ocr:
+        return True
+    page_count = extracted.page_count or 0
+    if page_count >= 3 and raw_text_length < page_count * 120:
+        return True
+    return False
+
+
+def _attachment_url_for_item(item: CollectedItem) -> str | None:
+    if item.document_type in {"pdf", "doc", "docx"}:
+        return item.url
+    return None
+
+
 def run_collect(source_name: str | None = None, limit: int | None = None) -> int:
+    return run_collect_with_options(
+        source_name=source_name,
+        limit=limit,
+        audit_existing=False,
+    )
+
+
+def run_collect_with_options(
+    source_name: str | None = None,
+    limit: int | None = None,
+    *,
+    audit_existing: bool = False,
+    db_path: str | None = None,
+) -> int:
     ensure_directories()
-    init_db()
+    resolved_db_path = db_path or DB_PATH
+    init_db(resolved_db_path)
     sources = [source for source in load_sources() if source.enabled]
     if source_name:
         sources = [source for source in sources if source.name == source_name]
@@ -125,14 +168,14 @@ def run_collect(source_name: str | None = None, limit: int | None = None) -> int
 
     for source_config in sources:
         logger.info("Collecting from source: %s", source_config.name)
-        clear_source_errors(source_name=source_config.name)
+        clear_source_errors(source_name=source_config.name, db_path=resolved_db_path)
         attempted_at = datetime.now(timezone.utc)
         try:
             source = create_source(source_config)
             items = source.fetch_items()
         except RequestException as exc:
             logger.warning("Source collection failed for %s: %s", source_config.name, exc)
-            save_source_error(source_config.name, source_config.url, str(exc))
+            save_source_error(source_config.name, source_config.url, str(exc), db_path=resolved_db_path)
             save_source_audit_record(
                 source_name=source_config.name,
                 source_url=source_config.url,
@@ -146,11 +189,12 @@ def run_collect(source_name: str | None = None, limit: int | None = None) -> int
                 existing_count=0,
                 duplicates_count=0,
                 item_errors_count=0,
+                db_path=resolved_db_path,
             )
             continue
         except Exception as exc:
             logger.exception("Source collection failed for %s: %s", source_config.name, exc)
-            save_source_error(source_config.name, source_config.url, str(exc))
+            save_source_error(source_config.name, source_config.url, str(exc), db_path=resolved_db_path)
             save_source_audit_record(
                 source_name=source_config.name,
                 source_url=source_config.url,
@@ -164,6 +208,7 @@ def run_collect(source_name: str | None = None, limit: int | None = None) -> int
                 existing_count=0,
                 duplicates_count=0,
                 item_errors_count=0,
+                db_path=resolved_db_path,
             )
             continue
 
@@ -176,6 +221,7 @@ def run_collect(source_name: str | None = None, limit: int | None = None) -> int
         source_skipped_duplicates = 0
         source_errors = 0
         total_items = len(items)
+        fetch_stats = getattr(source, "last_fetch_stats", {}) if "source" in locals() else {}
 
         for index, item in enumerate(items, start=1):
             if _should_log_progress(index, total_items):
@@ -186,21 +232,64 @@ def run_collect(source_name: str | None = None, limit: int | None = None) -> int
                     total_items,
                 )
             try:
-                if document_exists_by_url(item.url):
+                if document_exists_by_url(item.url, db_path=resolved_db_path):
                     if item.published_at is not None:
                         update_document_published_at_by_url(
                             item.url,
                             item.published_at,
+                            db_path=resolved_db_path,
+                        )
+                    if audit_existing:
+                        extracted = extract_document(item, source_config)
+                        raw_text_length = extracted.extracted_text_length
+                        if raw_text_length is None:
+                            raw_text_length = len((extracted.raw_text or "").strip())
+                        has_text = raw_text_length > 0
+                        scan_candidate = _is_scan_candidate(file_type=item.document_type, extracted=extracted)
+                        save_document_extraction_audit(
+                            source_name=item.source_name,
+                            source_url=item.source_url,
+                            document_url=item.url,
+                            attachment_url=_attachment_url_for_item(item),
+                            file_type=item.document_type,
+                            extracted_type=extracted.document_type or item.document_type,
+                            raw_text_length=raw_text_length,
+                            has_text=has_text,
+                            scan_candidate=scan_candidate,
+                            needs_ocr=bool(extracted.needs_ocr),
+                            page_count=extracted.page_count,
+                            extraction_error=extracted.error,
+                            db_path=resolved_db_path,
                         )
                     logger.debug("Skip existing URL: %s", item.url)
                     source_skipped_existing += 1
                     continue
 
                 extracted = extract_document(item, source_config)
+                raw_text_length = extracted.extracted_text_length
+                if raw_text_length is None:
+                    raw_text_length = len((extracted.raw_text or "").strip())
+                has_text = raw_text_length > 0
+                scan_candidate = _is_scan_candidate(file_type=item.document_type, extracted=extracted)
+                save_document_extraction_audit(
+                    source_name=item.source_name,
+                    source_url=item.source_url,
+                    document_url=item.url,
+                    attachment_url=_attachment_url_for_item(item),
+                    file_type=item.document_type,
+                    extracted_type=extracted.document_type or item.document_type,
+                    raw_text_length=raw_text_length,
+                    has_text=has_text,
+                    scan_candidate=scan_candidate,
+                    needs_ocr=bool(extracted.needs_ocr),
+                    page_count=extracted.page_count,
+                    extraction_error=extracted.error,
+                    db_path=resolved_db_path,
+                )
                 content_hash = compute_content_hash(
                     extracted.raw_text, fallback=f"{item.title}\n{item.url}"
                 )
-                if document_exists_by_hash(content_hash):
+                if document_exists_by_hash(content_hash, db_path=resolved_db_path):
                     logger.info("Skip duplicate content: %s", item.url)
                     source_skipped_duplicates += 1
                     continue
@@ -220,7 +309,7 @@ def run_collect(source_name: str | None = None, limit: int | None = None) -> int
                     status="collected" if not extracted.error else "collected_with_warning",
                     error=extracted.error,
                 )
-                save_document(document)
+                save_document(document, db_path=resolved_db_path)
                 saved_count += 1
                 source_saved += 1
             except RequestException as exc:
@@ -231,6 +320,21 @@ def run_collect(source_name: str | None = None, limit: int | None = None) -> int
                     item.url,
                     exc,
                 )
+                save_document_extraction_audit(
+                    source_name=item.source_name,
+                    source_url=item.source_url,
+                    document_url=item.url,
+                    attachment_url=_attachment_url_for_item(item),
+                    file_type=item.document_type,
+                    extracted_type=item.document_type,
+                    raw_text_length=0,
+                    has_text=False,
+                    scan_candidate=False,
+                    needs_ocr=False,
+                    page_count=None,
+                    extraction_error=str(exc),
+                    db_path=resolved_db_path,
+                )
                 continue
             except Exception as exc:
                 source_errors += 1
@@ -240,6 +344,21 @@ def run_collect(source_name: str | None = None, limit: int | None = None) -> int
                     item.url,
                     exc,
                 )
+                save_document_extraction_audit(
+                    source_name=item.source_name,
+                    source_url=item.source_url,
+                    document_url=item.url,
+                    attachment_url=_attachment_url_for_item(item),
+                    file_type=item.document_type,
+                    extracted_type=item.document_type,
+                    raw_text_length=0,
+                    has_text=False,
+                    scan_candidate=False,
+                    needs_ocr=False,
+                    page_count=None,
+                    extraction_error=str(exc),
+                    db_path=resolved_db_path,
+                )
                 continue
 
         if source_errors > 0:
@@ -247,6 +366,7 @@ def run_collect(source_name: str | None = None, limit: int | None = None) -> int
                 source_config.name,
                 source_config.url,
                 f"Item processing errors: {source_errors}",
+                db_path=resolved_db_path,
             )
         save_source_audit_record(
             source_name=source_config.name,
@@ -261,6 +381,23 @@ def run_collect(source_name: str | None = None, limit: int | None = None) -> int
             existing_count=source_skipped_existing,
             duplicates_count=source_skipped_duplicates,
             item_errors_count=source_errors,
+            links_found_count=int(fetch_stats.get("links_found_count", total_items)),
+            links_filtered_count=int(fetch_stats.get("links_filtered_count", 0)),
+            pdf_links_count=int(fetch_stats.get("pdf_links_count", 0)),
+            docx_links_count=int(fetch_stats.get("docx_links_count", 0)),
+            doc_links_count=int(fetch_stats.get("doc_links_count", 0)),
+            html_links_count=int(fetch_stats.get("html_links_count", 0)),
+            xml_links_count=int(fetch_stats.get("xml_links_count", 0)),
+            unknown_links_count=int(fetch_stats.get("unknown_links_count", 0)),
+            navigation_filtered_count=int(fetch_stats.get("navigation_filtered_count", 0)),
+            archive_filtered_count=int(fetch_stats.get("archive_filtered_count", 0)),
+            external_filtered_count=int(fetch_stats.get("external_filtered_count", 0)),
+            duplicate_filtered_count=int(fetch_stats.get("duplicate_filtered_count", 0)),
+            unsupported_filtered_count=int(fetch_stats.get("unsupported_filtered_count", 0)),
+            pdf_filtered_count=int(fetch_stats.get("pdf_filtered_count", 0)),
+            docx_filtered_count=int(fetch_stats.get("docx_filtered_count", 0)),
+            filtered_samples=str(fetch_stats.get("filtered_samples", "")),
+            db_path=resolved_db_path,
         )
         logger.info(
             "Source finished [%s]: total=%s, saved=%s, existing=%s, duplicates=%s, errors=%s",
@@ -273,5 +410,5 @@ def run_collect(source_name: str | None = None, limit: int | None = None) -> int
         )
 
     logger.info("Collection completed. Saved %s new documents.", saved_count)
-    mark_runtime_event("collect", details=f"saved={saved_count}")
+    mark_runtime_event("collect", details=f"saved={saved_count}", db_path=resolved_db_path)
     return saved_count

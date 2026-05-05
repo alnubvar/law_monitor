@@ -7,7 +7,7 @@ from app.config import setup_logging
 from app.notify.telegram import get_diagnostic_status
 from app.notify.telegram_bot import run_polling_listener
 from app.pipeline.analyze import run_analyze
-from app.pipeline.collect import run_collect
+from app.pipeline.collect import run_collect_with_options
 from app.pipeline.diagnostics import run_diagnostics
 from app.pipeline.digest import run_demo_report, run_digest
 from app.pipeline.run import run_pipeline
@@ -33,6 +33,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Собрать документы только для одного источника по точному name.",
     )
     collect_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Ограничить количество документов на источник в текущем запуске.",
+    )
+    collect_parser.add_argument(
+        "--audit-existing",
+        action="store_true",
+        help="Переизвлекать existing документы для покрытия extraction audit без вставки дублей.",
+    )
+    audit_extraction_parser = subparsers.add_parser(
+        "audit-extraction",
+        help="Переобход existing/new документов для extraction quality audit без изменения action-level.",
+    )
+    audit_extraction_parser.add_argument(
+        "--source",
+        type=str,
+        default=None,
+        help="Переобход только одного источника по точному name.",
+    )
+    audit_extraction_parser.add_argument(
         "--limit",
         type=int,
         default=None,
@@ -228,8 +249,21 @@ def main() -> int:
         return 0
 
     if args.command == "collect":
-        count = run_collect(source_name=args.source, limit=args.limit)
+        count = run_collect_with_options(
+            source_name=args.source,
+            limit=args.limit,
+            audit_existing=args.audit_existing,
+        )
         print(f"Collected {count} new documents.")
+        return 0
+
+    if args.command == "audit-extraction":
+        count = run_collect_with_options(
+            source_name=args.source,
+            limit=args.limit,
+            audit_existing=True,
+        )
+        print(f"Extraction audit completed. New documents inserted: {count}.")
         return 0
 
     if args.command == "analyze":

@@ -5,10 +5,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.models import RawDocument
+from app.pipeline.collect import _is_scan_candidate
 from app.pipeline.diagnostics import run_diagnostics
 from app.pipeline.digest import run_demo_report
 from unittest.mock import patch
-from app.storage import init_db, save_document
+from app.storage import init_db, save_document, save_document_extraction_audit, save_source_audit_record
+from app.models import ExtractionResult
 
 
 class DiagnosticsSmokeTest(unittest.TestCase):
@@ -279,6 +281,143 @@ class DiagnosticsSmokeTest(unittest.TestCase):
             output = run_diagnostics(db_path=db_path, days=7)
         self.assertIn("Source coverage audit:", output)
         self.assertIn("last_error_message=timeout", output)
+
+    def test_text_pdf_is_not_scan_candidate(self) -> None:
+        extracted = ExtractionResult(
+            raw_text="Текст документа " * 120,
+            document_type="pdf",
+            needs_ocr=False,
+            page_count=4,
+            extracted_text_length=1600,
+        )
+        self.assertFalse(_is_scan_candidate(file_type="pdf", extracted=extracted))
+
+    def test_empty_pdf_is_scan_candidate(self) -> None:
+        extracted = ExtractionResult(
+            raw_text="",
+            document_type="pdf",
+            needs_ocr=True,
+            page_count=5,
+            extracted_text_length=0,
+        )
+        self.assertTrue(_is_scan_candidate(file_type="pdf", extracted=extracted))
+
+    def test_diagnostics_includes_extraction_quality_block_and_docx_success(self) -> None:
+        db_path = self._db_path("diagnostics_extraction_quality.db")
+        init_db(db_path)
+        save_document_extraction_audit(
+            source_name="Право Ростовской области",
+            source_url="https://pravo.donland.ru/",
+            document_url="https://pravo.donland.ru/files/postanovlenie.docx",
+            attachment_url="https://pravo.donland.ru/files/postanovlenie.docx",
+            file_type="docx",
+            extracted_type="docx",
+            raw_text_length=1200,
+            has_text=True,
+            scan_candidate=False,
+            needs_ocr=False,
+            page_count=None,
+            extraction_error=None,
+            db_path=db_path,
+        )
+        output = run_diagnostics(db_path=db_path, days=7)
+        self.assertIn("Document extraction quality", output)
+        self.assertIn("DOCX: total=1; with_text=1", output)
+
+    def test_missing_raw_text_appears_in_extraction_audit(self) -> None:
+        db_path = self._db_path("diagnostics_missing_text.db")
+        init_db(db_path)
+        save_document_extraction_audit(
+            source_name="Минсельхоз Ростовской области - господдержка",
+            source_url="https://mcx.donland.ru/activity/35217/",
+            document_url="https://mcx.donland.ru/activity/35217/",
+            attachment_url=None,
+            file_type="html",
+            extracted_type="html",
+            raw_text_length=0,
+            has_text=False,
+            scan_candidate=False,
+            needs_ocr=False,
+            page_count=None,
+            extraction_error="empty",
+            db_path=db_path,
+        )
+        output = run_diagnostics(db_path=db_path, days=7)
+        self.assertIn("Top sources by missing raw_text:", output)
+        self.assertIn("Минсельхоз Ростовской области - господдержка: 1", output)
+
+    def test_source_depth_stats_do_not_break_empty_db(self) -> None:
+        db_path = self._db_path("diagnostics_source_depth_empty.db")
+        init_db(db_path)
+        output = run_diagnostics(db_path=db_path, days=7)
+        self.assertIn("Source depth audit", output)
+
+    def test_existing_pdf_without_extraction_audit_is_reported_as_gap(self) -> None:
+        db_path = self._db_path("diagnostics_pdf_gap.db")
+        init_db(db_path)
+        save_document(
+            self._doc(
+                doc_id=10,
+                source_name="Нормативные акты Краснодарского края",
+                title="Приказ о субсидии",
+                action_level="watchlist",
+                page_type="new_rule",
+                raw_text="Текст",
+            ).model_copy(update={"document_type": "pdf", "url": "https://example.com/a.pdf"}),
+            db_path,
+        )
+        output = run_diagnostics(db_path=db_path, days=7)
+        self.assertIn("PDF existing without extraction audit: 1", output)
+
+    def test_pdf_link_found_but_not_extracted_is_reported(self) -> None:
+        db_path = self._db_path("diagnostics_pdf_links_gap.db")
+        init_db(db_path)
+        now = datetime.now(timezone.utc)
+        save_source_audit_record(
+            source_name="Нормативные акты Краснодарского края",
+            source_url="https://admkrai.krasnodar.ru/content/1291/",
+            enabled=True,
+            attempted_at=now,
+            success_at=now,
+            error_at=None,
+            error_message=None,
+            fetched_count=3,
+            saved_count=0,
+            existing_count=0,
+            duplicates_count=0,
+            item_errors_count=0,
+            links_found_count=10,
+            links_filtered_count=7,
+            pdf_links_count=3,
+            db_path=db_path,
+        )
+        output = run_diagnostics(db_path=db_path, days=7)
+        self.assertIn("PDF links found but not extracted", output)
+        self.assertIn("Нормативные акты Краснодарского края", output)
+
+    def test_high_filtered_ratio_produces_warning(self) -> None:
+        db_path = self._db_path("diagnostics_filtered_warning.db")
+        init_db(db_path)
+        now = datetime.now(timezone.utc)
+        save_source_audit_record(
+            source_name="Правительство РФ - документы",
+            source_url="http://government.ru/docs/",
+            enabled=True,
+            attempted_at=now,
+            success_at=now,
+            error_at=None,
+            error_message=None,
+            fetched_count=2,
+            saved_count=0,
+            existing_count=0,
+            duplicates_count=0,
+            item_errors_count=0,
+            links_found_count=100,
+            links_filtered_count=95,
+            db_path=db_path,
+        )
+        output = run_diagnostics(db_path=db_path, days=7)
+        self.assertIn("warning=high filtered ratio", output)
 
 
 if __name__ == "__main__":

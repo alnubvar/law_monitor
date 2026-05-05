@@ -51,6 +51,7 @@ def extract_text_from_pdf(
 
     text_parts: list[str] = []
     with fitz.open(stream=response.content, filetype="pdf") as pdf:
+        page_count = len(pdf)
         for page in pdf:
             text_parts.append(page.get_text("text"))
     text = "\n".join(part.strip() for part in text_parts if part.strip())
@@ -67,4 +68,6 @@ def extract_text_from_pdf(
         local_file_path=str(file_path),
         document_type="pdf",
         needs_ocr=needs_ocr,
+        page_count=page_count,
+        extracted_text_length=len(text.strip()),
     )

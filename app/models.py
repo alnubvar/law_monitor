@@ -72,6 +72,8 @@ class ExtractionResult(BaseModel):
     document_type: str = "unknown"
     published_at: datetime | None = None
     needs_ocr: bool = False
+    page_count: int | None = None
+    extracted_text_length: int | None = None
     error: str | None = None
 
 

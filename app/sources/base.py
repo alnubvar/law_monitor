@@ -21,6 +21,7 @@ class BaseSource(ABC):
     def __init__(self, config: SourceConfig):
         self.config = config
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        self.last_fetch_stats: dict[str, int] = {}
         self.session = requests.Session()
         self.session.headers.update(DEFAULT_REQUEST_HEADERS)
         self.session.headers.update(config.request_headers)
