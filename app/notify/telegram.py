@@ -20,7 +20,15 @@ logger = logging.getLogger(__name__)
 
 TELEGRAM_SEND_ATTEMPTS = 3
 TELEGRAM_RETRY_BACKOFF_SECONDS = 1.0
-TELEGRAM_COMMANDS = ("/status", "/today", "/urgent", "/watchlist", "/report", "/sources", "/help")
+TELEGRAM_COMMANDS = (
+    "/status",
+    "/today",
+    "/urgent",
+    "/watchlist",
+    "/report",
+    "/sources",
+    "/help",
+)
 TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 TELEGRAM_SAFE_MESSAGE_LENGTH = 3900
 TELEGRAM_LIST_LIMIT = 10
@@ -314,6 +322,7 @@ def _build_help_message() -> str:
     return _cap_message("\n".join(
         [
             "🤖 AHSTEP GR-monitoring команды:",
+            "/start — открыть меню GR-монитора",
             "/status — состояние системы и счетчики",
             "/today — видимые документы за сегодня",
             "/urgent — срочные документы (requires_attention)",

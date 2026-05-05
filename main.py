@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.config import setup_logging
 from app.notify.telegram import get_diagnostic_status
+from app.notify.telegram_bot import run_polling_listener
 from app.pipeline.analyze import run_analyze
 from app.pipeline.collect import run_collect
 from app.pipeline.diagnostics import run_diagnostics
@@ -201,6 +202,10 @@ def build_parser() -> argparse.ArgumentParser:
         "telegram-check",
         help="Проверить Telegram-конфиг и отправить тестовое сообщение.",
     )
+    subparsers.add_parser(
+        "run-telegram-bot",
+        help="Запустить polling listener для интерактивного Telegram-бота.",
+    )
 
     return parser
 
@@ -297,6 +302,10 @@ def main() -> int:
         _print_telegram_diagnostics(sent=sent)
         if not sent:
             print("Details: Telegram config is incomplete or delivery failed.")
+        return 0
+
+    if args.command == "run-telegram-bot":
+        run_polling_listener()
         return 0
 
     parser.print_help()

@@ -7,6 +7,7 @@ Production-like MVP для GR-мониторинга НПА, мер поддер
 ## Current MVP Status
 
 - `collect / analyze / report / notify / scheduler` работают;
+- `interactive Telegram bot` (polling + commands + reply keyboard) добавлен;
 - rule-based `document facts` внедрены;
 - `action_level` стабилизирован до ограниченного набора реальных GR-сигналов;
 - hourly alert и daily digest работают раздельно;
@@ -120,6 +121,7 @@ python main.py diagnostics --days 7
 
 Команды в Telegram:
 
+- `/start` — открыть меню GR-монитора;
 - `/help` — список команд;
 - `/today` — visible документы за сегодня;
 - `/urgent` — срочные документы (`requires_attention`);
@@ -176,6 +178,7 @@ python main.py diagnostics
 python main.py report --days 7 --action-level requires_attention watchlist --max-items 30
 python main.py demo-report
 python main.py run-scheduler --once
+python main.py run-telegram-bot
 python main.py telegram-check
 python main.py notify-test
 python -m unittest discover -s tests -v
@@ -200,6 +203,11 @@ python -m unittest discover -s tests -v
 
 Рекомендуемый текущий MVP-вариант: Windows host + SQLite + Task Scheduler + регулярный `run-scheduler --once`.
 
+Для production с интерактивным Telegram UX обычно запускаются 2 процесса:
+
+1. `python main.py run-scheduler`
+2. `python main.py run-telegram-bot`
+
 ## Production Checklist (Short)
 
 1. Подготовить env: заполнить `.env` (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, опционально `TELEGRAM_PROXY_URL`).
@@ -210,6 +218,7 @@ python -m unittest discover -s tests -v
    `python main.py report --days 7 --action-level requires_attention watchlist --max-items 25`
 5. Проверить Telegram доставку: `python main.py telegram-check`.
 6. Включить scheduler: `python main.py run-scheduler --once` (через Task Scheduler по расписанию).
+7. Запустить Telegram command listener: `python main.py run-telegram-bot`.
 
 ## Demo Report
 
@@ -245,6 +254,7 @@ TELEGRAM_PROXY_URL=http://login:password@ip:port
 
 - `collect` и парсинг сайтов идут напрямую;
 - proxy используется только для Telegram;
+- `run-telegram-bot` принимает входящие команды только из `TELEGRAM_CHAT_ID`;
 - секреты не должны попадать в git или логи.
 
 ## Конфигурация
