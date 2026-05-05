@@ -362,36 +362,52 @@ def _send_report_attachment(
     timeout = max(config.TELEGRAM_API_TIMEOUT + 5, 10)
     token = config.TELEGRAM_BOT_TOKEN
     url = f"{TELEGRAM_API_BASE_URL}/bot{token}/sendDocument"
-    for attempt in range(1, TELEGRAM_SEND_ATTEMPTS + 1):
-        try:
-            with report_path.open("rb") as document_file:
-                response = requests.post(
-                    url,
-                    data={"chat_id": str(chat_id)},
-                    files={"document": (report_path.name, document_file, "text/markdown")},
-                    timeout=timeout,
-                    proxies=proxies,
-                )
-            response.raise_for_status()
-            payload = response.json()
-            if not payload.get("ok"):
-                raise RuntimeError(payload.get("description", "sendDocument failed"))
-            return True
-        except Exception:
-            logger.exception(
-                "Failed to send report attachment via Telegram (attempt %s/%s).",
-                attempt,
-                TELEGRAM_SEND_ATTEMPTS,
-            )
-            if attempt < TELEGRAM_SEND_ATTEMPTS:
-                time.sleep(attempt)
-                continue
+    txt_report_path = report_path.with_suffix(".txt")
+    created_txt_copy = False
+    try:
+        txt_report_path.write_text(report_path.read_text(encoding="utf-8"), encoding="utf-8")
+        created_txt_copy = True
+    except Exception:
+        logger.exception("Failed to prepare .txt report copy from %s", report_path)
+        txt_report_path = report_path
 
-    return _send_response(
-        chat_id=chat_id,
-        text="Полный отчет временно недоступен, используйте краткую сводку выше",
-        proxies=proxies,
-    )
+    try:
+        for attempt in range(1, TELEGRAM_SEND_ATTEMPTS + 1):
+            try:
+                with txt_report_path.open("rb") as document_file:
+                    response = requests.post(
+                        url,
+                        data={"chat_id": str(chat_id)},
+                        files={"document": (txt_report_path.name, document_file, "text/plain")},
+                        timeout=timeout,
+                        proxies=proxies,
+                    )
+                response.raise_for_status()
+                payload = response.json()
+                if not payload.get("ok"):
+                    raise RuntimeError(payload.get("description", "sendDocument failed"))
+                return True
+            except Exception:
+                logger.exception(
+                    "Failed to send report attachment via Telegram (attempt %s/%s).",
+                    attempt,
+                    TELEGRAM_SEND_ATTEMPTS,
+                )
+                if attempt < TELEGRAM_SEND_ATTEMPTS:
+                    time.sleep(attempt)
+                    continue
+
+        return _send_response(
+            chat_id=chat_id,
+            text="Полный отчет временно недоступен, используйте краткую сводку выше",
+            proxies=proxies,
+        )
+    finally:
+        if created_txt_copy:
+            try:
+                txt_report_path.unlink(missing_ok=True)
+            except Exception:
+                logger.warning("Failed to remove temporary txt report: %s", txt_report_path)
 
 
 def _call_telegram_api(

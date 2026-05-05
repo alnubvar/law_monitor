@@ -172,6 +172,8 @@ class TelegramBotTest(unittest.TestCase):
         self.assertGreaterEqual(send_response.call_count, 2)
         post.assert_called_once()
         self.assertIn("/sendDocument", post.call_args.args[0])
+        sent_document = post.call_args.kwargs["files"]["document"]
+        self.assertTrue(sent_document[0].endswith(".txt"))
 
     def test_report_command_fallback_when_file_missing(self) -> None:
         update = {"update_id": 1, "message": {"chat": {"id": 123}, "text": "/report"}}
