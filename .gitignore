@@ -25,3 +25,4 @@ law_monitor_mvp.egg-info/
 reports/*.md
 !reports/.gitkeep
 docs/demo_report.md
+diagnostics_after_phase20.txt
