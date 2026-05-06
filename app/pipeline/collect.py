@@ -10,7 +10,7 @@ from requests import RequestException
 from app.config import DB_PATH, ensure_directories, load_sources
 from app.extractors.docx_extractor import extract_text_from_docx
 from app.extractors.html_extractor import extract_text_from_html
-from app.extractors.ocr_extractor import extract_text_with_ocr
+from app.extractors.ocr_extractor import OCR_STATUS_SUCCESS
 from app.extractors.pdf_extractor import extract_text_from_pdf
 from app.models import CollectedItem, ExtractionResult, RawDocument, SourceConfig
 from app.pipeline.deduplicate import compute_content_hash
@@ -35,6 +35,7 @@ from app.storage import (
     save_source_error,
     save_document,
     upsert_ocr_queue_item,
+    update_ocr_queue_status,
 )
 from datetime import datetime, timezone
 
@@ -68,13 +69,7 @@ def extract_document(item: CollectedItem, source_config: SourceConfig) -> Extrac
     request_options = _request_options(source_config)
 
     if item.document_type == "pdf":
-        result = extract_text_from_pdf(item.url, **request_options)
-        if result.needs_ocr and result.local_file_path:
-            ocr_placeholder = extract_text_with_ocr(result.local_file_path)
-            result.raw_text = (
-                f"{result.raw_text}\n\n{ocr_placeholder}".strip()
-            )
-        return result
+        return extract_text_from_pdf(item.url, **request_options)
 
     if item.document_type == "docx":
         return extract_text_from_docx(item.url, **request_options)
@@ -125,6 +120,8 @@ def _is_scan_candidate(
 ) -> bool:
     normalized_type = (file_type or extracted.document_type or "").lower()
     if normalized_type != "pdf":
+        return False
+    if extracted.ocr_status == OCR_STATUS_SUCCESS:
         return False
     raw_text_length = extracted.extracted_text_length
     if raw_text_length is None:
@@ -310,6 +307,10 @@ def run_collect_with_options(
                             has_text=has_text,
                             scan_candidate=scan_candidate,
                             needs_ocr=bool(extracted.needs_ocr),
+                            ocr_status=extracted.ocr_status,
+                            ocr_text_length=extracted.ocr_text_length,
+                            ocr_error=extracted.ocr_error,
+                            ocr_pages_processed=extracted.ocr_pages_processed,
                             page_count=extracted.page_count,
                             extraction_error=extracted.error,
                             db_path=resolved_db_path,
@@ -320,6 +321,13 @@ def run_collect_with_options(
                             _sync_ocr_queue_for_scan_candidate(
                                 item=item,
                                 action_level=existing_action_level,
+                                db_path=resolved_db_path,
+                            )
+                        elif extracted.ocr_status == OCR_STATUS_SUCCESS:
+                            update_ocr_queue_status(
+                                document_url=item.url,
+                                status="done",
+                                notes="OCR completed automatically",
                                 db_path=resolved_db_path,
                             )
                     logger.debug("Skip existing URL: %s", item.url)
@@ -343,6 +351,10 @@ def run_collect_with_options(
                     has_text=has_text,
                     scan_candidate=scan_candidate,
                     needs_ocr=bool(extracted.needs_ocr),
+                    ocr_status=extracted.ocr_status,
+                    ocr_text_length=extracted.ocr_text_length,
+                    ocr_error=extracted.ocr_error,
+                    ocr_pages_processed=extracted.ocr_pages_processed,
                     page_count=extracted.page_count,
                     extraction_error=extracted.error,
                     db_path=resolved_db_path,
@@ -351,6 +363,13 @@ def run_collect_with_options(
                     _sync_ocr_queue_for_scan_candidate(
                         item=item,
                         action_level=None,
+                        db_path=resolved_db_path,
+                    )
+                elif extracted.ocr_status == OCR_STATUS_SUCCESS:
+                    update_ocr_queue_status(
+                        document_url=item.url,
+                        status="done",
+                        notes="OCR completed automatically",
                         db_path=resolved_db_path,
                     )
                 content_hash = compute_content_hash(
@@ -398,6 +417,10 @@ def run_collect_with_options(
                     has_text=False,
                     scan_candidate=False,
                     needs_ocr=False,
+                    ocr_status="not_needed",
+                    ocr_text_length=0,
+                    ocr_error=None,
+                    ocr_pages_processed=0,
                     page_count=None,
                     extraction_error=str(exc),
                     db_path=resolved_db_path,
@@ -422,6 +445,10 @@ def run_collect_with_options(
                     has_text=False,
                     scan_candidate=False,
                     needs_ocr=False,
+                    ocr_status="not_needed",
+                    ocr_text_length=0,
+                    ocr_error=None,
+                    ocr_pages_processed=0,
                     page_count=None,
                     extraction_error=str(exc),
                     db_path=resolved_db_path,

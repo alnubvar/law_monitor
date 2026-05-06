@@ -74,6 +74,10 @@ class ExtractionResult(BaseModel):
     needs_ocr: bool = False
     page_count: int | None = None
     extracted_text_length: int | None = None
+    ocr_status: str = "not_needed"
+    ocr_text_length: int = 0
+    ocr_error: str | None = None
+    ocr_pages_processed: int = 0
     error: str | None = None
 
 

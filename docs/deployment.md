@@ -24,7 +24,7 @@ Why this variant:
 
 - aligned with current repo workflow;
 - low operational overhead;
-- no Docker/PostgreSQL/OCR runtime requirements.
+- no Docker/PostgreSQL requirements; OCR runtime is optional and disabled by default.
 
 ## Environment
 
@@ -39,6 +39,19 @@ LAW_MONITOR_DB_PATH=data/law_monitor.db
 LAW_MONITOR_LOG_LEVEL=INFO
 LAW_MONITOR_DAILY_REPORT_HOUR=9
 LAW_MONITOR_HOURLY_INTERVAL_MINUTES=60
+LAW_MONITOR_OCR_ENABLED=false
+LAW_MONITOR_OCR_LANGUAGE=rus+eng
+LAW_MONITOR_OCR_MAX_PAGES=5
+LAW_MONITOR_OCR_TIMEOUT=120
+LAW_MONITOR_OCR_TESSDATA_PATH=
+```
+
+Windows local OCR example:
+
+```env
+LAW_MONITOR_OCR_ENABLED=true
+LAW_MONITOR_OCR_LANGUAGE=rus+eng
+LAW_MONITOR_OCR_TESSDATA_PATH=C:\Program Files\Tesseract-OCR\tessdata
 ```
 
 ## First-Time Bring-Up
@@ -75,6 +88,9 @@ LAW_MONITOR_HOURLY_INTERVAL_MINUTES=60
 ```powershell
 .\.venv\Scripts\python.exe main.py ocr-queue
 .\.venv\Scripts\python.exe main.py ocr-queue --priority high
+.\.venv\Scripts\python.exe main.py ocr-check
+.\.venv\Scripts\python.exe main.py ocr-backfill --source "Нормативные акты Краснодарского края" --limit 10
+.\.venv\Scripts\python.exe main.py ocr-run --source "Нормативные акты Краснодарского края" --limit 1
 ```
 
 ## Data and Backups

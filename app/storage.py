@@ -237,6 +237,10 @@ def init_db(db_path: Path | str = DB_PATH) -> None:
                 has_text INTEGER DEFAULT 0,
                 scan_candidate INTEGER DEFAULT 0,
                 needs_ocr INTEGER DEFAULT 0,
+                ocr_status TEXT DEFAULT 'not_needed',
+                ocr_text_length INTEGER DEFAULT 0,
+                ocr_error TEXT,
+                ocr_pages_processed INTEGER DEFAULT 0,
                 page_count INTEGER,
                 extraction_error TEXT,
                 collected_at TEXT NOT NULL
@@ -249,6 +253,18 @@ def init_db(db_path: Path | str = DB_PATH) -> None:
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_document_extraction_audit_source ON document_extraction_audit(source_name, collected_at DESC)"
         )
+        extraction_audit_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(document_extraction_audit)").fetchall()
+        }
+        if "ocr_status" not in extraction_audit_columns:
+            connection.execute("ALTER TABLE document_extraction_audit ADD COLUMN ocr_status TEXT DEFAULT 'not_needed'")
+        if "ocr_text_length" not in extraction_audit_columns:
+            connection.execute("ALTER TABLE document_extraction_audit ADD COLUMN ocr_text_length INTEGER DEFAULT 0")
+        if "ocr_error" not in extraction_audit_columns:
+            connection.execute("ALTER TABLE document_extraction_audit ADD COLUMN ocr_error TEXT")
+        if "ocr_pages_processed" not in extraction_audit_columns:
+            connection.execute("ALTER TABLE document_extraction_audit ADD COLUMN ocr_pages_processed INTEGER DEFAULT 0")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS ocr_queue (
@@ -894,8 +910,12 @@ def save_document_extraction_audit(
     has_text: bool,
     scan_candidate: bool,
     needs_ocr: bool,
-    page_count: int | None,
-    extraction_error: str | None,
+    ocr_status: str = "not_needed",
+    ocr_text_length: int = 0,
+    ocr_error: str | None = None,
+    ocr_pages_processed: int = 0,
+    page_count: int | None = None,
+    extraction_error: str | None = None,
     collected_at: datetime | None = None,
     db_path: Path | str = DB_PATH,
 ) -> int:
@@ -904,8 +924,9 @@ def save_document_extraction_audit(
             """
             INSERT INTO document_extraction_audit (
                 source_name, source_url, document_url, attachment_url, file_type, extracted_type,
-                raw_text_length, has_text, scan_candidate, needs_ocr, page_count, extraction_error, collected_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                raw_text_length, has_text, scan_candidate, needs_ocr, ocr_status, ocr_text_length, ocr_error,
+                ocr_pages_processed, page_count, extraction_error, collected_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 source_name,
@@ -918,6 +939,10 @@ def save_document_extraction_audit(
                 int(has_text),
                 int(scan_candidate),
                 int(needs_ocr),
+                ocr_status,
+                int(ocr_text_length),
+                ocr_error,
+                int(ocr_pages_processed),
                 page_count,
                 extraction_error,
                 _serialize_dt(collected_at or datetime.now(timezone.utc)),
@@ -996,6 +1021,7 @@ def list_ocr_queue(
     statuses: list[str] | None = None,
     priority: str | None = None,
     priorities: list[str] | None = None,
+    source_name: str | None = None,
     limit: int = 20,
     db_path: Path | str = DB_PATH,
 ) -> list[dict[str, Any]]:
@@ -1030,6 +1056,9 @@ def list_ocr_queue(
         placeholders = ", ".join("?" for _ in normalized_priorities)
         where_clauses.append(f"priority IN ({placeholders})")
         params.extend(normalized_priorities)
+    if source_name and source_name.strip():
+        where_clauses.append("source_name = ?")
+        params.append(source_name.strip())
     if where_clauses:
         query += " WHERE " + " AND ".join(where_clauses)
     query += """
@@ -1061,6 +1090,36 @@ def list_ocr_queue(
         payload["updated_at"] = _parse_dt(payload.get("updated_at"))
         result.append(payload)
     return result
+
+
+def list_pending_ocr_queue(
+    *,
+    source_name: str | None = None,
+    limit: int = 20,
+    db_path: Path | str = DB_PATH,
+) -> list[dict[str, Any]]:
+    return list_ocr_queue(
+        statuses=["pending"],
+        source_name=source_name,
+        limit=limit,
+        db_path=db_path,
+    )
+
+
+def ocr_queue_item_exists(
+    *,
+    document_url: str,
+    db_path: Path | str = DB_PATH,
+) -> bool:
+    normalized_url = (document_url or "").strip()
+    if not normalized_url:
+        return False
+    with _connect_db(db_path) as connection:
+        row = connection.execute(
+            "SELECT 1 FROM ocr_queue WHERE document_url = ? LIMIT 1",
+            (normalized_url,),
+        ).fetchone()
+    return row is not None
 
 
 def update_ocr_queue_status(
@@ -1099,6 +1158,44 @@ def update_ocr_queue_status(
             )
         connection.commit()
     return bool(cursor.rowcount)
+
+
+def update_document_text_by_url(
+    *,
+    document_url: str,
+    raw_text: str,
+    content_hash: str,
+    local_file_path: str | None = None,
+    document_type: str = "pdf",
+    error: str | None = None,
+    db_path: Path | str = DB_PATH,
+) -> int:
+    normalized_url = (document_url or "").strip()
+    if not normalized_url:
+        return 0
+    with _connect_db(db_path) as connection:
+        cursor = connection.execute(
+            """
+            UPDATE documents
+            SET raw_text = ?,
+                content_hash = ?,
+                local_file_path = COALESCE(?, local_file_path),
+                document_type = ?,
+                status = 'collected',
+                error = ?
+            WHERE url = ?
+            """,
+            (
+                raw_text,
+                content_hash,
+                local_file_path,
+                document_type,
+                error,
+                normalized_url,
+            ),
+        )
+        connection.commit()
+    return int(cursor.rowcount or 0)
 
 
 def summarize_ocr_queue(
@@ -1148,6 +1245,53 @@ def summarize_ocr_queue(
     }
 
 
+def list_unresolved_scan_candidate_audit(
+    *,
+    source_name: str | None = None,
+    limit: int = 200,
+    db_path: Path | str = DB_PATH,
+) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(int(limit), 1000))
+    params: list[Any] = []
+    where_clauses = [
+        "COALESCE(file_type, extracted_type) = 'pdf'",
+        "scan_candidate = 1",
+        "COALESCE(ocr_status, 'not_needed') != 'success'",
+    ]
+    if source_name and source_name.strip():
+        where_clauses.append("source_name = ?")
+        params.append(source_name.strip())
+
+    query = f"""
+        SELECT a.*
+        FROM document_extraction_audit a
+        INNER JOIN (
+            SELECT document_url, MAX(id) AS max_id
+            FROM document_extraction_audit
+            WHERE document_url IS NOT NULL AND trim(document_url) != ''
+            GROUP BY document_url
+        ) latest ON latest.max_id = a.id
+        WHERE {" AND ".join(where_clauses)}
+        ORDER BY a.collected_at DESC, a.id DESC
+        LIMIT ?
+    """
+    params.append(safe_limit)
+    with _connect_db(db_path) as connection:
+        rows = connection.execute(query, tuple(params)).fetchall()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        payload = dict(row)
+        payload["has_text"] = bool(payload.get("has_text"))
+        payload["scan_candidate"] = bool(payload.get("scan_candidate"))
+        payload["needs_ocr"] = bool(payload.get("needs_ocr"))
+        payload["ocr_status"] = str(payload.get("ocr_status") or "not_needed")
+        payload["ocr_text_length"] = int(payload.get("ocr_text_length") or 0)
+        payload["ocr_pages_processed"] = int(payload.get("ocr_pages_processed") or 0)
+        payload["collected_at"] = _parse_dt(payload.get("collected_at"))
+        result.append(payload)
+    return result
+
+
 def list_recent_document_extraction_audit(
     *,
     days: int | None = 7,
@@ -1177,6 +1321,9 @@ def list_recent_document_extraction_audit(
         payload["has_text"] = bool(payload.get("has_text"))
         payload["scan_candidate"] = bool(payload.get("scan_candidate"))
         payload["needs_ocr"] = bool(payload.get("needs_ocr"))
+        payload["ocr_status"] = str(payload.get("ocr_status") or "not_needed")
+        payload["ocr_text_length"] = int(payload.get("ocr_text_length") or 0)
+        payload["ocr_pages_processed"] = int(payload.get("ocr_pages_processed") or 0)
         payload["collected_at"] = _parse_dt(payload.get("collected_at"))
         result.append(payload)
     return result

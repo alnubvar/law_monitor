@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import importlib
+import os
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -57,6 +59,19 @@ class ConfigSmokeTest(unittest.TestCase):
                     root_logger.addHandler(handler)
             if log_path.exists():
                 log_path.unlink()
+
+    def test_reads_ocr_tessdata_path_from_env(self) -> None:
+        expected_path = r"C:\Program Files\Tesseract-OCR\tessdata"
+        import app.config as config_module
+
+        with patch.dict(
+            os.environ,
+            {"LAW_MONITOR_OCR_TESSDATA_PATH": expected_path},
+            clear=False,
+        ):
+            reloaded = importlib.reload(config_module)
+            self.assertEqual(reloaded.OCR_TESSDATA_PATH, expected_path)
+        importlib.reload(config_module)
 
 
 if __name__ == "__main__":

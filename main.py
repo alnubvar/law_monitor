@@ -5,12 +5,14 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from app.config import setup_logging
+from app.extractors.ocr_extractor import get_ocr_runtime_status
 from app.notify.telegram import get_diagnostic_status
 from app.notify.telegram_bot import run_polling_listener
 from app.pipeline.analyze import run_analyze
 from app.pipeline.collect import run_collect_with_options
 from app.pipeline.diagnostics import run_diagnostics
 from app.pipeline.digest import run_demo_report, run_digest
+from app.pipeline.ocr_runtime import backfill_ocr_queue_from_audit, run_ocr_queue
 from app.pipeline.tracking import run_check_tracked
 from app.pipeline.run import run_pipeline
 from app.pipeline.smoke import run_smoke_check
@@ -276,6 +278,42 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Опциональные заметки для triage.",
     )
+    ocr_run_parser = subparsers.add_parser(
+        "ocr-run",
+        help="Запустить OCR runtime для pending OCR queue.",
+    )
+    ocr_run_parser.add_argument(
+        "--source",
+        type=str,
+        default=None,
+        help="Обрабатывать OCR queue только по source_name.",
+    )
+    ocr_run_parser.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        help="Максимум pending OCR queue элементов на запуск.",
+    )
+    subparsers.add_parser(
+        "ocr-check",
+        help="Проверить OCR runtime конфигурацию и доступность.",
+    )
+    ocr_backfill_parser = subparsers.add_parser(
+        "ocr-backfill",
+        help="Заполнить OCR queue из unresolved scan_candidate extraction audit.",
+    )
+    ocr_backfill_parser.add_argument(
+        "--source",
+        type=str,
+        default=None,
+        help="Backfill только для одного source_name.",
+    )
+    ocr_backfill_parser.add_argument(
+        "--limit",
+        type=int,
+        default=200,
+        help="Максимум scan-candidate URL для backfill за запуск.",
+    )
 
     return parser
 
@@ -483,6 +521,54 @@ def main() -> int:
             print("OCR queue item not found for provided URL.")
             return 1
         print(f"OCR queue updated: status={args.status}")
+        return 0
+
+    if args.command == "ocr-run":
+        run_result = run_ocr_queue(
+            source_name=args.source,
+            limit=args.limit,
+        )
+        print("OCR runtime run completed.")
+        print(
+            f"Checked={run_result.checked}, Updated={run_result.updated}, "
+            f"Success={run_result.success}, Failed={run_result.failed}, "
+            f"Unavailable={run_result.unavailable}, Skipped={run_result.skipped}"
+        )
+        if run_result.updated > 0:
+            print(
+                "Next step: run `python main.py analyze --force` to reanalyze updated OCR texts."
+            )
+        return 0
+
+    if args.command == "ocr-check":
+        runtime = get_ocr_runtime_status()
+        print("OCR runtime check")
+        print(f"- OCR enabled: {'true' if runtime.get('enabled') else 'false'}")
+        print(f"- OCR language: {runtime.get('language') or '-'}")
+        print(f"- OCR max pages: {runtime.get('max_pages')}")
+        print(f"- OCR timeout (s): {runtime.get('timeout_seconds')}")
+        print(f"- OCR tessdata path: {runtime.get('tessdata_path') or '-'}")
+        print(f"- OCR available: {'true' if runtime.get('available') else 'false'}")
+        reason = str(runtime.get("reason") or "").strip()
+        if reason:
+            print(f"- reason: {reason}")
+        languages = runtime.get("available_languages") or []
+        if languages:
+            print(f"- available languages: {', '.join(str(value) for value in languages)}")
+        else:
+            print("- available languages: not detected")
+        return 0
+
+    if args.command == "ocr-backfill":
+        backfill_result = backfill_ocr_queue_from_audit(
+            source_name=args.source,
+            limit=args.limit,
+        )
+        print("OCR queue backfill completed.")
+        print(
+            f"scanned={backfill_result.scanned}; queued={backfill_result.queued}; "
+            f"existing={backfill_result.existing}; skipped={backfill_result.skipped}"
+        )
         return 0
 
     parser.print_help()

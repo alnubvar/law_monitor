@@ -37,6 +37,11 @@ def _get_env_float(name: str, default: float) -> float:
     return float(_get_env_str(name, str(default)))
 
 
+def _get_env_bool(name: str, default: bool) -> bool:
+    raw = _get_env_str(name, "true" if default else "false").lower()
+    return raw in {"1", "true", "yes", "y", "on"}
+
+
 DB_PATH = Path(_get_env_str("LAW_MONITOR_DB_PATH", str(DATA_DIR / "law_monitor.db")))
 REQUEST_TIMEOUT = _get_env_int("LAW_MONITOR_REQUEST_TIMEOUT", 30)
 REQUEST_RETRIES = _get_env_int("LAW_MONITOR_REQUEST_RETRIES", 2)
@@ -51,6 +56,11 @@ TELEGRAM_CHAT_ID = _get_env_str("TELEGRAM_CHAT_ID")
 TELEGRAM_PROXY_URL = _get_env_str("TELEGRAM_PROXY_URL")
 TELEGRAM_API_TIMEOUT = _get_env_int("TELEGRAM_API_TIMEOUT", 30)
 TELEGRAM_PROXY_ENABLED = bool(TELEGRAM_PROXY_URL)
+OCR_ENABLED = _get_env_bool("LAW_MONITOR_OCR_ENABLED", False)
+OCR_LANGUAGE = _get_env_str("LAW_MONITOR_OCR_LANGUAGE", "rus+eng")
+OCR_MAX_PAGES = max(1, _get_env_int("LAW_MONITOR_OCR_MAX_PAGES", 5))
+OCR_TIMEOUT_SECONDS = max(1, _get_env_int("LAW_MONITOR_OCR_TIMEOUT", 120))
+OCR_TESSDATA_PATH = _get_env_str("LAW_MONITOR_OCR_TESSDATA_PATH", "")
 SCHEDULER_DAILY_REPORT_HOUR = _get_env_int("LAW_MONITOR_DAILY_REPORT_HOUR", 9)
 SCHEDULER_HOURLY_INTERVAL_MINUTES = _get_env_int(
     "LAW_MONITOR_HOURLY_INTERVAL_MINUTES", 60

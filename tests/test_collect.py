@@ -16,6 +16,7 @@ from app.storage import (
     list_latest_source_audit,
     list_recent_document_extraction_audit,
     save_document,
+    upsert_ocr_queue_item,
 )
 
 
@@ -358,6 +359,251 @@ class CollectAuditTest(unittest.TestCase):
         by_url = {str(row["document_url"]): row for row in queue_rows}
         self.assertEqual(by_url["https://example.com/watchlist-scan.pdf"]["priority"], "high")
         self.assertEqual(by_url["https://example.com/krasnodar-scan.pdf"]["priority"], "high")
+
+    def test_ocr_unavailable_scan_candidate_is_recorded_in_audit(self) -> None:
+        db_path = self._db_path("collect_ocr_unavailable_audit.db")
+        init_db(db_path)
+        source_config = SourceConfig(
+            name="Нормативные акты Краснодарского края",
+            url="https://admkrai.krasnodar.ru/content/1291/",
+            level="regional",
+            region="krasnodar",
+            source_role="regional_npa",
+            parser="krasnodar",
+            description="test",
+        )
+        item = CollectedItem(
+            source_name=source_config.name,
+            source_url=source_config.url,
+            level=source_config.level,
+            region=source_config.region,
+            title="Скан НПА",
+            url="https://example.com/unavailable-scan.pdf",
+            document_type="pdf",
+        )
+
+        class FakeSource:
+            def __init__(self) -> None:
+                self.last_fetch_stats = {"links_found_count": 1, "pdf_links_count": 1}
+
+            def fetch_items(self) -> list[CollectedItem]:
+                return [item]
+
+        with patch("app.pipeline.collect.load_sources", return_value=[source_config]):
+            with patch("app.pipeline.collect.create_source", return_value=FakeSource()):
+                with patch(
+                    "app.pipeline.collect.extract_document",
+                    return_value=ExtractionResult(
+                        raw_text="",
+                        document_type="pdf",
+                        needs_ocr=True,
+                        page_count=4,
+                        extracted_text_length=0,
+                        ocr_status="unavailable",
+                        ocr_error="OCR runtime unavailable",
+                    ),
+                ):
+                    run_collect_with_options(
+                        source_name=source_config.name,
+                        limit=1,
+                        audit_existing=False,
+                        db_path=str(db_path),
+                    )
+
+        audits = list_recent_document_extraction_audit(db_path=db_path, days=7)
+        self.assertEqual(len(audits), 1)
+        self.assertEqual(audits[0]["ocr_status"], "unavailable")
+        self.assertEqual(audits[0]["ocr_text_length"], 0)
+        queue_rows = list_ocr_queue(db_path=db_path, statuses=["pending"], limit=10)
+        self.assertEqual(len(queue_rows), 1)
+
+    def test_ocr_success_fills_raw_text(self) -> None:
+        db_path = self._db_path("collect_ocr_success_text.db")
+        init_db(db_path)
+        source_config = SourceConfig(
+            name="Право Ростовской области",
+            url="https://pravo.donland.ru/",
+            level="regional",
+            region="rostov",
+            source_role="regional_npa",
+            parser="regional_law",
+            description="test",
+        )
+        item = CollectedItem(
+            source_name=source_config.name,
+            source_url=source_config.url,
+            level=source_config.level,
+            region=source_config.region,
+            title="OCR success документ",
+            url="https://example.com/ocr-success.pdf",
+            document_type="pdf",
+        )
+
+        class FakeSource:
+            def __init__(self) -> None:
+                self.last_fetch_stats = {"links_found_count": 1, "pdf_links_count": 1}
+
+            def fetch_items(self) -> list[CollectedItem]:
+                return [item]
+
+        with patch("app.pipeline.collect.load_sources", return_value=[source_config]):
+            with patch("app.pipeline.collect.create_source", return_value=FakeSource()):
+                with patch(
+                    "app.pipeline.collect.extract_document",
+                    return_value=ExtractionResult(
+                        raw_text="OCR extracted legal text",
+                        document_type="pdf",
+                        needs_ocr=False,
+                        page_count=3,
+                        extracted_text_length=24,
+                        ocr_status="success",
+                        ocr_text_length=24,
+                        ocr_pages_processed=3,
+                    ),
+                ):
+                    run_collect_with_options(
+                        source_name=source_config.name,
+                        limit=1,
+                        audit_existing=False,
+                        db_path=str(db_path),
+                    )
+
+        documents = list_documents(db_path=db_path)
+        self.assertEqual(len(documents), 1)
+        self.assertIn("OCR extracted legal text", documents[0].raw_text)
+        audits = list_recent_document_extraction_audit(db_path=db_path, days=7)
+        self.assertEqual(audits[0]["ocr_status"], "success")
+
+    def test_ocr_success_marks_existing_queue_item_done(self) -> None:
+        db_path = self._db_path("collect_ocr_success_done.db")
+        init_db(db_path)
+        source_config = SourceConfig(
+            name="Нормативные акты Краснодарского края",
+            url="https://admkrai.krasnodar.ru/content/1291/",
+            level="regional",
+            region="krasnodar",
+            source_role="regional_npa",
+            parser="krasnodar",
+            description="test",
+        )
+        existing = RawDocument(
+            source_name=source_config.name,
+            source_url=source_config.url,
+            level="regional",
+            region="krasnodar",
+            title="Скан НПА",
+            url="https://example.com/queue-done.pdf",
+            published_at=datetime.now(timezone.utc),
+            collected_at=datetime.now(timezone.utc),
+            content_hash="existing-ocr-done",
+            raw_text="",
+            document_type="pdf",
+            status="collected",
+        )
+        save_document(existing, db_path)
+        upsert_ocr_queue_item(
+            document_url="https://example.com/queue-done.pdf",
+            source_name=source_config.name,
+            title="Скан НПА",
+            priority="high",
+            reason="scan_candidate_pdf",
+            db_path=db_path,
+        )
+        item = CollectedItem(
+            source_name=source_config.name,
+            source_url=source_config.url,
+            level=source_config.level,
+            region=source_config.region,
+            title="Скан НПА",
+            url="https://example.com/queue-done.pdf",
+            document_type="pdf",
+        )
+
+        class FakeSource:
+            def __init__(self) -> None:
+                self.last_fetch_stats = {"links_found_count": 1, "pdf_links_count": 1}
+
+            def fetch_items(self) -> list[CollectedItem]:
+                return [item]
+
+        with patch("app.pipeline.collect.load_sources", return_value=[source_config]):
+            with patch("app.pipeline.collect.create_source", return_value=FakeSource()):
+                with patch(
+                    "app.pipeline.collect.extract_document",
+                    return_value=ExtractionResult(
+                        raw_text="OCR ok",
+                        document_type="pdf",
+                        needs_ocr=False,
+                        page_count=2,
+                        extracted_text_length=6,
+                        ocr_status="success",
+                        ocr_text_length=6,
+                        ocr_pages_processed=2,
+                    ),
+                ):
+                    run_collect_with_options(
+                        source_name=source_config.name,
+                        limit=1,
+                        audit_existing=True,
+                        db_path=str(db_path),
+                    )
+
+        queue_rows = list_ocr_queue(db_path=db_path, statuses=["done"], limit=10)
+        self.assertEqual(len(queue_rows), 1)
+        self.assertEqual(queue_rows[0]["document_url"], "https://example.com/queue-done.pdf")
+
+    def test_ocr_disabled_path_does_not_break_pdf_collection(self) -> None:
+        db_path = self._db_path("collect_ocr_disabled_no_break.db")
+        init_db(db_path)
+        source_config = SourceConfig(
+            name="Правительство РФ - документы",
+            url="http://government.ru/docs/",
+            level="federal",
+            region="federal",
+            source_role="strategy",
+            parser="government",
+            description="test",
+        )
+        item = CollectedItem(
+            source_name=source_config.name,
+            source_url=source_config.url,
+            level=source_config.level,
+            region=source_config.region,
+            title="PDF с текстовым слоем",
+            url="https://example.com/pdf-text-layer.pdf",
+            document_type="pdf",
+        )
+
+        class FakeSource:
+            def __init__(self) -> None:
+                self.last_fetch_stats = {"links_found_count": 1, "pdf_links_count": 1}
+
+            def fetch_items(self) -> list[CollectedItem]:
+                return [item]
+
+        with patch("app.pipeline.collect.load_sources", return_value=[source_config]):
+            with patch("app.pipeline.collect.create_source", return_value=FakeSource()):
+                with patch(
+                    "app.pipeline.collect.extract_document",
+                    return_value=ExtractionResult(
+                        raw_text="T" * 1200,
+                        document_type="pdf",
+                        needs_ocr=False,
+                        page_count=4,
+                        extracted_text_length=1200,
+                        ocr_status="disabled",
+                    ),
+                ):
+                    saved_count = run_collect_with_options(
+                        source_name=source_config.name,
+                        limit=1,
+                        audit_existing=False,
+                        db_path=str(db_path),
+                    )
+
+        self.assertEqual(saved_count, 1)
+        documents = list_documents(db_path=db_path)
+        self.assertEqual(len(documents), 1)
 
 
 if __name__ == "__main__":

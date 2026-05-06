@@ -29,7 +29,7 @@ Core entrypoint: [main.py](main.py)
 - source collection from federal and regional endpoints;
 - extraction for `html`, `pdf`, `docx`;
 - extraction diagnostics (`diagnostics`, extraction quality, source coverage);
-- OCR triage queue (without OCR runtime);
+- OCR triage queue + optional local OCR runtime (disabled by default);
 - interactive Telegram bot with commands and reply keyboard;
 - document tracking (`/track`, `/untrack`, `/tracked`);
 - archive search (`/search`);
@@ -49,12 +49,13 @@ Core entrypoint: [main.py](main.py)
 
 Some PDFs are effectively scans or have weak/no text layer. They are detected as `scan_candidate` during extraction audit.
 
-### Why OCR runtime is not enabled yet
+### OCR runtime mode
 
-Current phase keeps runtime lightweight and deterministic:
+Local OCR runtime is supported, but remains opt-in:
 
-- no heavy OCR dependencies in production path;
-- no new infrastructure or cloud spend before ROI is validated.
+- `LAW_MONITOR_OCR_ENABLED=false` by default;
+- manual-first triage remains primary workflow;
+- cloud OCR stays out of scope until ROI is validated.
 
 ### Why OCR queue is useful
 
@@ -79,10 +80,13 @@ OCR triage prevents scan-heavy documents from being lost:
 ### Commands
 
 ```bash
+python main.py ocr-check
 python main.py ocr-queue
 python main.py ocr-queue --status pending
 python main.py ocr-queue --priority high
 python main.py ocr-queue --status pending --limit 20
+python main.py ocr-backfill --source "Нормативные акты Краснодарского края" --limit 10
+python main.py ocr-run --source "Нормативные акты Краснодарского края" --limit 1
 python main.py ocr-mark <url> --status done
 python main.py ocr-mark <url> --status in_review --notes "checking text quality"
 ```
@@ -130,6 +134,9 @@ python main.py collect
 python main.py audit-extraction
 python main.py analyze --force
 python main.py diagnostics --days 7
+python main.py ocr-check
+python main.py ocr-backfill --limit 50
+python main.py ocr-run --limit 10
 python main.py report --days 7 --action-level requires_attention watchlist --max-items 30
 python main.py run-telegram-bot
 python main.py check-tracked
@@ -142,6 +149,15 @@ Deployment guide: [docs/deployment.md](docs/deployment.md)
 
 This repository currently recommends Windows-first MVP deployment (`Task Scheduler` + SQLite), with optional Linux `systemd` examples.
 
+Windows OCR note (optional local runtime):
+
+- Tesseract binary example: `C:\Program Files\Tesseract-OCR\tesseract.exe`
+- Tessdata path: `C:\Program Files\Tesseract-OCR\tessdata`
+- env:
+  - `LAW_MONITOR_OCR_ENABLED=true`
+  - `LAW_MONITOR_OCR_LANGUAGE=rus+eng`
+  - `LAW_MONITOR_OCR_TESSDATA_PATH=C:\Program Files\Tesseract-OCR\tessdata`
+
 ## Screenshots / Examples
 
 - Demo summary: [DEMO_SUMMARY.md](DEMO_SUMMARY.md)
@@ -150,14 +166,13 @@ This repository currently recommends Windows-first MVP deployment (`Task Schedul
 
 ## Roadmap
 
-- selective OCR runtime for high-priority queue items;
 - optional LLM-assisted summaries on top of clean extracted text;
 - retrieval and historical analysis (RAG-style workflows);
 - extraction robustness improvements for source-specific edge cases.
 
 ## Constraints (Current Phase)
 
-- no OCR runtime in production pipeline;
+- no cloud OCR in production pipeline;
 - no changes to `action_level` business logic in triage/docs phase;
 - no heavy dependency additions;
 - no overengineering of infra for MVP stage.
