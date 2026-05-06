@@ -434,12 +434,164 @@ class DiagnosticsSmokeTest(unittest.TestCase):
         )
 
         output = run_diagnostics(db_path=db_path, days=7)
+        self.assertIn("OCR runtime (last 7 days):", output)
+        self.assertIn("OCR success count:", output)
         self.assertIn("OCR triage queue:", output)
         self.assertIn("pending: 1", output)
         self.assertIn("in_review: 0", output)
         self.assertIn("done: 1", output)
         self.assertIn("skipped: 0", output)
         self.assertIn("high priority pending: 1", output)
+
+    def test_diagnostics_warns_when_scan_candidates_exist_but_queue_is_empty(self) -> None:
+        db_path = self._db_path("diagnostics_ocr_backfill_warning.db")
+        init_db(db_path)
+        save_document_extraction_audit(
+            source_name="Нормативные акты Краснодарского края",
+            source_url="https://admkrai.krasnodar.ru/content/1291/",
+            document_url="https://example.com/unresolved-scan.pdf",
+            attachment_url="https://example.com/unresolved-scan.pdf",
+            file_type="pdf",
+            extracted_type="pdf",
+            raw_text_length=0,
+            has_text=False,
+            scan_candidate=True,
+            needs_ocr=True,
+            ocr_status="unavailable",
+            ocr_text_length=0,
+            ocr_error="OCR runtime unavailable",
+            ocr_pages_processed=0,
+            page_count=5,
+            extraction_error=None,
+            db_path=db_path,
+        )
+
+        output = run_diagnostics(db_path=db_path, days=7)
+        self.assertIn(
+            "OCR queue is empty but unresolved scan candidates exist. Run: python main.py ocr-backfill",
+            output,
+        )
+
+    def test_ocr_success_document_is_excluded_from_documents_requiring_ocr(self) -> None:
+        db_path = self._db_path("diagnostics_ocr_success_excluded.db")
+        init_db(db_path)
+        success_url = "https://example.com/ocr-success.pdf"
+        unresolved_url = "https://example.com/ocr-unresolved.pdf"
+        save_document_extraction_audit(
+            source_name="Право Ростовской области",
+            source_url="https://pravo.donland.ru/",
+            document_url=success_url,
+            attachment_url=success_url,
+            file_type="pdf",
+            extracted_type="pdf",
+            raw_text_length=1200,
+            has_text=True,
+            scan_candidate=True,
+            needs_ocr=False,
+            ocr_status="success",
+            ocr_text_length=1200,
+            ocr_error=None,
+            ocr_pages_processed=2,
+            page_count=2,
+            extraction_error=None,
+            db_path=db_path,
+        )
+        save_document_extraction_audit(
+            source_name="Право Ростовской области",
+            source_url="https://pravo.donland.ru/",
+            document_url=unresolved_url,
+            attachment_url=unresolved_url,
+            file_type="pdf",
+            extracted_type="pdf",
+            raw_text_length=0,
+            has_text=False,
+            scan_candidate=True,
+            needs_ocr=True,
+            ocr_status="failed",
+            ocr_text_length=0,
+            ocr_error="OCR failed",
+            ocr_pages_processed=1,
+            page_count=5,
+            extraction_error=None,
+            db_path=db_path,
+        )
+        output = run_diagnostics(db_path=db_path, days=7)
+        self.assertIn("Documents requiring OCR:", output)
+        self.assertIn(unresolved_url, output)
+        self.assertNotIn(success_url, output)
+
+    def test_documents_requiring_ocr_deduplicates_duplicate_urls(self) -> None:
+        db_path = self._db_path("diagnostics_ocr_dedup_urls.db")
+        init_db(db_path)
+        duplicate_url = "https://example.com/duplicate-unresolved.pdf"
+        save_document_extraction_audit(
+            source_name="Нормативные акты Краснодарского края",
+            source_url="https://admkrai.krasnodar.ru/content/1291/",
+            document_url=duplicate_url,
+            attachment_url=duplicate_url,
+            file_type="pdf",
+            extracted_type="pdf",
+            raw_text_length=0,
+            has_text=False,
+            scan_candidate=True,
+            needs_ocr=True,
+            ocr_status="failed",
+            ocr_text_length=0,
+            ocr_error="OCR failed",
+            ocr_pages_processed=1,
+            page_count=5,
+            extraction_error=None,
+            db_path=db_path,
+        )
+        save_document_extraction_audit(
+            source_name="Нормативные акты Краснодарского края",
+            source_url="https://admkrai.krasnodar.ru/content/1291/",
+            document_url=duplicate_url,
+            attachment_url=duplicate_url,
+            file_type="pdf",
+            extracted_type="pdf",
+            raw_text_length=10,
+            has_text=True,
+            scan_candidate=True,
+            needs_ocr=True,
+            ocr_status="unavailable",
+            ocr_text_length=0,
+            ocr_error="OCR runtime unavailable",
+            ocr_pages_processed=1,
+            page_count=5,
+            extraction_error=None,
+            db_path=db_path,
+        )
+        output = run_diagnostics(db_path=db_path, days=7)
+        self.assertEqual(output.count(duplicate_url), 1)
+
+    def test_diagnostics_shows_clear_ocr_queue_pending_done_counters(self) -> None:
+        db_path = self._db_path("diagnostics_ocr_queue_counters.db")
+        init_db(db_path)
+        upsert_ocr_queue_item(
+            document_url="https://example.com/pending.pdf",
+            source_name="Право Ростовской области",
+            title="Pending OCR",
+            priority="high",
+            reason="scan_candidate_pdf",
+            db_path=db_path,
+        )
+        upsert_ocr_queue_item(
+            document_url="https://example.com/done.pdf",
+            source_name="Право Ростовской области",
+            title="Done OCR",
+            priority="medium",
+            reason="scan_candidate_pdf",
+            db_path=db_path,
+        )
+        update_ocr_queue_status(
+            document_url="https://example.com/done.pdf",
+            status="done",
+            db_path=db_path,
+        )
+        output = run_diagnostics(db_path=db_path, days=7)
+        self.assertIn("OCR queue pending: 1", output)
+        self.assertIn("OCR queue done: 1", output)
 
     def test_source_depth_stats_do_not_break_empty_db(self) -> None:
         db_path = self._db_path("diagnostics_source_depth_empty.db")

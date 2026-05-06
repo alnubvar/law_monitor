@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 from typing import Iterable
 
-from app.config import DB_PATH, get_source_role, load_sources
+from app.config import DB_PATH, OCR_ENABLED, get_source_role, load_sources
+from app.extractors.ocr_extractor import get_ocr_runtime_status
 from app.models import RawDocument
 from app.storage import (
     backfill_missing_published_at,
@@ -14,6 +15,7 @@ from app.storage import (
     list_documents,
     list_latest_source_audit,
     list_recent_document_extraction_audit,
+    list_unresolved_scan_candidate_audit,
     summarize_ocr_queue,
 )
 
@@ -385,6 +387,10 @@ def run_diagnostics(
         db_path=resolved_db_path,
         days=days or 7,
     )
+    ocr_runtime_text = format_ocr_runtime_diagnostics(
+        db_path=resolved_db_path,
+        days=days or 7,
+    )
     ocr_triage_text = format_ocr_triage_queue_diagnostics(
         db_path=resolved_db_path,
     )
@@ -401,7 +407,7 @@ def run_diagnostics(
         days=days or 7,
     )
     return (
-        f"{diagnostics_text}\n\n{audit_text}\n\n{extraction_text}\n\n{ocr_triage_text}\n\n"
+        f"{diagnostics_text}\n\n{audit_text}\n\n{extraction_text}\n\n{ocr_runtime_text}\n\n{ocr_triage_text}\n\n"
         f"{audit_gaps_text}\n\n{depth_text}\n\n{filtered_links_text}"
     ).strip()
 
@@ -475,7 +481,27 @@ def format_document_extraction_quality_audit(*, db_path: Path | str, days: int =
         key=lambda pair: pair[1],
         reverse=True,
     )[:5]
-    ocr_rows = [row for row in rows if row.get("scan_candidate") or row.get("needs_ocr")]
+    unresolved_rows_all = list_unresolved_scan_candidate_audit(db_path=db_path, limit=5000)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, int(days)))
+    unresolved_rows: list[dict[str, object]] = []
+    seen_unresolved_urls: set[str] = set()
+    for row in unresolved_rows_all:
+        collected_at = row.get("collected_at")
+        if isinstance(collected_at, datetime) and collected_at < cutoff:
+            continue
+        document_url = str(row.get("document_url") or "").strip()
+        if not document_url or document_url in seen_unresolved_urls:
+            continue
+        seen_unresolved_urls.add(document_url)
+        unresolved_rows.append(row)
+    ocr_resolved_by_runtime = sum(
+        1
+        for row in rows
+        if row.get("scan_candidate")
+        and row.get("has_text")
+        and str(row.get("ocr_status") or "") == "success"
+    )
+    queue_summary = summarize_ocr_queue(db_path=db_path)
     recent_documents = list_documents(db_path=db_path, days=days)
     visible_urls = {
         document.url
@@ -483,7 +509,7 @@ def format_document_extraction_quality_audit(*, db_path: Path | str, days: int =
         if document.action_level in {"requires_attention", "watchlist"}
     }
     visible_ocr_rows = [
-        row for row in ocr_rows if str(row.get("document_url") or "") in visible_urls
+        row for row in unresolved_rows if str(row.get("document_url") or "") in visible_urls
     ]
     lines.extend(
         [
@@ -491,6 +517,10 @@ def format_document_extraction_quality_audit(*, db_path: Path | str, days: int =
             f"- PDF fully extracted (text-layer ok): {pdf_fully_extracted}/{len(pdf_rows)}",
             f"- DOCX: total={len(docx_rows)}; with_text={docx_with_text}",
             f"- HTML/XML without text: {html_no_text}",
+            f"- OCR resolved by runtime: {ocr_resolved_by_runtime}",
+            f"- OCR unresolved: {len(unresolved_rows)}",
+            f"- OCR queue pending: {queue_summary['pending']}",
+            f"- OCR queue done: {queue_summary['done']}",
         ]
     )
     if pdf_scan_candidates > 0:
@@ -505,9 +535,9 @@ def format_document_extraction_quality_audit(*, db_path: Path | str, days: int =
             lines.append(f"  - {source_name}: {count}")
     else:
         lines.append("- Top sources by missing raw_text: none")
-    if ocr_rows:
+    if unresolved_rows:
         lines.append("- Documents requiring OCR:")
-        for row in ocr_rows[:10]:
+        for row in unresolved_rows[:10]:
             lines.append(
                 "  - "
                 f"{row.get('source_name')} | {row.get('document_url')} | "
@@ -518,8 +548,52 @@ def format_document_extraction_quality_audit(*, db_path: Path | str, days: int =
     return "\n".join(lines)
 
 
+def format_ocr_runtime_diagnostics(*, db_path: Path | str, days: int = 7) -> str:
+    rows = list_recent_document_extraction_audit(db_path=db_path, days=days)
+    runtime = get_ocr_runtime_status()
+    enabled_text = "enabled" if OCR_ENABLED else "disabled"
+    available_text = "available" if runtime.get("available") else "unavailable"
+    success_count = sum(1 for row in rows if row.get("ocr_status") == "success")
+    failed_count = sum(1 for row in rows if row.get("ocr_status") == "failed")
+    unavailable_count = sum(1 for row in rows if row.get("ocr_status") == "unavailable")
+    resolved_by_runtime_count = sum(
+        1
+        for row in rows
+        if row.get("scan_candidate")
+        and row.get("has_text")
+        and row.get("ocr_status") == "success"
+    )
+    unresolved_rows = list_unresolved_scan_candidate_audit(db_path=db_path, limit=5000)
+    unresolved_count = len({str(row.get("document_url") or "").strip() for row in unresolved_rows if row.get("document_url")})
+    queue_summary = summarize_ocr_queue(db_path=db_path)
+    ocr_text_total = sum(int(row.get("ocr_text_length") or 0) for row in rows)
+    lines = [
+        f"OCR runtime (last {days} days):",
+        f"- runtime: {enabled_text}",
+        f"- availability: {available_text}",
+        f"- language: {runtime.get('language') or '-'}",
+        f"- max_pages: {runtime.get('max_pages')}",
+        f"- tessdata_path: {runtime.get('tessdata_path') or '-'}",
+        f"- OCR success count: {success_count}",
+        f"- OCR failed count: {failed_count}",
+        f"- OCR unavailable count: {unavailable_count}",
+        f"- OCR resolved by runtime: {resolved_by_runtime_count}",
+        f"- OCR unresolved: {unresolved_count}",
+        f"- OCR queue pending: {queue_summary['pending']}",
+        f"- OCR queue done: {queue_summary['done']}",
+        f"- OCR text extracted total: {ocr_text_total}",
+    ]
+    available_languages = runtime.get("available_languages") or []
+    if available_languages:
+        lines.append("- available languages: " + ", ".join(str(value) for value in available_languages))
+    if runtime.get("reason"):
+        lines.append(f"- note: {runtime.get('reason')}")
+    return "\n".join(lines)
+
+
 def format_ocr_triage_queue_diagnostics(*, db_path: Path | str) -> str:
     summary = summarize_ocr_queue(db_path=db_path)
+    unresolved = list_unresolved_scan_candidate_audit(db_path=db_path, limit=5000)
     lines = [
         "OCR triage queue:",
         f"- pending: {summary['pending']}",
@@ -528,6 +602,11 @@ def format_ocr_triage_queue_diagnostics(*, db_path: Path | str) -> str:
         f"- skipped: {summary['skipped']}",
         f"- high priority pending: {summary['high_priority_pending']}",
     ]
+    if unresolved and summary["pending"] == 0 and summary["in_review"] == 0:
+        lines.append(
+            "- Warning: OCR queue is empty but unresolved scan candidates exist. "
+            "Run: python main.py ocr-backfill"
+        )
     return "\n".join(lines)
 
 
