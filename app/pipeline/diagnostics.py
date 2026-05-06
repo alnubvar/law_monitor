@@ -14,6 +14,7 @@ from app.storage import (
     list_documents,
     list_latest_source_audit,
     list_recent_document_extraction_audit,
+    summarize_ocr_queue,
 )
 
 NOISY_PAGE_TYPES = {
@@ -384,6 +385,9 @@ def run_diagnostics(
         db_path=resolved_db_path,
         days=days or 7,
     )
+    ocr_triage_text = format_ocr_triage_queue_diagnostics(
+        db_path=resolved_db_path,
+    )
     audit_gaps_text = format_pdf_docx_audit_gaps(
         db_path=resolved_db_path,
         days=days or 7,
@@ -397,7 +401,7 @@ def run_diagnostics(
         days=days or 7,
     )
     return (
-        f"{diagnostics_text}\n\n{audit_text}\n\n{extraction_text}\n\n"
+        f"{diagnostics_text}\n\n{audit_text}\n\n{extraction_text}\n\n{ocr_triage_text}\n\n"
         f"{audit_gaps_text}\n\n{depth_text}\n\n{filtered_links_text}"
     ).strip()
 
@@ -511,6 +515,19 @@ def format_document_extraction_quality_audit(*, db_path: Path | str, days: int =
             )
     else:
         lines.append("- Documents requiring OCR: none")
+    return "\n".join(lines)
+
+
+def format_ocr_triage_queue_diagnostics(*, db_path: Path | str) -> str:
+    summary = summarize_ocr_queue(db_path=db_path)
+    lines = [
+        "OCR triage queue:",
+        f"- pending: {summary['pending']}",
+        f"- in_review: {summary['in_review']}",
+        f"- done: {summary['done']}",
+        f"- skipped: {summary['skipped']}",
+        f"- high priority pending: {summary['high_priority_pending']}",
+    ]
     return "\n".join(lines)
 
 

@@ -9,7 +9,14 @@ from app.pipeline.collect import _is_scan_candidate
 from app.pipeline.diagnostics import run_diagnostics
 from app.pipeline.digest import run_demo_report
 from unittest.mock import patch
-from app.storage import init_db, save_document, save_document_extraction_audit, save_source_audit_record
+from app.storage import (
+    init_db,
+    save_document,
+    save_document_extraction_audit,
+    save_source_audit_record,
+    upsert_ocr_queue_item,
+    update_ocr_queue_status,
+)
 from app.models import ExtractionResult
 
 
@@ -400,6 +407,39 @@ class DiagnosticsSmokeTest(unittest.TestCase):
         output = run_diagnostics(db_path=db_path, days=7)
         self.assertIn("Top sources by missing raw_text:", output)
         self.assertIn("Минсельхоз Ростовской области - господдержка: 1", output)
+
+    def test_diagnostics_includes_ocr_triage_queue_block(self) -> None:
+        db_path = self._db_path("diagnostics_ocr_queue_block.db")
+        init_db(db_path)
+        upsert_ocr_queue_item(
+            document_url="https://example.com/scan-pending.pdf",
+            source_name="Право Ростовской области",
+            title="Скан pending",
+            priority="high",
+            reason="scan_candidate_pdf",
+            db_path=db_path,
+        )
+        upsert_ocr_queue_item(
+            document_url="https://example.com/scan-done.pdf",
+            source_name="Право Ростовской области",
+            title="Скан done",
+            priority="medium",
+            reason="scan_candidate_pdf",
+            db_path=db_path,
+        )
+        update_ocr_queue_status(
+            document_url="https://example.com/scan-done.pdf",
+            status="done",
+            db_path=db_path,
+        )
+
+        output = run_diagnostics(db_path=db_path, days=7)
+        self.assertIn("OCR triage queue:", output)
+        self.assertIn("pending: 1", output)
+        self.assertIn("in_review: 0", output)
+        self.assertIn("done: 1", output)
+        self.assertIn("skipped: 0", output)
+        self.assertIn("high priority pending: 1", output)
 
     def test_source_depth_stats_do_not_break_empty_db(self) -> None:
         db_path = self._db_path("diagnostics_source_depth_empty.db")

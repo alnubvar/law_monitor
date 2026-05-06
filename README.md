@@ -1,309 +1,163 @@
 # AHSTEP GR Monitor MVP
 
-Production-like MVP для GR-мониторинга НПА, мер поддержки и отраслевых сигналов в АПК.
+Production-style MVP for GR monitoring of agricultural policy signals: regional/federal regulations, support measures, and industry news.
 
-Система собирает документы из федеральных и региональных источников, извлекает текст, применяет rule-based анализ с `document facts`, присваивает `action_level`, формирует markdown-отчеты и отправляет уведомления в Telegram.
+## Project Overview
 
-## Current MVP Status
+AHSTEP GR Monitor is built for GR and policy teams that need daily visibility into:
 
-- `collect / analyze / report / notify / scheduler` работают;
-- `interactive Telegram bot` (polling + commands + reply keyboard) добавлен;
-- rule-based `document facts` внедрены;
-- `action_level` стабилизирован до ограниченного набора реальных GR-сигналов;
-- hourly alert и daily digest работают раздельно;
-- Telegram через proxy поддерживается для РФ-сервера;
-- SQLite, file logging, markdown reporting и tests уже встроены.
+- what requires immediate action;
+- what should stay on watchlist;
+- what is useful background but not actionable.
 
-## Что Делает Система
+The system continuously collects source documents, extracts text, applies rule-based analysis, stores results in SQLite, and delivers reports + Telegram summaries.
 
-- собирает документы, новости, разделы мер поддержки и региональные НПА;
-- извлекает текст из `html / pdf / docx`;
-- классифицирует документы по business-значимости;
-- вытаскивает прикладные факты для GR-аналитика;
-- формирует daily markdown-report и Telegram digest;
-- хранит историю в SQLite.
+## Architecture
 
-## Источники (MVP)
+Pipeline flow:
 
-- `Правительство РФ - документы` (`government.ru/docs`)
-- `Правительство РФ - новости` (`government.ru/news`)
-- `Regulation.gov.ru`
-- `ГИСП - меры поддержки АПК`
-- `Минсельхоз Краснодарского края - субсидирование и финансирование`
-- `Минсельхоз Ростовской области - господдержка`
-- `Минсельхоз Ставропольского края - господдержка`
-- `Нормативные акты Краснодарского края`
-- `Право Ростовской области`
-- `Право Ставропольского края`
-- `ZOL.ru - зерновые новости`
+1. `collect` -> source fetch + link filtering + extraction audit
+2. `extract` -> `html/pdf/docx` text extraction
+3. `analyze` -> rule-based classification + `action_level` + business facts
+4. `report` -> markdown GR report
+5. `notify` -> Telegram digest and interactive commands
 
-## Архитектура
+Core entrypoint: [main.py](main.py)
 
-- `collect`
-  загрузка источников из `config/sources.yaml`, сбор ссылок и первичных метаданных.
-- `analyze`
-  rule-based классификация, page type detection, `document facts`, `action_level`.
-- `report`
-  bucket-based markdown report с разделением на main GR, support/reference и background.
-- `notify`
-  Telegram notifications и безопасная отправка через proxy только для Telegram API.
-- `scheduler`
-  hourly collect/analyze/notify и daily report cycle.
+## Current Capabilities
 
-## Business Logic
-
-Система не считает документ срочным только потому, что в нем встречаются слова вроде `субсидия` или `господдержка`.
-
-Для документов мер поддержки она дополнительно учитывает:
-
-- статус меры: `active / inactive / unknown`;
-- режим: `open / closed / regular / unknown`;
-- target geography;
-- page type: карточка меры, раздел, реестр, протокол, фон;
-- business signal: короткое объяснение, почему документ попал в конкретный bucket.
-
-## Document Facts
-
-Для analyzed-документов сохраняются:
-
-- `support_status`
-- `is_active`
-- `is_continuous`
-- `application_status`
-- `npa_number`
-- `deadline_text`
-- `terms_text`
-- `business_signal`
-- `risk_notes`
-
-`deadline_text` хранит только реальные дедлайны реакции: прием заявок, срок подачи, конкурсный отбор, срок обсуждения.  
-`terms_text` хранит условия меры: срок кредита, срок займа, размер поддержки и похожие параметры.
+- source collection from federal and regional endpoints;
+- extraction for `html`, `pdf`, `docx`;
+- extraction diagnostics (`diagnostics`, extraction quality, source coverage);
+- OCR triage queue (without OCR runtime);
+- interactive Telegram bot with commands and reply keyboard;
+- document tracking (`/track`, `/untrack`, `/tracked`);
+- archive search (`/search`);
+- manual refresh flow (`/refresh`) with cooldown;
+- smoke checks and regression test suite.
 
 ## Action Levels
 
-- `requires_attention`
-  документ требует реакции GR-команды.
-- `watchlist`
-  документ важен для наблюдения, но без срочного действия.
-- `background`
-  полезный отраслевой или региональный фон без прямого action signal.
-- `irrelevant`
-  нерелевантный, служебный или шумовой документ.
+- `requires_attention`: requires GR action now.
+- `watchlist`: important to monitor, no immediate action.
+- `background`: useful context without direct action signal.
+- `irrelevant`: noisy/service/non-target material.
 
-## Source Diagnostics
+## OCR Triage Workflow
 
-Добавлена отдельная диагностика качества источников:
+### Why scan-candidates exist
+
+Some PDFs are effectively scans or have weak/no text layer. They are detected as `scan_candidate` during extraction audit.
+
+### Why OCR runtime is not enabled yet
+
+Current phase keeps runtime lightweight and deterministic:
+
+- no heavy OCR dependencies in production path;
+- no new infrastructure or cloud spend before ROI is validated.
+
+### Why OCR queue is useful
+
+OCR triage prevents scan-heavy documents from being lost:
+
+- keeps a managed queue of OCR candidates;
+- gives GR team visibility into pending work;
+- supports manual status updates (`pending`, `in_review`, `done`, `skipped`).
+
+### Current strategy
+
+- manual-first triage now;
+- optional local OCR later (selective, low-risk rollout);
+- cloud OCR only after ROI validation.
+
+### Priority model
+
+- `high`: visible policy signals (`requires_attention` / `watchlist`) or source `Нормативные акты Краснодарского края`.
+- `medium`: default for unknown/neutral candidates.
+- `low`: non-actionable (`irrelevant`) candidates.
+
+### Commands
 
 ```bash
-python main.py diagnostics
-python main.py diagnostics --days 7
+python main.py ocr-queue
+python main.py ocr-queue --status pending
+python main.py ocr-queue --priority high
+python main.py ocr-queue --status pending --limit 20
+python main.py ocr-mark <url> --status done
+python main.py ocr-mark <url> --status in_review --notes "checking text quality"
 ```
 
-Диагностика показывает:
-
-- сколько документов пришло по каждому источнику;
-- распределение по `requires_attention / watchlist / background / irrelevant`;
-- сколько документов без `published_at`;
-- сколько документов без `summary` или `raw_text`;
-- сколько `reference_page / registry / measure_card`;
-- топ источников по шуму.
-
-## Telegram Behavior
-
-- `hourly alert`
-  отправляет только новые `requires_attention`, у которых `notified = 0`.
-- `daily digest`
-  отправляет visible-документы из основных report buckets.
-- `notified flag`
-  выставляется только после успешной отправки Telegram-сообщения.
-- global / market background по умолчанию в Telegram digest не показывается.
-- proxy используется только для Telegram API, а не для парсинга источников.
-
-Команды в Telegram:
-
-- `/start` — открыть меню GR-монитора;
-- `/help` — список команд;
-- `/today` — visible документы за сегодня;
-- `/urgent [days]` — документы `requires_attention` за период;
-- `/watchlist [days]` — документы на наблюдении за период;
-- `/report [days]` — краткая сводка за период + вложение `.txt`;
-- `/search <query>` — поиск по архиву;
-- `/sources` — статус источников;
-- `/status` — состояние системы и счетчики;
-- `/refresh` — ручной collect/analyze/report с cooldown;
-- `/track <url>` — добавить документ в отслеживание;
-- `/untrack <url>` — убрать документ из отслеживания;
-- `/tracked` — показать активное отслеживание.
-
-## Структура Проекта
+Telegram:
 
 ```text
-app/
-config/
-docs/
-tests/
-main.py
-pyproject.toml
-.env.example
-README.md
+/ocr
 ```
 
-## Требования
+## Telegram Commands
 
-- Python 3.12+
-- Windows / Linux
-- Telegram bot token и chat id для уведомлений
+| Command | Purpose |
+| --- | --- |
+| `/start` | open menu |
+| `/help` | show command list |
+| `/status` | system status and freshness |
+| `/today` | visible documents for today |
+| `/urgent [days]` | `requires_attention` documents |
+| `/watchlist [days]` | watchlist documents |
+| `/report [days]` | short summary + `.txt` attachment |
+| `/sources` | source health summary |
+| `/ocr` | OCR triage queue summary |
+| `/search <query>` | archive search |
+| `/track <url>` | add document to tracking |
+| `/untrack <url>` | remove from tracking |
+| `/tracked` | list active tracked documents |
+| `/refresh` | manual collect/analyze/report run |
 
-## Установка
+## Quick Start
 
 ```bash
 python -m venv .venv
 .venv\Scripts\activate
 python -m pip install -e .
-```
-
-Заполните `.env` по образцу `.env.example`.
-
-## Быстрый Запуск
-
-```bash
-python main.py analyze --force
-python main.py diagnostics
-python main.py report --days 7 --action-level requires_attention watchlist --max-items 30
-python main.py run-scheduler --once
-```
-
-## Основные Команды
-
-```bash
 python main.py init-db
-python main.py collect
-python main.py analyze --force
-python main.py diagnostics
-python main.py report --days 7 --action-level requires_attention watchlist --max-items 30
-python main.py demo-report
+python main.py smoke-check
 python main.py run-scheduler --once
+```
+
+## Common CLI Commands
+
+```bash
+python main.py collect
+python main.py audit-extraction
+python main.py analyze --force
+python main.py diagnostics --days 7
+python main.py report --days 7 --action-level requires_attention watchlist --max-items 30
 python main.py run-telegram-bot
 python main.py check-tracked
-python main.py telegram-check
-python main.py notify-test
-python -m unittest discover -s tests -v
+python -m unittest -v
 ```
 
-## Deployment / 24/7 Run
+## Deployment
 
-Для production-подготовки без изменения бизнес-логики добавлены:
+Deployment guide: [docs/deployment.md](docs/deployment.md)
 
-- `python main.py smoke-check`
-- Windows-first scripts в `scripts/`
-- deployment guide: [docs/deployment.md](docs/deployment.md)
+This repository currently recommends Windows-first MVP deployment (`Task Scheduler` + SQLite), with optional Linux `systemd` examples.
 
-Быстрые команды:
+## Screenshots / Examples
 
-```powershell
-.\scripts\run_smoke_check.ps1
-.\scripts\run_scheduler_once.ps1
-.\scripts\run_scheduler.ps1
-.\scripts\backup_sqlite.ps1
-```
-
-Рекомендуемый текущий MVP-вариант: Windows host + SQLite + Task Scheduler + регулярный `run-scheduler --once`.
-
-Для production с интерактивным Telegram UX обычно запускаются 2 процесса:
-
-1. `python main.py run-scheduler`
-2. `python main.py run-telegram-bot`
-
-## Production Checklist (Short)
-
-1. Подготовить env: заполнить `.env` (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, опционально `TELEGRAM_PROXY_URL`).
-2. Инициализировать БД: `python main.py init-db`.
-3. Проверить контур: `python main.py smoke-check`.
-4. Прогнать pipeline вручную:
-   `python main.py analyze --force`
-   `python main.py report --days 7 --action-level requires_attention watchlist --max-items 25`
-5. Проверить Telegram доставку: `python main.py telegram-check`.
-6. Включить scheduler: `python main.py run-scheduler --once` (через Task Scheduler по расписанию).
-7. Запустить Telegram command listener: `python main.py run-telegram-bot`.
-
-## Demo Report
-
-Для репозитория можно безопасно собрать коммитируемый пример:
-
-```bash
-python main.py demo-report
-```
-
-По умолчанию он сохраняется в [docs/demo_report.md](docs/demo_report.md) и не требует Telegram или специальных env-переменных сверх доступа к локальной SQLite базе.
-
-## Telegram И Proxy
-
-Для серверов в РФ Telegram API может быть недоступен напрямую.
-
-Поддерживаются переменные:
-
-```env
-TELEGRAM_BOT_TOKEN=
-TELEGRAM_CHAT_ID=
-TELEGRAM_PROXY_URL=
-TELEGRAM_API_TIMEOUT=30
-```
-
-Поддерживаемые proxy-форматы:
-
-```env
-TELEGRAM_PROXY_URL=socks5://login:password@ip:port
-TELEGRAM_PROXY_URL=http://login:password@ip:port
-```
-
-Важно:
-
-- `collect` и парсинг сайтов идут напрямую;
-- proxy используется только для Telegram;
-- `run-telegram-bot` принимает входящие команды только из `TELEGRAM_CHAT_ID`;
-- секреты не должны попадать в git или логи.
-
-## Конфигурация
-
-Основные настройки задаются через:
-
-- `.env`
-- `config/sources.yaml`
-- `config/keywords.yaml`
-
-В репозиторий коммитится только `.env.example`, но не рабочий `.env`.
-
-## Git / Repo Hygiene
-
-В `.gitignore` уже исключены:
-
-- виртуальные окружения;
-- локальные БД;
-- `data/`, `logs/`, runtime-отчеты;
-- `.env`;
-- служебные IDE-файлы.
-
-Не исключаются:
-
-- `app/`
-- `tests/`
-- `config/`
-- `docs/demo_report.md`
-- `pyproject.toml`
-- `README.md`
+- Demo summary: [DEMO_SUMMARY.md](DEMO_SUMMARY.md)
+- Safe demo report artifact: [docs/demo_report.md](docs/demo_report.md)
+- Example generated reports: `reports/gr_monitoring_*.md`
 
 ## Roadmap
 
-- source-specific parsers
-- published_at and deadline quality
-- OCR для плохих PDF / сканов
-- PostgreSQL для production deployment
-- LLM summaries поверх очищенного source text
-- RAG / archive search по историческим документам
+- selective OCR runtime for high-priority queue items;
+- optional LLM-assisted summaries on top of clean extracted text;
+- retrieval and historical analysis (RAG-style workflows);
+- extraction robustness improvements for source-specific edge cases.
 
-## Ограничения MVP
+## Constraints (Current Phase)
 
-- Анализ полностью rule-based (LLM не используется).
-- OCR и PostgreSQL не используются в runtime.
-- Scheduler/Telegram transport и schema стабилизированы и не меняются в рамках текущих фаз.
-- Отчет ориентирован на ежедневную GR-работу, не на полноценный BI-дашборд.
+- no OCR runtime in production pipeline;
+- no changes to `action_level` business logic in triage/docs phase;
+- no heavy dependency additions;
+- no overengineering of infra for MVP stage.

@@ -11,6 +11,7 @@ from app.models import CollectedItem, ExtractionResult, RawDocument, SourceConfi
 from app.pipeline.collect import run_collect_with_options
 from app.storage import (
     init_db,
+    list_ocr_queue,
     list_documents,
     list_latest_source_audit,
     list_recent_document_extraction_audit,
@@ -133,6 +134,230 @@ class CollectAuditTest(unittest.TestCase):
         audit_rows = list_latest_source_audit(db_path=db_path)
         self.assertEqual(len(audit_rows), 1)
         self.assertIn("source access blocked (HTTP 403)", audit_rows[0].get("error_message") or "")
+
+    def test_scan_candidate_creates_ocr_queue_item(self) -> None:
+        db_path = self._db_path("collect_scan_candidate_ocr_queue.db")
+        init_db(db_path)
+        source_config = SourceConfig(
+            name="Право Ростовской области",
+            url="https://pravo.donland.ru/",
+            level="regional",
+            region="rostov",
+            source_role="regional_npa",
+            parser="regional_law",
+            description="test",
+        )
+        item = CollectedItem(
+            source_name=source_config.name,
+            source_url=source_config.url,
+            level=source_config.level,
+            region=source_config.region,
+            title="Скан постановления",
+            url="https://example.com/scan-a.pdf",
+            document_type="pdf",
+        )
+
+        class FakeSource:
+            def __init__(self) -> None:
+                self.last_fetch_stats = {"links_found_count": 1, "pdf_links_count": 1}
+
+            def fetch_items(self) -> list[CollectedItem]:
+                return [item]
+
+        with patch("app.pipeline.collect.load_sources", return_value=[source_config]):
+            with patch("app.pipeline.collect.create_source", return_value=FakeSource()):
+                with patch(
+                    "app.pipeline.collect.extract_document",
+                    return_value=ExtractionResult(
+                        raw_text="",
+                        document_type="pdf",
+                        needs_ocr=True,
+                        page_count=4,
+                        extracted_text_length=0,
+                    ),
+                ):
+                    run_collect_with_options(
+                        source_name=source_config.name,
+                        limit=1,
+                        audit_existing=False,
+                        db_path=str(db_path),
+                    )
+
+        queue_rows = list_ocr_queue(db_path=db_path, statuses=["pending"], limit=10)
+        self.assertEqual(len(queue_rows), 1)
+        self.assertEqual(queue_rows[0]["document_url"], "https://example.com/scan-a.pdf")
+
+    def test_duplicate_scan_candidate_does_not_create_duplicate_ocr_queue_rows(self) -> None:
+        db_path = self._db_path("collect_scan_candidate_ocr_queue_dedup.db")
+        init_db(db_path)
+        source_config = SourceConfig(
+            name="Право Ростовской области",
+            url="https://pravo.donland.ru/",
+            level="regional",
+            region="rostov",
+            source_role="regional_npa",
+            parser="regional_law",
+            description="test",
+        )
+        item = CollectedItem(
+            source_name=source_config.name,
+            source_url=source_config.url,
+            level=source_config.level,
+            region=source_config.region,
+            title="Скан постановления",
+            url="https://example.com/scan-b.pdf",
+            document_type="pdf",
+        )
+
+        class FakeSource:
+            def __init__(self) -> None:
+                self.last_fetch_stats = {"links_found_count": 1, "pdf_links_count": 1}
+
+            def fetch_items(self) -> list[CollectedItem]:
+                return [item]
+
+        with patch("app.pipeline.collect.load_sources", return_value=[source_config]):
+            with patch("app.pipeline.collect.create_source", return_value=FakeSource()):
+                with patch(
+                    "app.pipeline.collect.extract_document",
+                    return_value=ExtractionResult(
+                        raw_text="",
+                        document_type="pdf",
+                        needs_ocr=True,
+                        page_count=5,
+                        extracted_text_length=0,
+                    ),
+                ):
+                    run_collect_with_options(
+                        source_name=source_config.name,
+                        limit=1,
+                        audit_existing=False,
+                        db_path=str(db_path),
+                    )
+                    run_collect_with_options(
+                        source_name=source_config.name,
+                        limit=1,
+                        audit_existing=True,
+                        db_path=str(db_path),
+                    )
+
+        queue_rows = list_ocr_queue(db_path=db_path, limit=10)
+        self.assertEqual(len(queue_rows), 1)
+        self.assertEqual(queue_rows[0]["document_url"], "https://example.com/scan-b.pdf")
+
+    def test_ocr_priority_is_high_for_watchlist_or_krasnodar_npa(self) -> None:
+        db_path = self._db_path("collect_scan_candidate_ocr_priority.db")
+        init_db(db_path)
+        watchlist_document = RawDocument(
+            source_name="Право Ростовской области",
+            source_url="https://pravo.donland.ru/",
+            level="regional",
+            region="rostov",
+            title="Действующий приказ",
+            url="https://example.com/watchlist-scan.pdf",
+            published_at=datetime.now(timezone.utc),
+            collected_at=datetime.now(timezone.utc),
+            content_hash="watchlist-scan-hash",
+            raw_text="text",
+            document_type="pdf",
+            action_level="watchlist",
+            status="analyzed",
+        )
+        save_document(watchlist_document, db_path)
+        source_config = SourceConfig(
+            name="Право Ростовской области",
+            url="https://pravo.donland.ru/",
+            level="regional",
+            region="rostov",
+            source_role="regional_npa",
+            parser="regional_law",
+            description="test",
+        )
+        watchlist_item = CollectedItem(
+            source_name=source_config.name,
+            source_url=source_config.url,
+            level=source_config.level,
+            region=source_config.region,
+            title="Действующий приказ",
+            url="https://example.com/watchlist-scan.pdf",
+            document_type="pdf",
+        )
+
+        class FakeExistingSource:
+            def __init__(self) -> None:
+                self.last_fetch_stats = {"links_found_count": 1, "pdf_links_count": 1}
+
+            def fetch_items(self) -> list[CollectedItem]:
+                return [watchlist_item]
+
+        with patch("app.pipeline.collect.load_sources", return_value=[source_config]):
+            with patch("app.pipeline.collect.create_source", return_value=FakeExistingSource()):
+                with patch(
+                    "app.pipeline.collect.extract_document",
+                    return_value=ExtractionResult(
+                        raw_text="",
+                        document_type="pdf",
+                        needs_ocr=True,
+                        page_count=4,
+                        extracted_text_length=0,
+                    ),
+                ):
+                    run_collect_with_options(
+                        source_name=source_config.name,
+                        limit=1,
+                        audit_existing=True,
+                        db_path=str(db_path),
+                    )
+
+        krasnodar_config = SourceConfig(
+            name="Нормативные акты Краснодарского края",
+            url="https://admkrai.krasnodar.ru/content/1291/",
+            level="regional",
+            region="krasnodar",
+            source_role="regional_npa",
+            parser="krasnodar",
+            description="test",
+        )
+        krasnodar_item = CollectedItem(
+            source_name=krasnodar_config.name,
+            source_url=krasnodar_config.url,
+            level=krasnodar_config.level,
+            region=krasnodar_config.region,
+            title="Краевой скан НПА",
+            url="https://example.com/krasnodar-scan.pdf",
+            document_type="pdf",
+        )
+
+        class FakeKrasnodarSource:
+            def __init__(self) -> None:
+                self.last_fetch_stats = {"links_found_count": 1, "pdf_links_count": 1}
+
+            def fetch_items(self) -> list[CollectedItem]:
+                return [krasnodar_item]
+
+        with patch("app.pipeline.collect.load_sources", return_value=[krasnodar_config]):
+            with patch("app.pipeline.collect.create_source", return_value=FakeKrasnodarSource()):
+                with patch(
+                    "app.pipeline.collect.extract_document",
+                    return_value=ExtractionResult(
+                        raw_text="",
+                        document_type="pdf",
+                        needs_ocr=True,
+                        page_count=3,
+                        extracted_text_length=0,
+                    ),
+                ):
+                    run_collect_with_options(
+                        source_name=krasnodar_config.name,
+                        limit=1,
+                        audit_existing=False,
+                        db_path=str(db_path),
+                    )
+
+        queue_rows = list_ocr_queue(db_path=db_path, limit=10)
+        by_url = {str(row["document_url"]): row for row in queue_rows}
+        self.assertEqual(by_url["https://example.com/watchlist-scan.pdf"]["priority"], "high")
+        self.assertEqual(by_url["https://example.com/krasnodar-scan.pdf"]["priority"], "high")
 
 
 if __name__ == "__main__":

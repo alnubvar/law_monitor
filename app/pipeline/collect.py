@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
+from pathlib import Path
 
 import requests
 from requests import RequestException
@@ -21,6 +22,8 @@ from app.sources.krasnodar_source import KrasnodarSource
 from app.sources.regional_law_source import RegionalLawSource
 from app.sources.stavropol_source import StavropolSource
 from app.storage import (
+    determine_ocr_priority,
+    get_document_by_url,
     update_document_published_at_by_url,
     clear_source_errors,
     document_exists_by_hash,
@@ -31,6 +34,7 @@ from app.storage import (
     save_source_audit_record,
     save_source_error,
     save_document,
+    upsert_ocr_queue_item,
 )
 from datetime import datetime, timezone
 
@@ -139,6 +143,26 @@ def _attachment_url_for_item(item: CollectedItem) -> str | None:
     if item.document_type in {"pdf", "doc", "docx"}:
         return item.url
     return None
+
+
+def _sync_ocr_queue_for_scan_candidate(
+    *,
+    item: CollectedItem,
+    action_level: str | None,
+    db_path: str | Path,
+) -> None:
+    priority = determine_ocr_priority(
+        source_name=item.source_name,
+        action_level=action_level,
+    )
+    upsert_ocr_queue_item(
+        document_url=item.url,
+        source_name=item.source_name,
+        title=item.title,
+        priority=priority,
+        reason="scan_candidate_pdf",
+        db_path=db_path,
+    )
 
 
 def _format_source_access_warning(exc: RequestException) -> str:
@@ -290,6 +314,14 @@ def run_collect_with_options(
                             extraction_error=extracted.error,
                             db_path=resolved_db_path,
                         )
+                        if scan_candidate:
+                            existing_document = get_document_by_url(item.url, db_path=resolved_db_path)
+                            existing_action_level = existing_document.action_level if existing_document else None
+                            _sync_ocr_queue_for_scan_candidate(
+                                item=item,
+                                action_level=existing_action_level,
+                                db_path=resolved_db_path,
+                            )
                     logger.debug("Skip existing URL: %s", item.url)
                     source_skipped_existing += 1
                     continue
@@ -315,6 +347,12 @@ def run_collect_with_options(
                     extraction_error=extracted.error,
                     db_path=resolved_db_path,
                 )
+                if scan_candidate:
+                    _sync_ocr_queue_for_scan_candidate(
+                        item=item,
+                        action_level=None,
+                        db_path=resolved_db_path,
+                    )
                 content_hash = compute_content_hash(
                     extracted.raw_text, fallback=f"{item.title}\n{item.url}"
                 )

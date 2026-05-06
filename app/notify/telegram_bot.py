@@ -67,6 +67,7 @@ BOT_COMMANDS: tuple[tuple[str, str], ...] = (
     ("watchlist", "наблюдение"),
     ("report", "последний отчет"),
     ("sources", "источники"),
+    ("ocr", "OCR triage"),
     ("search", "поиск по архиву"),
     ("track", "добавить в отслеживание"),
     ("untrack", "убрать из отслеживания"),

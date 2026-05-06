@@ -32,6 +32,7 @@ class StorageSmokeTest(unittest.TestCase):
         self.assertIn("source_errors", tables)
         self.assertIn("source_audit", tables)
         self.assertIn("document_extraction_audit", tables)
+        self.assertIn("ocr_queue", tables)
 
         with closing(sqlite3.connect(db_path)) as connection:
             columns = {
@@ -42,6 +43,45 @@ class StorageSmokeTest(unittest.TestCase):
         self.assertIn("support_status", columns)
         self.assertIn("application_status", columns)
         self.assertIn("terms_text", columns)
+
+    def test_ocr_queue_upsert_and_status_update(self) -> None:
+        db_path = Path("data/test_artifacts/test_ocr_queue.db")
+        if db_path.exists():
+            db_path.unlink()
+        init_db(db_path)
+
+        first_id = storage.upsert_ocr_queue_item(
+            document_url="https://example.com/scan.pdf",
+            source_name="Нормативные акты Краснодарского края",
+            title="Скан приказа",
+            priority="high",
+            reason="scan_candidate_pdf",
+            db_path=db_path,
+        )
+        second_id = storage.upsert_ocr_queue_item(
+            document_url="https://example.com/scan.pdf",
+            source_name="Нормативные акты Краснодарского края",
+            title="Скан приказа обновлен",
+            priority="high",
+            reason="scan_candidate_pdf",
+            db_path=db_path,
+        )
+
+        self.assertEqual(first_id, second_id)
+        rows = storage.list_ocr_queue(db_path=db_path, statuses=["pending"], limit=10)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["priority"], "high")
+
+        updated = storage.update_ocr_queue_status(
+            document_url="https://example.com/scan.pdf",
+            status="done",
+            notes="checked",
+            db_path=db_path,
+        )
+        self.assertTrue(updated)
+        summary = storage.summarize_ocr_queue(db_path=db_path)
+        self.assertEqual(summary["pending"], 0)
+        self.assertEqual(summary["done_skipped"], 1)
 
     def test_init_db_closes_sqlite_connections(self) -> None:
         original_connect = sqlite3.connect

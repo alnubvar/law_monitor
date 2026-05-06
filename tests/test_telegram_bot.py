@@ -60,6 +60,7 @@ class TelegramBotTest(unittest.TestCase):
                     {"command": "watchlist", "description": "наблюдение"},
                     {"command": "report", "description": "последний отчет"},
                     {"command": "sources", "description": "источники"},
+                    {"command": "ocr", "description": "OCR triage"},
                     {"command": "search", "description": "поиск по архиву"},
                     {"command": "track", "description": "добавить в отслеживание"},
                     {"command": "untrack", "description": "убрать из отслеживания"},

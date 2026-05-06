@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from urllib.parse import urlparse
 
 from app.config import setup_logging
 from app.notify.telegram import get_diagnostic_status
@@ -14,7 +15,12 @@ from app.pipeline.tracking import run_check_tracked
 from app.pipeline.run import run_pipeline
 from app.pipeline.smoke import run_smoke_check
 from app.scheduler import run_scheduler, send_test_notification
-from app.storage import init_db
+from app.storage import (
+    init_db,
+    list_ocr_queue,
+    summarize_ocr_queue,
+    update_ocr_queue_status,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -232,6 +238,44 @@ def build_parser() -> argparse.ArgumentParser:
         "check-tracked",
         help="Проверить отслеживаемые документы и отправить уведомления об изменениях.",
     )
+    ocr_queue_parser = subparsers.add_parser(
+        "ocr-queue",
+        help="Показать OCR triage queue (pending/in_review по умолчанию).",
+    )
+    ocr_queue_parser.add_argument(
+        "--status",
+        choices=["pending", "in_review", "done", "skipped"],
+        default=None,
+        help="Фильтр очереди по статусу.",
+    )
+    ocr_queue_parser.add_argument(
+        "--priority",
+        choices=["high", "medium", "low"],
+        default=None,
+        help="Фильтр очереди по приоритету.",
+    )
+    ocr_queue_parser.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        help="Максимум элементов в выводе.",
+    )
+    ocr_mark_parser = subparsers.add_parser(
+        "ocr-mark",
+        help="Обновить статус OCR triage элемента по URL.",
+    )
+    ocr_mark_parser.add_argument("url", help="document_url из OCR очереди.")
+    ocr_mark_parser.add_argument(
+        "--status",
+        required=True,
+        choices=["pending", "in_review", "done", "skipped"],
+        help="Новый статус.",
+    )
+    ocr_mark_parser.add_argument(
+        "--notes",
+        default=None,
+        help="Опциональные заметки для triage.",
+    )
 
     return parser
 
@@ -241,6 +285,58 @@ def _print_telegram_diagnostics(*, sent: bool) -> None:
     print(f"Telegram configured: {'yes' if status['telegram_configured'] else 'no'}")
     print(f"Proxy configured: {'yes' if status['proxy_configured'] else 'no'}")
     print(f"Send result: {'success' if sent else 'fail'}")
+
+
+def _render_ocr_queue_lines(
+    *,
+    rows: list[dict[str, object]],
+    summary: dict[str, int],
+    status_filter: str | None,
+    priority_filter: str | None,
+) -> list[str]:
+    def _short_title(value: object, *, max_len: int = 56) -> str:
+        raw = str(value or "(no title)").strip()
+        if len(raw) <= max_len:
+            return raw
+        return f"{raw[: max_len - 3].rstrip()}..."
+
+    def _short_url(value: object, *, max_len: int = 44) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return "-"
+        parsed = urlparse(raw)
+        short = f"{parsed.netloc}{parsed.path}" if parsed.netloc else raw
+        if len(short) <= max_len:
+            return short
+        return f"{short[: max_len - 3].rstrip()}..."
+
+    lines = [
+        "OCR triage queue",
+        f"Pending: {summary['pending']}",
+        f"High priority pending: {summary['high_priority_pending']}",
+        f"Done/skipped: {summary['done_skipped']}",
+    ]
+    if status_filter:
+        lines.append(f"Filter: {status_filter}")
+    if priority_filter:
+        lines.append(f"Priority: {priority_filter}")
+    if not rows:
+        lines.append("No OCR queue items for selected filter.")
+        return lines
+    lines.append("")
+    lines.append("Top items:")
+    lines.append("PRIORITY STATUS     SOURCE                                  TITLE                                                    URL")
+    lines.append("-------- ---------- --------------------------------------- -------------------------------------------------------- --------------------------------------------")
+    for row in rows:
+        priority = str(row.get("priority") or "-")
+        status = str(row.get("status") or "-")
+        source = str(row.get("source_name") or "-")
+        title = _short_title(row.get("title"))
+        short_url = _short_url(row.get("document_url"))
+        lines.append(
+            f"{priority:<8} {status:<10} {source[:39]:<39} {title:<56} {short_url}"
+        )
+    return lines
 
 
 def main() -> int:
@@ -354,6 +450,39 @@ def main() -> int:
             f"Checked={result.checked}, Changed={result.changed}, "
             f"Notified={result.notified}, Errors={result.errors}"
         )
+        return 0
+
+    if args.command == "ocr-queue":
+        status_values = [args.status] if args.status else ["pending", "in_review"]
+        priority_values = [args.priority] if args.priority else None
+        rows = list_ocr_queue(
+            statuses=status_values,
+            priorities=priority_values,
+            limit=args.limit,
+        )
+        summary = summarize_ocr_queue()
+        print(
+            "\n".join(
+                _render_ocr_queue_lines(
+                    rows=rows,
+                    summary=summary,
+                    status_filter=args.status,
+                    priority_filter=args.priority,
+                )
+            )
+        )
+        return 0
+
+    if args.command == "ocr-mark":
+        updated = update_ocr_queue_status(
+            document_url=args.url,
+            status=args.status,
+            notes=args.notes,
+        )
+        if not updated:
+            print("OCR queue item not found for provided URL.")
+            return 1
+        print(f"OCR queue updated: status={args.status}")
         return 0
 
     parser.print_help()

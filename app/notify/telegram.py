@@ -6,6 +6,7 @@ import time
 from collections.abc import Sequence
 from datetime import date, datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 
@@ -28,6 +29,8 @@ from app.storage import (
     save_tracking_snapshot,
     compute_tracking_status_hash,
     search_documents,
+    list_ocr_queue,
+    summarize_ocr_queue,
 )
 from app.storage import get_runtime_event, list_latest_source_audit
 
@@ -43,6 +46,7 @@ TELEGRAM_COMMANDS = (
     "/watchlist",
     "/report",
     "/sources",
+    "/ocr",
     "/search",
     "/track",
     "/untrack",
@@ -207,6 +211,8 @@ def build_command_response(
         return _build_report_message(resolved_db_path, days=period_days)
     if normalized_command == "/sources":
         return _build_sources_message(resolved_db_path)
+    if normalized_command == "/ocr":
+        return _build_ocr_queue_message(resolved_db_path)
     if normalized_command == "/search":
         return _build_search_message(resolved_db_path, query=" ".join(command_args).strip())
     if normalized_command == "/track":
@@ -501,6 +507,7 @@ def _build_help_message() -> str:
             "/urgent [days] — требует внимания (например, /urgent 30)",
             "/watchlist [days] — наблюдение (например, /watchlist 30)",
             "/report [days] — краткая сводка (например, /report 30)",
+            "/ocr — OCR triage queue (pending/high/top-5)",
             "/search <запрос> — поиск по архиву",
             "/track <url> — добавить документ в отслеживание",
             "/untrack <url> — убрать документ из отслеживания",
@@ -510,6 +517,54 @@ def _build_help_message() -> str:
             "/help — список команд",
         ]
     ))
+
+
+def _build_ocr_queue_message(db_path: Path | str) -> str:
+    def _short_title(value: str, *, max_len: int = 90) -> str:
+        normalized = value.strip()
+        if len(normalized) <= max_len:
+            return normalized
+        return f"{normalized[: max_len - 3].rstrip()}..."
+
+    def _short_url(value: str, *, max_len: int = 60) -> str:
+        normalized = value.strip()
+        parsed = urlparse(normalized)
+        compact = f"{parsed.netloc}{parsed.path}" if parsed.netloc else normalized
+        if len(compact) <= max_len:
+            return compact
+        return f"{compact[: max_len - 3].rstrip()}..."
+
+    priority_icons = {
+        "high": "🔴",
+        "medium": "🟡",
+        "low": "⚪",
+    }
+    summary = summarize_ocr_queue(db_path=db_path)
+    rows = list_ocr_queue(
+        statuses=["pending"],
+        limit=5,
+        db_path=db_path,
+    )
+    lines = [
+        "🧾 OCR triage queue",
+        f"Pending: {summary['pending']}",
+        f"High priority pending: {summary['high_priority_pending']}",
+    ]
+    if not rows:
+        lines.append("Top pending: none")
+        return _cap_message("\n".join(lines))
+
+    lines.append("Top-5 pending:")
+    for row in rows:
+        priority = str(row.get("priority") or "medium")
+        icon = priority_icons.get(priority, "⚪")
+        title = _short_title(str(row.get("title") or "(no title)"))
+        source_name = str(row.get("source_name") or "unknown")
+        short_url = _short_url(str(row.get("document_url") or ""))
+        lines.append(f"{icon} {title}")
+        lines.append(f"  {source_name}")
+        lines.append(f"  {short_url}")
+    return _cap_message("\n".join(lines))
 
 
 def _build_track_message(

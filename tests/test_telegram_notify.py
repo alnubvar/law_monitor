@@ -13,6 +13,7 @@ from app.storage import (
     init_db,
     list_active_tracking_items,
     save_document,
+    upsert_ocr_queue_item,
 )
 
 
@@ -134,6 +135,35 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         self.assertIn("/watchlist", text)
         self.assertIn("/report", text)
         self.assertIn("/sources", text)
+        self.assertIn("/ocr", text)
+
+    def test_ocr_command_shows_pending_and_top_documents(self) -> None:
+        db_path = self._db_path("telegram_ocr_queue.db")
+        init_db(db_path)
+        upsert_ocr_queue_item(
+            document_url="https://example.com/ocr-1.pdf",
+            source_name="Нормативные акты Краснодарского края",
+            title="Скан приказа 1",
+            priority="high",
+            reason="scan_candidate_pdf",
+            db_path=db_path,
+        )
+        upsert_ocr_queue_item(
+            document_url="https://example.com/ocr-2.pdf",
+            source_name="Право Ростовской области",
+            title="Скан приказа 2",
+            priority="medium",
+            reason="scan_candidate_pdf",
+            db_path=db_path,
+        )
+
+        text = telegram.build_command_response("/ocr", db_path=db_path)
+
+        self.assertIn("OCR triage queue", text)
+        self.assertIn("Pending: 2", text)
+        self.assertIn("High priority pending: 1", text)
+        self.assertIn("🔴 Скан приказа 1", text)
+        self.assertIn("example.com/ocr-1.pdf", text)
 
     def test_urgent_command_returns_requires_attention_documents(self) -> None:
         db_path = self._db_path("telegram_urgent.db")

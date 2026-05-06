@@ -251,6 +251,65 @@ def init_db(db_path: Path | str = DB_PATH) -> None:
         )
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS ocr_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_url TEXT NOT NULL UNIQUE,
+                source_name TEXT NOT NULL,
+                title TEXT,
+                priority TEXT NOT NULL DEFAULT 'medium',
+                status TEXT NOT NULL DEFAULT 'pending',
+                reason TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                notes TEXT
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ocr_queue_status_priority ON ocr_queue(status, priority, updated_at DESC)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ocr_queue_updated_at ON ocr_queue(updated_at DESC)"
+        )
+        ocr_queue_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(ocr_queue)").fetchall()
+        }
+        if "title" not in ocr_queue_columns:
+            connection.execute("ALTER TABLE ocr_queue ADD COLUMN title TEXT")
+        if "priority" not in ocr_queue_columns:
+            connection.execute("ALTER TABLE ocr_queue ADD COLUMN priority TEXT NOT NULL DEFAULT 'medium'")
+        if "status" not in ocr_queue_columns:
+            connection.execute("ALTER TABLE ocr_queue ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'")
+        if "reason" not in ocr_queue_columns:
+            connection.execute("ALTER TABLE ocr_queue ADD COLUMN reason TEXT")
+        if "created_at" not in ocr_queue_columns:
+            connection.execute("ALTER TABLE ocr_queue ADD COLUMN created_at TEXT")
+            connection.execute(
+                """
+                UPDATE ocr_queue
+                SET created_at = COALESCE(updated_at, ?)
+                WHERE created_at IS NULL OR created_at = ''
+                """,
+                (_serialize_dt(datetime.now(timezone.utc)),),
+            )
+        if "updated_at" not in ocr_queue_columns:
+            connection.execute("ALTER TABLE ocr_queue ADD COLUMN updated_at TEXT")
+            connection.execute(
+                """
+                UPDATE ocr_queue
+                SET updated_at = COALESCE(created_at, ?)
+                WHERE updated_at IS NULL OR updated_at = ''
+                """,
+                (_serialize_dt(datetime.now(timezone.utc)),),
+            )
+        if "notes" not in ocr_queue_columns:
+            connection.execute("ALTER TABLE ocr_queue ADD COLUMN notes TEXT")
+        connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_ocr_queue_document_url ON ocr_queue(document_url)"
+        )
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS runtime_events (
                 event_name TEXT PRIMARY KEY,
                 updated_at TEXT NOT NULL,
@@ -866,6 +925,227 @@ def save_document_extraction_audit(
         )
         connection.commit()
         return int(cursor.lastrowid)
+
+
+def determine_ocr_priority(
+    *,
+    source_name: str,
+    action_level: str | None,
+) -> str:
+    normalized_level = (action_level or "").strip().lower()
+    if normalized_level in {"requires_attention", "watchlist"}:
+        return "high"
+    if (source_name or "").strip() == "Нормативные акты Краснодарского края":
+        return "high"
+    if normalized_level == "irrelevant":
+        return "low"
+    return "medium"
+
+
+def upsert_ocr_queue_item(
+    *,
+    document_url: str,
+    source_name: str,
+    title: str | None,
+    priority: str,
+    reason: str,
+    db_path: Path | str = DB_PATH,
+) -> int:
+    normalized_url = (document_url or "").strip()
+    if not normalized_url:
+        raise ValueError("document_url must not be empty")
+    normalized_priority = (priority or "").strip().lower()
+    if normalized_priority not in {"high", "medium", "low"}:
+        raise ValueError(f"Unsupported OCR priority: {priority}")
+    timestamp = _serialize_dt(datetime.now(timezone.utc))
+    assert timestamp is not None
+    with _connect_db(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO ocr_queue(
+                document_url, source_name, title, priority, status, reason, created_at, updated_at, notes
+            ) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, NULL)
+            ON CONFLICT(document_url) DO UPDATE SET
+                source_name = excluded.source_name,
+                title = excluded.title,
+                priority = excluded.priority,
+                reason = excluded.reason,
+                updated_at = excluded.updated_at
+            """,
+            (
+                normalized_url,
+                source_name,
+                title,
+                normalized_priority,
+                reason,
+                timestamp,
+                timestamp,
+            ),
+        )
+        row = connection.execute(
+            "SELECT id FROM ocr_queue WHERE document_url = ? LIMIT 1",
+            (normalized_url,),
+        ).fetchone()
+        connection.commit()
+    return int(row["id"]) if row is not None else 0
+
+
+def list_ocr_queue(
+    *,
+    status: str | None = None,
+    statuses: list[str] | None = None,
+    priority: str | None = None,
+    priorities: list[str] | None = None,
+    limit: int = 20,
+    db_path: Path | str = DB_PATH,
+) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(int(limit), 200))
+    status_filters = statuses[:] if statuses else []
+    if status:
+        status_filters = [status]
+    normalized_statuses = [
+        value.strip().lower()
+        for value in status_filters
+        if value and value.strip().lower() in {"pending", "in_review", "done", "skipped"}
+    ]
+    priority_filters = priorities[:] if priorities else []
+    if priority:
+        priority_filters = [priority]
+    normalized_priorities = [
+        value.strip().lower()
+        for value in priority_filters
+        if value and value.strip().lower() in {"high", "medium", "low"}
+    ]
+    query = """
+        SELECT *
+        FROM ocr_queue
+    """
+    params: list[Any] = []
+    where_clauses: list[str] = []
+    if normalized_statuses:
+        placeholders = ", ".join("?" for _ in normalized_statuses)
+        where_clauses.append(f"status IN ({placeholders})")
+        params.extend(normalized_statuses)
+    if normalized_priorities:
+        placeholders = ", ".join("?" for _ in normalized_priorities)
+        where_clauses.append(f"priority IN ({placeholders})")
+        params.extend(normalized_priorities)
+    if where_clauses:
+        query += " WHERE " + " AND ".join(where_clauses)
+    query += """
+        ORDER BY
+            CASE priority
+                WHEN 'high' THEN 1
+                WHEN 'medium' THEN 2
+                WHEN 'low' THEN 3
+                ELSE 4
+            END ASC,
+            CASE status
+                WHEN 'pending' THEN 1
+                WHEN 'in_review' THEN 2
+                WHEN 'done' THEN 3
+                WHEN 'skipped' THEN 4
+                ELSE 5
+            END ASC,
+            updated_at DESC,
+            id DESC
+        LIMIT ?
+    """
+    params.append(safe_limit)
+    with _connect_db(db_path) as connection:
+        rows = connection.execute(query, tuple(params)).fetchall()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        payload = dict(row)
+        payload["created_at"] = _parse_dt(payload.get("created_at"))
+        payload["updated_at"] = _parse_dt(payload.get("updated_at"))
+        result.append(payload)
+    return result
+
+
+def update_ocr_queue_status(
+    *,
+    document_url: str,
+    status: str,
+    notes: str | None = None,
+    db_path: Path | str = DB_PATH,
+) -> bool:
+    normalized_url = (document_url or "").strip()
+    normalized_status = (status or "").strip().lower()
+    if not normalized_url:
+        return False
+    if normalized_status not in {"pending", "in_review", "done", "skipped"}:
+        raise ValueError(f"Unsupported OCR queue status: {status}")
+    timestamp = _serialize_dt(datetime.now(timezone.utc))
+    assert timestamp is not None
+    with _connect_db(db_path) as connection:
+        if notes is None:
+            cursor = connection.execute(
+                """
+                UPDATE ocr_queue
+                SET status = ?, updated_at = ?
+                WHERE document_url = ?
+                """,
+                (normalized_status, timestamp, normalized_url),
+            )
+        else:
+            cursor = connection.execute(
+                """
+                UPDATE ocr_queue
+                SET status = ?, notes = ?, updated_at = ?
+                WHERE document_url = ?
+                """,
+                (normalized_status, notes, timestamp, normalized_url),
+            )
+        connection.commit()
+    return bool(cursor.rowcount)
+
+
+def summarize_ocr_queue(
+    *,
+    db_path: Path | str = DB_PATH,
+) -> dict[str, int]:
+    with _connect_db(db_path) as connection:
+        pending_row = connection.execute(
+            "SELECT COUNT(*) AS total FROM ocr_queue WHERE status = 'pending'"
+        ).fetchone()
+        high_row = connection.execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM ocr_queue
+            WHERE priority = 'high'
+              AND status IN ('pending', 'in_review')
+            """
+        ).fetchone()
+        done_skipped_row = connection.execute(
+            "SELECT COUNT(*) AS total FROM ocr_queue WHERE status IN ('done', 'skipped')"
+        ).fetchone()
+        in_review_row = connection.execute(
+            "SELECT COUNT(*) AS total FROM ocr_queue WHERE status = 'in_review'"
+        ).fetchone()
+        done_row = connection.execute(
+            "SELECT COUNT(*) AS total FROM ocr_queue WHERE status = 'done'"
+        ).fetchone()
+        skipped_row = connection.execute(
+            "SELECT COUNT(*) AS total FROM ocr_queue WHERE status = 'skipped'"
+        ).fetchone()
+        high_priority_pending_row = connection.execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM ocr_queue
+            WHERE priority = 'high'
+              AND status = 'pending'
+            """
+        ).fetchone()
+    return {
+        "pending": int(pending_row["total"]) if pending_row else 0,
+        "high_priority": int(high_row["total"]) if high_row else 0,
+        "high_priority_pending": int(high_priority_pending_row["total"]) if high_priority_pending_row else 0,
+        "in_review": int(in_review_row["total"]) if in_review_row else 0,
+        "done": int(done_row["total"]) if done_row else 0,
+        "skipped": int(skipped_row["total"]) if skipped_row else 0,
+        "done_skipped": int(done_skipped_row["total"]) if done_skipped_row else 0,
+    }
 
 
 def list_recent_document_extraction_audit(
