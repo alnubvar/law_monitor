@@ -48,6 +48,7 @@ class SourceConfig(BaseModel):
     parser: Literal["generic_html", "government", "regional_law", "krasnodar", "donland", "stavropol"] = "generic_html"
     verify_ssl: bool = True
     request_timeout: int | None = None
+    user_agent: str | None = None
     request_headers: dict[str, str] = Field(default_factory=dict)
     max_items: int | None = None
     deny_patterns: list[str] = Field(default_factory=list)

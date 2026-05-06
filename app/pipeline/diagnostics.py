@@ -478,17 +478,21 @@ def format_source_coverage_audit(*, db_path: Path | str) -> str:
         row = by_name.get(source.name)
         if row is None:
             lines.append(
-                f"- {source.name} | enabled={source.enabled} | url={source.url} | "
-                "last_attempt_at=n/a | last_success_at=n/a | last_error_at=n/a | "
-                "fetched_count=0 | saved_count=0 | existing_count=0 | duplicates_count=0 | item_errors=0"
+                f"- [NO DATA] {source.name} | enabled={source.enabled} | url={source.url} | "
+                "last_attempt_at=n/a | last_success_at=n/a | last_success_age=never | "
+                "last_error_at=n/a | fetched_count=0 | saved_count=0 | existing_count=0 | "
+                "duplicates_count=0 | item_errors=0"
             )
             continue
+        status_tag = _source_status_tag(row)
+        status_prefix = f"{status_tag} " if status_tag else ""
         warning = _source_access_warning_text(str(row.get("error_message") or ""))
         warning_suffix = f" | warning={warning}" if warning else ""
         lines.append(
-            f"- {source.name} | enabled={source.enabled} | url={source.url} | "
+            f"- {status_prefix}{source.name} | enabled={source.enabled} | url={source.url} | "
             f"last_attempt_at={_fmt_dt(row.get('attempted_at'))} | "
             f"last_success_at={_fmt_dt(row.get('success_at'))} | "
+            f"last_success_age={_format_age(row.get('success_at'))} | "
             f"last_error_at={_fmt_dt(row.get('error_at'))} | "
             f"last_error_message={str(row.get('error_message') or 'n/a')[:120]} | "
             f"fetched_count={row.get('fetched_count', 0)} | "
@@ -815,6 +819,38 @@ def _fmt_dt(value: datetime | None) -> str:
     if value is None:
         return "n/a"
     return value.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _format_age(dt: datetime | None) -> str:
+    if dt is None:
+        return "never"
+    now = datetime.now(timezone.utc)
+    delta = now - dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else now - dt
+    days = delta.days
+    hours = delta.seconds // 3600
+    if days == 0:
+        return "today" if hours < 1 else f"{hours}h ago"
+    return f"{days}d ago"
+
+
+def _source_status_tag(row: dict) -> str:
+    success_at: datetime | None = row.get("success_at")
+    error_at: datetime | None = row.get("error_at")
+    error_message = str(row.get("error_message") or "")
+    warning = _source_access_warning_text(error_message)
+
+    if success_at is None:
+        if error_at is not None:
+            if warning in ("source access blocked", "source rate-limited"):
+                return "[BLOCKED]"
+            return "[NETWORK ERROR]"
+        return "[DEGRADED]"
+
+    now = datetime.now(timezone.utc)
+    success_dt = success_at.replace(tzinfo=timezone.utc) if success_at.tzinfo is None else success_at
+    if error_at is not None and (now - success_dt).days > 3:
+        return "[STALE]"
+    return ""
 
 
 def _source_access_warning_text(error_message: str) -> str | None:

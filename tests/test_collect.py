@@ -673,5 +673,52 @@ class CollectAuditTest(unittest.TestCase):
         self.assertEqual(len(queue_rows), 0, "Hash-duplicate must not enter OCR queue")
 
 
+class BaseSourceUserAgentTest(unittest.TestCase):
+    def test_user_agent_field_overrides_request_headers_ua(self) -> None:
+        from app.sources.base import BaseSource
+        from app.models import SourceConfig
+
+        config = SourceConfig(
+            name="Test Source",
+            url="https://example.com/",
+            level="federal",
+            region="federal",
+            source_role="strategy",
+            parser="generic_html",
+            description="test",
+            request_headers={"User-Agent": "from-request-headers"},
+            user_agent="custom-ua-override",
+        )
+
+        class ConcreteSource(BaseSource):
+            def fetch_items(self):
+                return []
+
+        source = ConcreteSource(config)
+        self.assertEqual(source.session.headers.get("User-Agent"), "custom-ua-override")
+
+    def test_user_agent_field_absent_keeps_request_headers_ua(self) -> None:
+        from app.sources.base import BaseSource
+        from app.models import SourceConfig
+
+        config = SourceConfig(
+            name="Test Source",
+            url="https://example.com/",
+            level="federal",
+            region="federal",
+            source_role="strategy",
+            parser="generic_html",
+            description="test",
+            request_headers={"User-Agent": "from-request-headers"},
+        )
+
+        class ConcreteSource(BaseSource):
+            def fetch_items(self):
+                return []
+
+        source = ConcreteSource(config)
+        self.assertEqual(source.session.headers.get("User-Agent"), "from-request-headers")
+
+
 if __name__ == "__main__":
     unittest.main()

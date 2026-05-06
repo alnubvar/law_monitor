@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import warnings
 from abc import ABC, abstractmethod
 
 import requests
@@ -25,6 +26,8 @@ class BaseSource(ABC):
         self.session = requests.Session()
         self.session.headers.update(DEFAULT_REQUEST_HEADERS)
         self.session.headers.update(config.request_headers)
+        if config.user_agent:
+            self.session.headers["User-Agent"] = config.user_agent
         retry = Retry(
             total=REQUEST_RETRIES,
             backoff_factor=REQUEST_BACKOFF_FACTOR,
@@ -34,18 +37,18 @@ class BaseSource(ABC):
         adapter = HTTPAdapter(max_retries=retry)
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
-        if not config.verify_ssl:
-            requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
 
     @abstractmethod
     def fetch_items(self) -> list[CollectedItem]:
         """Return collected items for the source."""
 
     def get(self, url: str) -> requests.Response:
-        response = self.session.get(
-            url,
-            timeout=self.config.request_timeout or REQUEST_TIMEOUT,
-            verify=self.config.verify_ssl,
-        )
+        timeout = self.config.request_timeout or REQUEST_TIMEOUT
+        if not self.config.verify_ssl:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", InsecureRequestWarning)
+                response = self.session.get(url, timeout=timeout, verify=False)
+        else:
+            response = self.session.get(url, timeout=timeout, verify=True)
         response.raise_for_status()
         return response

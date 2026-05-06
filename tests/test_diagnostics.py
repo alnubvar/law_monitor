@@ -777,6 +777,86 @@ class DiagnosticsSmokeTest(unittest.TestCase):
         self.assertIn("WARN: published_at missing for", output)
         self.assertIn("backfill-dates", output)
 
+    def test_source_status_tag_blocked_for_403_source(self) -> None:
+        db_path = self._db_path("diagnostics_status_tag_blocked.db")
+        init_db(db_path)
+        now = datetime.now(timezone.utc)
+        save_source_audit_record(
+            source_name="Минсельхоз Ростовской области - господдержка",
+            source_url="https://mcx.donland.ru/activity/35217/",
+            enabled=True,
+            attempted_at=now,
+            success_at=None,
+            error_at=now,
+            error_message="source access blocked (HTTP 403)",
+            fetched_count=0,
+            saved_count=0,
+            existing_count=0,
+            duplicates_count=0,
+            item_errors_count=0,
+            db_path=db_path,
+        )
+
+        output = run_diagnostics(db_path=db_path)
+
+        self.assertIn("[BLOCKED]", output)
+        self.assertIn("last_success_age=never", output)
+
+    def test_source_status_tag_stale_for_old_success_with_error(self) -> None:
+        db_path = self._db_path("diagnostics_status_tag_stale.db")
+        init_db(db_path)
+        from datetime import timedelta
+        now = datetime.now(timezone.utc)
+        old_success = now - timedelta(days=5)
+        save_source_audit_record(
+            source_name="Минсельхоз Ростовской области - господдержка",
+            source_url="https://mcx.donland.ru/activity/35217/",
+            enabled=True,
+            attempted_at=now,
+            success_at=old_success,
+            error_at=now,
+            error_message="source connection error",
+            fetched_count=0,
+            saved_count=0,
+            existing_count=0,
+            duplicates_count=0,
+            item_errors_count=0,
+            db_path=db_path,
+        )
+
+        output = run_diagnostics(db_path=db_path)
+
+        self.assertIn("[STALE]", output)
+        self.assertIn("last_success_age=5d ago", output)
+
+    def test_source_status_tag_absent_for_healthy_source(self) -> None:
+        db_path = self._db_path("diagnostics_status_tag_healthy.db")
+        init_db(db_path)
+        now = datetime.now(timezone.utc)
+        save_source_audit_record(
+            source_name="ZOL.ru - зерновые новости",
+            source_url="https://www.zol.ru/news/grain/",
+            enabled=True,
+            attempted_at=now,
+            success_at=now,
+            error_at=None,
+            error_message=None,
+            fetched_count=40,
+            saved_count=3,
+            existing_count=37,
+            duplicates_count=0,
+            item_errors_count=0,
+            db_path=db_path,
+        )
+
+        output = run_diagnostics(db_path=db_path)
+
+        self.assertIn("ZOL.ru - зерновые новости", output)
+        self.assertNotIn("[BLOCKED]", output)
+        self.assertNotIn("[STALE]", output)
+        self.assertNotIn("[NETWORK ERROR]", output)
+        self.assertIn("last_success_age=today", output)
+
 
 if __name__ == "__main__":
     unittest.main()
