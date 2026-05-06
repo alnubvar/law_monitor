@@ -6,6 +6,7 @@ from collections.abc import Mapping
 
 import requests
 from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
+from urllib3.exceptions import InsecureRequestWarning
 
 from app.config import DEFAULT_REQUEST_HEADERS, REQUEST_TIMEOUT
 from app.extractors.date_extractor import extract_published_at_from_html
@@ -54,13 +55,17 @@ def extract_text_from_html(
     timeout: int | None = None,
     verify_ssl: bool = True,
 ) -> ExtractionResult:
-    response = requests.get(
-        url,
+    req_kwargs: dict[str, object] = dict(
         headers=dict(headers or DEFAULT_REQUEST_HEADERS),
         timeout=timeout or REQUEST_TIMEOUT,
         stream=True,
-        verify=verify_ssl,
     )
+    if not verify_ssl:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", InsecureRequestWarning)
+            response = requests.get(url, verify=False, **req_kwargs)
+    else:
+        response = requests.get(url, verify=True, **req_kwargs)
     response.raise_for_status()
     content_type = response.headers.get("Content-Type", "")
 

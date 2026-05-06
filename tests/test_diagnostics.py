@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 import unittest
 from datetime import datetime, timezone
@@ -856,6 +857,42 @@ class DiagnosticsSmokeTest(unittest.TestCase):
         self.assertNotIn("[STALE]", output)
         self.assertNotIn("[NETWORK ERROR]", output)
         self.assertIn("last_success_age=today", output)
+
+    def test_diagnostics_includes_network_environment_section(self) -> None:
+        db_path = self._db_path("diagnostics_network_section.db")
+        init_db(db_path)
+
+        with patch.dict(
+            os.environ,
+            {"TELEGRAM_PROXY_URL": "http://telegram-proxy.local:8080"},
+            clear=False,
+        ):
+            output = run_diagnostics(db_path=db_path, days=7)
+
+        self.assertIn("Network environment:", output)
+        self.assertIn("Telegram proxy configured: yes", output)
+        self.assertIn("System HTTP/HTTPS proxy env vars detected:", output)
+        self.assertIn("Source requests do NOT use Telegram proxy.", output)
+        self.assertIn("Local VPN/IP may differ from production Russian VPS", output)
+
+    def test_diagnostics_network_section_warns_when_system_proxy_env_detected(self) -> None:
+        db_path = self._db_path("diagnostics_network_proxy_env.db")
+        init_db(db_path)
+
+        with patch.dict(
+            os.environ,
+            {
+                "HTTP_PROXY": "http://localhost:8888",
+                "HTTPS_PROXY": "http://localhost:8888",
+                "http_proxy": "http://localhost:8888",
+                "https_proxy": "http://localhost:8888",
+            },
+            clear=False,
+        ):
+            output = run_diagnostics(db_path=db_path, days=7)
+
+        self.assertIn("System HTTP/HTTPS proxy env vars detected: yes", output)
+        self.assertIn("WARN: system proxy env vars detected:", output)
 
 
 if __name__ == "__main__":

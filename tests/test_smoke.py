@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -117,6 +118,28 @@ class SmokeCheckTest(unittest.TestCase):
         self.assertGreater(len(result.items), 0)
         self.assertIn("AHSTEP Smoke Check", result.render_text())
         self.assertIn("Smoke check passed with warnings", result.render_text())
+
+    def test_smoke_check_reports_system_proxy_env_vars(self) -> None:
+        db_path = self._db_path("smoke_system_proxy_env.db")
+        init_db(db_path)
+
+        with mock.patch(
+            "app.notify.telegram.get_diagnostic_status",
+            return_value={
+                "telegram_configured": True,
+                "proxy_configured": False,
+                "timeout_seconds": 30,
+            },
+        ):
+            with mock.patch.dict(
+                os.environ,
+                {"HTTP_PROXY": "http://localhost:8888", "HTTPS_PROXY": "http://localhost:8888"},
+                clear=False,
+            ):
+                result = run_smoke_check(db_path=db_path)
+
+        self.assertIn("system HTTP proxy env vars", result.render_text())
+        self.assertIn("detected:", result.render_text())
 
 
 if __name__ == "__main__":

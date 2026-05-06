@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 import uuid
 from dataclasses import dataclass, field
@@ -7,7 +8,7 @@ from pathlib import Path
 
 from app import config
 from app.notify import telegram
-from app.pipeline.diagnostics import run_diagnostics
+from app.pipeline.diagnostics import _SYSTEM_PROXY_ENV_VARS, run_diagnostics
 from app.pipeline.digest import run_digest
 from app.storage import init_db
 
@@ -175,6 +176,15 @@ def run_smoke_check(
         result.add_ok("Telegram config", details)
     else:
         result.add_warn("Telegram credentials not configured")
+
+    detected_sys_proxy = [v for v in _SYSTEM_PROXY_ENV_VARS if os.environ.get(v, "").strip()]
+    if detected_sys_proxy:
+        result.add_warn(
+            "system HTTP proxy env vars",
+            f"detected: {', '.join(detected_sys_proxy)}",
+        )
+    else:
+        result.add_ok("system HTTP proxy env vars", "not detected")
 
     try:
         fixture_paths = sorted(resolved_fixtures_dir.glob("*.json"))

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
+import os
 from pathlib import Path
 from typing import Iterable
 
@@ -413,6 +414,35 @@ def _build_operational_warnings(
     return warnings
 
 
+_SYSTEM_PROXY_ENV_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")
+
+
+def format_network_environment_note() -> str:
+    lines = ["Network environment:"]
+
+    telegram_proxy_configured = bool(os.environ.get("TELEGRAM_PROXY_URL", "").strip())
+    lines.append(f"- Telegram proxy configured: {'yes' if telegram_proxy_configured else 'no'}")
+
+    detected_proxies = {
+        var: os.environ[var]
+        for var in _SYSTEM_PROXY_ENV_VARS
+        if var in os.environ and os.environ[var].strip()
+    }
+    if detected_proxies:
+        lines.append("- System HTTP/HTTPS proxy env vars detected: yes")
+        lines.append("- WARN: system proxy env vars detected: " + ", ".join(sorted(detected_proxies.keys())))
+    else:
+        lines.append("- System HTTP/HTTPS proxy env vars detected: no")
+
+    lines.append(
+        "- Source requests do NOT use Telegram proxy. Telegram proxy applies only to Telegram API calls."
+    )
+    lines.append(
+        "- Local VPN/IP may differ from production Russian VPS, so source 403/network behavior can differ."
+    )
+    return "\n".join(lines)
+
+
 def run_diagnostics(
     *,
     days: int | None = None,
@@ -452,11 +482,13 @@ def run_diagnostics(
         snapshot=snapshot,
         db_path=resolved_db_path,
     )
+    network_note = format_network_environment_note()
     parts: list[str] = []
     if operational_warnings:
         parts.append("Operational warnings:\n" + "\n".join(f"- {w}" for w in operational_warnings))
     parts.extend(
         [
+            network_note,
             diagnostics_text,
             audit_text,
             extraction_text,
