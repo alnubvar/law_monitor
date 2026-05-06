@@ -5,15 +5,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from app.models import ExtractionResult, RawDocument
+from app.models import AnalysisResult, ExtractionResult, RawDocument
 from app.pipeline.ocr_runtime import backfill_ocr_queue_from_audit, run_ocr_queue
 from app.storage import (
     get_document_by_url,
     init_db,
     list_ocr_queue,
+    reprioritize_high_value_ocr_queue,
     save_document,
     save_document_extraction_audit,
     upsert_ocr_queue_item,
+    update_analysis,
 )
 
 
@@ -244,6 +246,57 @@ class OcrRuntimeTest(unittest.TestCase):
         pending_rows = list_ocr_queue(db_path=db_path, statuses=["pending"], limit=10)
         self.assertEqual(len(pending_rows), 1)
         self.assertIn("OCR fetch failed", str(pending_rows[0].get("notes") or ""))
+
+    def test_reprioritize_upgrades_pending_queue_item_after_analysis(self) -> None:
+        db_path = self._db_path("reprioritize_after_analysis.db")
+        init_db(db_path)
+        document = RawDocument(
+            source_name="ГИСП - меры поддержки АПК",
+            source_url="https://gisp.gov.ru/",
+            level="federal",
+            region="federal",
+            title="Постановление о льготном кредитовании",
+            url="https://gisp.gov.ru/doc/scan.pdf",
+            content_hash="abc123",
+            raw_text="",
+            status="collected",
+        )
+        save_document(document, db_path=db_path)
+
+        saved_docs = list_ocr_queue(db_path=db_path, limit=10)
+        doc_id = 1
+
+        upsert_ocr_queue_item(
+            document_url="https://gisp.gov.ru/doc/scan.pdf",
+            source_name="ГИСП - меры поддержки АПК",
+            title="Постановление о льготном кредитовании",
+            priority="medium",
+            reason="scan_candidate",
+            db_path=db_path,
+        )
+
+        queue_before = list_ocr_queue(db_path=db_path, limit=10)
+        self.assertEqual(len(queue_before), 1)
+        self.assertEqual(queue_before[0]["priority"], "medium")
+
+        analysis = AnalysisResult(
+            is_relevant=True,
+            relevance_reason="Федеральная мера поддержки АПК",
+            normalized_title="Постановление о льготном кредитовании",
+            topic="льготное кредитование",
+            importance="high",
+            action_level="watchlist",
+            page_type="measure_card",
+            summary="Льготное кредитование АПК",
+            impact="Прямой доступ к льготным кредитам",
+        )
+        update_analysis(doc_id, analysis, db_path=db_path)
+
+        upgraded = reprioritize_high_value_ocr_queue(db_path=db_path)
+        self.assertEqual(upgraded, 1)
+
+        queue_after = list_ocr_queue(db_path=db_path, limit=10)
+        self.assertEqual(queue_after[0]["priority"], "high")
 
 
 if __name__ == "__main__":

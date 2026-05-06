@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -710,6 +711,71 @@ class DiagnosticsSmokeTest(unittest.TestCase):
         )
         output = run_diagnostics(db_path=db_path, days=7)
         self.assertIn("warning=source access blocked", output)
+
+    def test_run_diagnostics_does_not_mutate_published_at(self) -> None:
+        db_path = self._db_path("diagnostics_no_mutation.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=1,
+            source_name="ГИСП - меры поддержки АПК",
+            title="Документ без даты",
+            action_level="background",
+            page_type="news_background",
+        )
+        document.published_at = None
+        save_document(document, db_path)
+
+        run_diagnostics(db_path=db_path)
+
+        with sqlite3.connect(str(db_path)) as conn:
+            row = conn.execute("SELECT published_at FROM documents WHERE id = 1").fetchone()
+        self.assertIsNone(row[0], "run_diagnostics must not backfill published_at")
+
+    def test_operational_warnings_section_appears_for_blocked_source(self) -> None:
+        db_path = self._db_path("diagnostics_op_warnings_blocked.db")
+        init_db(db_path)
+        now = datetime.now(timezone.utc)
+        save_source_audit_record(
+            source_name="Минсельхоз Ростовской области - господдержка",
+            source_url="https://mcx.donland.ru/activity/35217/",
+            enabled=True,
+            attempted_at=now,
+            success_at=None,
+            error_at=now,
+            error_message="source access blocked (HTTP 403)",
+            fetched_count=0,
+            saved_count=0,
+            existing_count=0,
+            duplicates_count=0,
+            item_errors_count=0,
+            db_path=db_path,
+        )
+
+        output = run_diagnostics(db_path=db_path)
+
+        self.assertIn("Operational warnings:", output)
+        self.assertIn("WARN:", output)
+        self.assertIn("source access blocked", output)
+
+    def test_operational_warnings_section_appears_for_missing_published_at(self) -> None:
+        db_path = self._db_path("diagnostics_op_warnings_dates.db")
+        init_db(db_path)
+        for doc_id in (1, 2):
+            document = self._doc(
+                doc_id=doc_id,
+                source_name="ГИСП - меры поддержки АПК",
+                title=f"Документ {doc_id}",
+                action_level="background",
+                page_type="news_background",
+            )
+            document.published_at = None
+            save_document(document, db_path)
+
+        output = run_diagnostics(db_path=db_path)
+
+        self.assertIn("Operational warnings:", output)
+        self.assertIn("WARN: published_at missing for", output)
+        self.assertIn("backfill-dates", output)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ from app.storage import (
     init_db,
     list_unanalyzed_documents,
     mark_runtime_event,
+    reprioritize_high_value_ocr_queue,
     update_analysis,
 )
 
@@ -47,6 +48,9 @@ def run_analyze(limit: int | None = None, *, reanalyze: bool = False) -> int:
             )
             continue
 
+    reprioritized = reprioritize_high_value_ocr_queue()
+    if reprioritized:
+        logger.info("OCR queue: %s items upgraded to high priority after analysis", reprioritized)
     requires_attention_count = count_documents_by_action_level("requires_attention")
     logger.info(
         "Analysis completed. Processed %s documents. requires_attention=%s",

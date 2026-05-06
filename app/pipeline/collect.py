@@ -76,10 +76,7 @@ def extract_document(item: CollectedItem, source_config: SourceConfig) -> Extrac
 
     if item.document_type == "doc":
         return ExtractionResult(
-            raw_text=(
-                "Legacy DOC file detected. Native DOC extraction is not implemented "
-                "in MVP yet."
-            ),
+            raw_text="",
             document_type="doc",
             error="DOC extraction is not implemented",
         )
@@ -271,7 +268,7 @@ def run_collect_with_options(
         source_skipped_duplicates = 0
         source_errors = 0
         total_items = len(items)
-        fetch_stats = getattr(source, "last_fetch_stats", {}) if "source" in locals() else {}
+        fetch_stats = getattr(source, "last_fetch_stats", {})
 
         for index, item in enumerate(items, start=1):
             if _should_log_progress(index, total_items):
@@ -359,13 +356,7 @@ def run_collect_with_options(
                     extraction_error=extracted.error,
                     db_path=resolved_db_path,
                 )
-                if scan_candidate:
-                    _sync_ocr_queue_for_scan_candidate(
-                        item=item,
-                        action_level=None,
-                        db_path=resolved_db_path,
-                    )
-                elif extracted.ocr_status == OCR_STATUS_SUCCESS:
+                if extracted.ocr_status == OCR_STATUS_SUCCESS:
                     update_ocr_queue_status(
                         document_url=item.url,
                         status="done",
@@ -396,6 +387,12 @@ def run_collect_with_options(
                     error=extracted.error,
                 )
                 save_document(document, db_path=resolved_db_path)
+                if scan_candidate:
+                    _sync_ocr_queue_for_scan_candidate(
+                        item=item,
+                        action_level=None,
+                        db_path=resolved_db_path,
+                    )
                 saved_count += 1
                 source_saved += 1
             except RequestException as exc:

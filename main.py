@@ -18,6 +18,7 @@ from app.pipeline.run import run_pipeline
 from app.pipeline.smoke import run_smoke_check
 from app.scheduler import run_scheduler, send_test_notification
 from app.storage import (
+    backfill_missing_published_at,
     init_db,
     list_ocr_queue,
     summarize_ocr_queue,
@@ -315,6 +316,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Максимум scan-candidate URL для backfill за запуск.",
     )
 
+    subparsers.add_parser(
+        "backfill-dates",
+        help="Backfill published_at из collected_at для документов без даты публикации.",
+    )
+
     return parser
 
 
@@ -569,6 +575,11 @@ def main() -> int:
             f"scanned={backfill_result.scanned}; queued={backfill_result.queued}; "
             f"existing={backfill_result.existing}; skipped={backfill_result.skipped}"
         )
+        return 0
+
+    if args.command == "backfill-dates":
+        updated = backfill_missing_published_at()
+        print(f"backfill-dates: updated {updated} documents.")
         return 0
 
     parser.print_help()

@@ -1198,6 +1198,26 @@ def update_document_text_by_url(
     return int(cursor.rowcount or 0)
 
 
+def reprioritize_high_value_ocr_queue(db_path: Path | str = DB_PATH) -> int:
+    timestamp = _serialize_dt(datetime.now(timezone.utc))
+    with _connect_db(db_path) as connection:
+        cursor = connection.execute(
+            """
+            UPDATE ocr_queue
+            SET priority = 'high', updated_at = ?
+            WHERE status = 'pending'
+              AND priority != 'high'
+              AND document_url IN (
+                  SELECT url FROM documents
+                  WHERE action_level IN ('requires_attention', 'watchlist')
+              )
+            """,
+            (timestamp,),
+        )
+        connection.commit()
+    return int(cursor.rowcount or 0)
+
+
 def summarize_ocr_queue(
     *,
     db_path: Path | str = DB_PATH,

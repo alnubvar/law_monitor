@@ -605,6 +605,73 @@ class CollectAuditTest(unittest.TestCase):
         documents = list_documents(db_path=db_path)
         self.assertEqual(len(documents), 1)
 
+    def test_hash_duplicate_does_not_create_ocr_queue_entry(self) -> None:
+        """Second URL with identical content should not be added to OCR queue."""
+        db_path = self._db_path("collect_hash_dup_no_ocr_queue.db")
+        init_db(db_path)
+        source_config = SourceConfig(
+            name="Право Ростовской области",
+            url="https://pravo.donland.ru/",
+            level="regional",
+            region="rostov",
+            source_role="regional_npa",
+            parser="regional_law",
+            description="test",
+        )
+        shared_text = "Постановление Правительства Ростовской области от 01.01.2024"
+        items = [
+            CollectedItem(
+                source_name=source_config.name,
+                source_url=source_config.url,
+                level=source_config.level,
+                region=source_config.region,
+                title="Документ А",
+                url="https://example.com/doc-a.pdf",
+                document_type="pdf",
+            ),
+            CollectedItem(
+                source_name=source_config.name,
+                source_url=source_config.url,
+                level=source_config.level,
+                region=source_config.region,
+                title="Документ Б (дубль)",
+                url="https://example.com/doc-b.pdf",
+                document_type="pdf",
+            ),
+        ]
+
+        class FakeSource:
+            def __init__(self) -> None:
+                self.last_fetch_stats = {"links_found_count": 2, "pdf_links_count": 2}
+
+            def fetch_items(self) -> list[CollectedItem]:
+                return items
+
+        identical_result = ExtractionResult(
+            raw_text=shared_text,
+            document_type="pdf",
+            needs_ocr=False,
+            page_count=1,
+            extracted_text_length=len(shared_text),
+        )
+        with patch("app.pipeline.collect.load_sources", return_value=[source_config]):
+            with patch("app.pipeline.collect.create_source", return_value=FakeSource()):
+                with patch(
+                    "app.pipeline.collect.extract_document",
+                    return_value=identical_result,
+                ):
+                    run_collect_with_options(
+                        source_name=source_config.name,
+                        limit=10,
+                        audit_existing=False,
+                        db_path=str(db_path),
+                    )
+
+        documents = list_documents(db_path=db_path)
+        queue_rows = list_ocr_queue(db_path=db_path, limit=10)
+        self.assertEqual(len(documents), 1, "Only first URL should be saved")
+        self.assertEqual(len(queue_rows), 0, "Hash-duplicate must not enter OCR queue")
+
 
 if __name__ == "__main__":
     unittest.main()

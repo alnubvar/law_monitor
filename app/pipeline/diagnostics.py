@@ -10,7 +10,6 @@ from app.config import DB_PATH, OCR_ENABLED, get_source_role, load_sources
 from app.extractors.ocr_extractor import get_ocr_runtime_status
 from app.models import RawDocument
 from app.storage import (
-    backfill_missing_published_at,
     init_db,
     list_documents,
     list_latest_source_audit,
@@ -369,6 +368,51 @@ def format_diagnostics(snapshot: DiagnosticsSnapshot) -> str:
     return "\n".join(lines)
 
 
+def _build_operational_warnings(
+    *,
+    snapshot: DiagnosticsSnapshot,
+    db_path: Path | str,
+) -> list[str]:
+    """Return a list of operational warning strings based on current system state.
+
+    Called in run_diagnostics() — reads DB but does NOT write anything.
+    """
+    warnings: list[str] = []
+
+    if snapshot.total_documents > 0:
+        missing_ratio = snapshot.missing_published_at_total / snapshot.total_documents
+        if missing_ratio > 0.5:
+            warnings.append(
+                f"WARN: published_at missing for {snapshot.missing_published_at_total}/"
+                f"{snapshot.total_documents} documents ({missing_ratio:.0%}). "
+                "Run `python main.py backfill-dates` to improve date coverage."
+            )
+
+    audit_rows = list_latest_source_audit(db_path=db_path)
+    for row in audit_rows:
+        error_msg = str(row.get("error_message") or "")
+        warning_text = _source_access_warning_text(error_msg)
+        if warning_text:
+            source_name = str(row.get("source_name") or "")
+            warnings.append(f"WARN: {source_name}: {warning_text}")
+
+    unresolved_rows = list_unresolved_scan_candidate_audit(db_path=db_path, limit=5000)
+    unresolved_count = len(
+        {
+            str(row.get("document_url") or "").strip()
+            for row in unresolved_rows
+            if row.get("document_url")
+        }
+    )
+    if unresolved_count > 5:
+        warnings.append(
+            f"WARN: OCR backlog: {unresolved_count} unresolved scan candidates. "
+            "Run `python main.py ocr-backfill` + `python main.py ocr-run`."
+        )
+
+    return warnings
+
+
 def run_diagnostics(
     *,
     days: int | None = None,
@@ -377,10 +421,8 @@ def run_diagnostics(
     resolved_db_path = Path(db_path) if db_path is not None else DB_PATH
     if not resolved_db_path.exists():
         init_db(resolved_db_path)
-    backfilled_count = backfill_missing_published_at(resolved_db_path)
     documents = list_documents(db_path=resolved_db_path, days=days)
     snapshot = build_diagnostics_snapshot(documents, days=days)
-    snapshot.backfilled_count = backfilled_count
     diagnostics_text = format_diagnostics(snapshot)
     audit_text = format_source_coverage_audit(db_path=resolved_db_path)
     extraction_text = format_document_extraction_quality_audit(
@@ -406,10 +448,26 @@ def run_diagnostics(
         db_path=resolved_db_path,
         days=days or 7,
     )
-    return (
-        f"{diagnostics_text}\n\n{audit_text}\n\n{extraction_text}\n\n{ocr_runtime_text}\n\n{ocr_triage_text}\n\n"
-        f"{audit_gaps_text}\n\n{depth_text}\n\n{filtered_links_text}"
-    ).strip()
+    operational_warnings = _build_operational_warnings(
+        snapshot=snapshot,
+        db_path=resolved_db_path,
+    )
+    parts: list[str] = []
+    if operational_warnings:
+        parts.append("Operational warnings:\n" + "\n".join(f"- {w}" for w in operational_warnings))
+    parts.extend(
+        [
+            diagnostics_text,
+            audit_text,
+            extraction_text,
+            ocr_runtime_text,
+            ocr_triage_text,
+            audit_gaps_text,
+            depth_text,
+            filtered_links_text,
+        ]
+    )
+    return "\n\n".join(p for p in parts if p.strip()).strip()
 
 
 def format_source_coverage_audit(*, db_path: Path | str) -> str:
