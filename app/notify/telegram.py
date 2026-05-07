@@ -4,7 +4,7 @@ import logging
 import re
 import time
 from collections.abc import Sequence
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -59,6 +59,7 @@ TELEGRAM_SAFE_MESSAGE_LENGTH = 3900
 TELEGRAM_LIST_LIMIT = 10
 TELEGRAM_WATCHLIST_USER_LIMIT = 5
 SEARCH_PROMPT_MESSAGE = "🔎 Введите запрос для поиска по архиву."
+PUBLISHED_AT_FUTURE_TOLERANCE = timedelta(days=2)
 
 
 def is_configured() -> bool:
@@ -272,14 +273,15 @@ def _build_status_message(db_path: Path | str) -> str:
     snapshot = build_diagnostics_snapshot(list_documents(db_path=db_path, days=7), days=7)
     active_source_rows = [row for row in snapshot.rows if row.total_documents > 0]
     latest_collect = max((document.collected_at for document in all_documents), default=None)
-    latest_publish = max(
-        (
-            document.published_at
+    valid_published_dates = [
+        candidate
+        for candidate in (
+            _sanitize_published_at_for_status(document.published_at)
             for document in all_documents
-            if document.published_at is not None
-        ),
-        default=None,
-    )
+        )
+        if candidate is not None
+    ]
+    latest_publish = max(valid_published_dates, default=None)
     latest_report = _find_latest_report_file()
     requires_attention_count = count_documents_by_action_level("requires_attention", db_path=db_path)
     watchlist_count = count_documents_by_action_level("watchlist", db_path=db_path)
@@ -406,7 +408,7 @@ def _build_short_report_text(documents: Sequence[RawDocument], *, days: int) -> 
             sections[section].append(document)
 
     lines = [
-        f"🧾 GR-сводка за {days} дней",
+        f"🧾 {_format_report_period_label(days)}",
         f"📊 Всего видимых материалов: {len(documents)}",
         (
             f"🚨 Требует внимания: {len(sections['requires_attention'])} | "
@@ -460,7 +462,7 @@ def _build_sources_message(db_path: Path | str) -> str:
                 lines.append(f"  Последняя проблема: {last_error}")
             continue
         if row is None or row.total_documents == 0:
-            lines.append(f"⚠️ {source.name} — нет новых документов")
+            lines.append(f"ℹ️ {source.name} — новых публикаций не найдено")
             if last_success:
                 lines.append(f"  Последний успешный сбор: {last_success}")
             continue
@@ -495,8 +497,17 @@ def _build_search_message(db_path: Path | str, *, query: str) -> str:
             include_hidden_hint=False,
         )
     )
-    lines.append("Показано 5 результатов. Уточните запрос, чтобы сузить поиск.")
+    lines.append(f"Показано {len(results)} результатов. Уточните запрос, чтобы сузить поиск.")
     return _cap_message("\n".join(lines))
+
+
+def _format_report_period_label(days: int) -> str:
+    if days <= 1:
+        return "GR-сводка за сегодня"
+    if days in {3, 7, 14}:
+        suffix = "дня" if days in {3} else "дней"
+        return f"GR-сводка за {days} {suffix}"
+    return f"GR-сводка за {days} дней"
 
 
 def _build_help_message() -> str:
@@ -724,6 +735,15 @@ def _fmt_dt(value: datetime | None) -> str | None:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.astimezone().strftime("%Y-%m-%d")
+
+
+def _sanitize_published_at_for_status(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    normalized = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    if normalized.astimezone(timezone.utc) > datetime.now(timezone.utc) + PUBLISHED_AT_FUTURE_TOLERANCE:
+        return None
+    return normalized
 
 
 def _format_action_level(action_level: str | None) -> str:

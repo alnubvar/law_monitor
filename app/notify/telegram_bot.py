@@ -46,9 +46,10 @@ TELEGRAM_SEND_ATTEMPTS = 3
 TELEGRAM_POLL_BACKOFF_BASE_SECONDS = 1.0
 TELEGRAM_POLL_BACKOFF_MAX_SECONDS = 30.0
 TELEGRAM_POLL_IDLE_SLEEP_SECONDS = 0.3
-MANUAL_REFRESH_COOLDOWN_SECONDS = 3600
+MANUAL_REFRESH_COOLDOWN_SECONDS = 3 * 3600
 _refresh_lock = threading.Lock()
 _pending_search_chats: set[str] = set()
+_pending_report_period_chats: set[str] = set()
 
 START_MESSAGE = (
     "AHSTEP GR Monitor запущен ✅\n\n"
@@ -90,6 +91,17 @@ BUTTON_TO_COMMAND: Mapping[str, str] = {
     "🔄 Обновить данные": "/refresh",
     "ℹ️ Помощь": "/help",
 }
+REPORT_PERIOD_BUTTON_TO_DAYS: Mapping[str, int] = {
+    "Сегодня": 1,
+    "3 дня": 3,
+    "7 дней": 7,
+    "14 дней": 14,
+}
+REPORT_PERIOD_KEYBOARD_LAYOUT: tuple[tuple[str, ...], ...] = (
+    ("Сегодня", "3 дня"),
+    ("7 дней", "14 дней"),
+    ("Отмена",),
+)
 NORMALIZED_BUTTON_TO_COMMAND: Mapping[str, str] = {
     re.sub(r"\s+", " ", button.replace("\ufe0f", "")).strip(): command
     for button, command in BUTTON_TO_COMMAND.items()
@@ -173,8 +185,17 @@ def run_polling_listener(
             next_offset = _extract_next_offset(update, current_offset=offset)
             try:
                 _process_update(update, db_path=db_path, proxies=proxies)
-            except Exception:
-                logger.warning("Failed to process update payload (telegram_api_error).")
+            except Exception as exc:
+                message = update.get("message") if isinstance(update, Mapping) else None
+                chat = message.get("chat") if isinstance(message, Mapping) else None
+                logger.warning(
+                    "Failed to process update payload (telegram_api_error). "
+                    "update_id=%s chat_id=%s text=%r error=%s",
+                    update.get("update_id") if isinstance(update, Mapping) else None,
+                    chat.get("id") if isinstance(chat, Mapping) else None,
+                    message.get("text") if isinstance(message, Mapping) else None,
+                    _describe_telegram_error(exc),
+                )
             finally:
                 if next_offset is not None and (offset is None or next_offset > offset):
                     offset = next_offset
@@ -201,6 +222,20 @@ def build_reply_keyboard_payload() -> dict[str, Any]:
         "one_time_keyboard": False,
         "is_persistent": True,
         "input_field_placeholder": "Выберите действие",
+    }
+
+
+def build_report_period_keyboard_payload() -> dict[str, Any]:
+    keyboard = [
+        [{"text": button_text} for button_text in row]
+        for row in REPORT_PERIOD_KEYBOARD_LAYOUT
+    ]
+    return {
+        "keyboard": keyboard,
+        "resize_keyboard": True,
+        "one_time_keyboard": True,
+        "is_persistent": False,
+        "input_field_placeholder": "Выберите период отчета",
     }
 
 
@@ -298,8 +333,42 @@ def _process_update(
         )
         _send_response(chat_id=chat_id, text=response_text, proxies=proxies)
         return
+    if incoming_command is None and chat_key in _pending_report_period_chats:
+        normalized_period = _normalize_report_period_choice(text)
+        if normalized_period == "отмена":
+            _pending_report_period_chats.discard(chat_key)
+            _send_response(chat_id=chat_id, text="Отменено. Возвращаюсь в основное меню.", proxies=proxies)
+            return
+        selected_days = REPORT_PERIOD_BUTTON_TO_DAYS.get(normalized_period) if normalized_period else None
+        if selected_days is not None:
+            _pending_report_period_chats.discard(chat_key)
+            _pending_search_chats.discard(chat_key)
+            _send_response(
+                chat_id=chat_id,
+                text="⏳ Подождите немного, формируется GR-отчет...",
+                proxies=proxies,
+            )
+            report_command = f"/report {selected_days}"
+            prepared_attachment = _build_period_report_attachment(days=selected_days, db_path=db_path)
+            dispatch_result = dispatch_input_text(
+                report_command,
+                db_path=db_path,
+                default_days=selected_days,
+                chat_id=chat_id,
+            )
+            _send_response(chat_id=chat_id, text=dispatch_result.response_text, proxies=proxies)
+            _send_report_attachment(
+                chat_id=chat_id,
+                proxies=proxies,
+                days=selected_days,
+                db_path=db_path,
+                prepared_path=prepared_attachment,
+            )
+            return
     if incoming_command is not None and incoming_command != "/search":
         _pending_search_chats.discard(chat_key)
+    if incoming_command is not None and incoming_command != "/report":
+        _pending_report_period_chats.discard(chat_key)
     resolved_text = _command_text_for_dispatch(incoming_command, text)
     default_days = 7
     if incoming_command in {"/report", "/urgent", "/watchlist"}:
@@ -317,6 +386,24 @@ def _process_update(
         _pending_search_chats.add(chat_key)
         _send_response(chat_id=chat_id, text=SEARCH_PROMPT_MESSAGE, proxies=proxies)
         return
+    if incoming_command == "/report" and not _has_command_arguments(text) and text.strip() == "📄 Отчёт":
+        _pending_report_period_chats.add(chat_key)
+        _send_response(
+            chat_id=chat_id,
+            text="📄 Выберите период отчёта:",
+            proxies=proxies,
+            reply_markup=build_report_period_keyboard_payload(),
+        )
+        return
+    prepared_attachment: Path | None = None
+    if incoming_command == "/report":
+        report_days = _extract_report_days(resolved_text, default_days=default_days)
+        _send_response(
+            chat_id=chat_id,
+            text="⏳ Подождите немного, формируется GR-отчет...",
+            proxies=proxies,
+        )
+        prepared_attachment = _build_period_report_attachment(days=report_days, db_path=db_path)
     dispatch_result = dispatch_input_text(
         resolved_text,
         db_path=db_path,
@@ -330,6 +417,7 @@ def _process_update(
             proxies=proxies,
             days=_extract_report_days(resolved_text, default_days=default_days),
             db_path=db_path,
+            prepared_path=prepared_attachment,
         )
 
 
@@ -412,6 +500,7 @@ def _send_response(
     chat_id: int | str,
     text: str,
     proxies: dict[str, str] | None,
+    reply_markup: Mapping[str, Any] | None = None,
 ) -> bool:
     chunks = _split_message_chunks(text)
     for chunk in chunks:
@@ -419,7 +508,7 @@ def _send_response(
             "chat_id": chat_id,
             "text": chunk,
             "disable_web_page_preview": True,
-            "reply_markup": build_reply_keyboard_payload(),
+            "reply_markup": dict(reply_markup) if reply_markup is not None else build_reply_keyboard_payload(),
         }
         try:
             _call_telegram_api(
@@ -440,8 +529,9 @@ def _send_report_attachment(
     proxies: dict[str, str] | None,
     days: int,
     db_path: Path | str | None,
+    prepared_path: Path | None = None,
 ) -> bool:
-    txt_report_path = _build_period_report_attachment(days=days, db_path=db_path)
+    txt_report_path = prepared_path or _build_period_report_attachment(days=days, db_path=db_path)
     if txt_report_path is None or not txt_report_path.exists():
         return _send_response(
             chat_id=chat_id,
@@ -549,6 +639,23 @@ def _normalize_button_text(text: str) -> str:
     return re.sub(r"\s+", " ", without_variation_selectors).strip()
 
 
+def _normalize_report_period_choice(text: str) -> str | None:
+    normalized = (text or "").strip().lower()
+    if not normalized:
+        return None
+    if normalized in {"сегодня", "3 дня", "7 дней", "14 дней", "отмена"}:
+        if normalized == "сегодня":
+            return "Сегодня"
+        if normalized == "3 дня":
+            return "3 дня"
+        if normalized == "7 дней":
+            return "7 дней"
+        if normalized == "14 дней":
+            return "14 дней"
+        return "отмена"
+    return None
+
+
 def _has_command_arguments(text: str) -> bool:
     normalized = (text or "").strip()
     if not normalized or not normalized.startswith("/"):
@@ -597,8 +704,8 @@ def _run_manual_refresh(*, db_path: Path | str | None) -> str:
                 refreshed_at = refreshed_at.replace(tzinfo=timezone.utc)
             elapsed_seconds = (datetime.now(timezone.utc) - refreshed_at.astimezone(timezone.utc)).total_seconds()
             if elapsed_seconds < MANUAL_REFRESH_COOLDOWN_SECONDS:
-                wait_minutes = int((MANUAL_REFRESH_COOLDOWN_SECONDS - elapsed_seconds) // 60) + 1
-                return f"⏳ Обновление запускалось недавно. Повторите через {wait_minutes} мин."
+                wait_hours = int((MANUAL_REFRESH_COOLDOWN_SECONDS - elapsed_seconds) // 3600) + 1
+                return f"⏳ Обновление запускалось недавно. Повторите через {wait_hours} ч."
 
         collected = run_collect()
         analyzed = run_analyze()
@@ -643,6 +750,13 @@ def _call_telegram_api(
     url = f"{TELEGRAM_API_BASE_URL}/bot{token}/{method}"
     timeout = max(config.TELEGRAM_API_TIMEOUT + 5, 10)
     last_exception: Exception | None = None
+    safe_payload_preview = None
+    if payload is not None:
+        safe_payload_preview = {
+            "chat_id": payload.get("chat_id"),
+            "text_preview": str(payload.get("text", ""))[:120],
+            "reply_markup": payload.get("reply_markup"),
+        }
     for attempt in range(1, attempts + 1):
         try:
             if payload is not None:
@@ -662,16 +776,45 @@ def _call_telegram_api(
             response.raise_for_status()
             data = response.json()
             if not data.get("ok"):
+                logger.warning(
+                    "Telegram API returned not-ok response: method=%s attempt=%s payload=%s response=%s",
+                    method,
+                    attempt,
+                    safe_payload_preview,
+                    data,
+                )
                 raise RuntimeError("telegram_api_error")
             return data.get("result")
         except requests.RequestException as exc:
             last_exception = exc
+            response = getattr(exc, "response", None)
+            response_text = ""
+            if response is not None:
+                try:
+                    response_text = response.text[:1000]
+                except Exception:
+                    response_text = ""
+            logger.warning(
+                "Telegram API request failed: method=%s attempt=%s error=%s payload=%s response_body=%r",
+                method,
+                attempt,
+                _describe_request_error(exc),
+                safe_payload_preview,
+                response_text,
+            )
             if attempt < attempts:
                 time.sleep(attempt)
                 continue
             raise
         except (ValueError, RuntimeError) as exc:
             last_exception = exc
+            logger.warning(
+                "Telegram API payload/response error: method=%s attempt=%s payload=%s error=%s",
+                method,
+                attempt,
+                safe_payload_preview,
+                _describe_telegram_error(exc),
+            )
             if attempt < attempts:
                 time.sleep(attempt)
                 continue

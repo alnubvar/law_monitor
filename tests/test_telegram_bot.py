@@ -278,6 +278,8 @@ class TelegramBotTest(unittest.TestCase):
             with patch("app.notify.telegram_bot.get_runtime_event", return_value=recent):
                 text = telegram_bot._run_manual_refresh(db_path=None)
         self.assertIn("Обновление запускалось недавно", text)
+        self.assertIn("Повторите через", text)
+        self.assertIn("ч.", text)
 
     def test_refresh_no_parallel_runs(self) -> None:
         mock_lock = Mock()
@@ -321,7 +323,6 @@ class TelegramBotTest(unittest.TestCase):
         cases = {
             "🚨 Срочное": "/urgent 7",
             "👀 Наблюдение": "/watchlist 7",
-            "📄 Отчёт": "/report 7",
         }
         with patch.multiple(telegram_bot.config, TELEGRAM_CHAT_ID="123"):
             for button_text, expected_text in cases.items():
@@ -378,6 +379,38 @@ class TelegramBotTest(unittest.TestCase):
                     with patch("app.notify.telegram_bot._send_report_attachment", return_value=True) as send_attachment:
                         telegram_bot._process_update(update, db_path=None, proxies=None)
         self.assertEqual(send_attachment.call_args.kwargs["days"], 30)
+
+    def test_report_button_starts_period_selection_flow(self) -> None:
+        update = {"update_id": 1, "message": {"chat": {"id": 123}, "text": "📄 Отчёт"}}
+        with patch.multiple(telegram_bot.config, TELEGRAM_CHAT_ID="123"):
+            with patch("app.notify.telegram_bot._send_response", return_value=True) as send_response:
+                telegram_bot._process_update(update, db_path=None, proxies=None)
+        self.assertIn("Выберите период отчёта", send_response.call_args.kwargs["text"])
+        self.assertIn("keyboard", send_response.call_args.kwargs["reply_markup"])
+
+    def test_report_period_selection_is_case_insensitive(self) -> None:
+        telegram_bot._pending_report_period_chats.clear()
+        telegram_bot._pending_report_period_chats.add("123")
+        update = {"update_id": 2, "message": {"chat": {"id": 123}, "text": "СЕГОДНЯ"}}
+        with patch.multiple(telegram_bot.config, TELEGRAM_CHAT_ID="123"):
+            with patch("app.notify.telegram_bot._send_response", return_value=True):
+                with patch("app.notify.telegram_bot.dispatch_input_text", return_value=telegram_bot.DispatchResult(command="/report", response_text="summary")) as dispatch:
+                    with patch("app.notify.telegram_bot._send_report_attachment", return_value=True):
+                        telegram_bot._process_update(update, db_path=None, proxies=None)
+        self.assertEqual(dispatch.call_args.args[0], "/report 1")
+
+    def test_report_period_selection_runs_report_with_days(self) -> None:
+        telegram_bot._pending_report_period_chats.clear()
+        telegram_bot._pending_report_period_chats.add("123")
+        update = {"update_id": 2, "message": {"chat": {"id": 123}, "text": "7 дней"}}
+        with patch.multiple(telegram_bot.config, TELEGRAM_CHAT_ID="123"):
+            with patch("app.notify.telegram_bot._send_response", return_value=True) as send_response:
+                with patch("app.notify.telegram_bot.dispatch_input_text", return_value=telegram_bot.DispatchResult(command="/report", response_text="summary")) as dispatch:
+                    with patch("app.notify.telegram_bot._send_report_attachment", return_value=True) as send_attachment:
+                        telegram_bot._process_update(update, db_path=None, proxies=None)
+        self.assertEqual(dispatch.call_args.args[0], "/report 7")
+        self.assertEqual(send_attachment.call_args.kwargs["days"], 7)
+        self.assertIn("формируется GR-отчет", send_response.call_args_list[0].kwargs["text"])
 
     def test_report_30_attachment_contains_period_label(self) -> None:
         db_path = self._offset_path("telegram_report_30_attachment.db")

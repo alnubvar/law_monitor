@@ -326,7 +326,7 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         self.assertIn("Новости по экспорту", text)
         self.assertIn("Мера поддержки экспорта", text)
         self.assertNotIn("Показать ещё (скоро)", text)
-        self.assertIn("Показано 5 результатов", text)
+        self.assertIn("Показано 2 результатов", text)
 
     def test_search_prioritizes_requires_attention_over_background(self) -> None:
         db_path = self._db_path("telegram_search_priority.db")
@@ -427,7 +427,7 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         self.assertNotIn("BG=", text)
         self.assertNotIn("IRR=", text)
         self.assertIn("Последний успешный сбор", text)
-        self.assertTrue(("нет новых документов" in text) or ("работает" in text))
+        self.assertTrue(("новых публикаций не найдено" in text) or ("работает" in text))
 
     def test_send_command_response_uses_send_message(self) -> None:
         with patch("app.notify.telegram.send_message", return_value=True) as send_message:
@@ -453,6 +453,10 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         self.assertNotIn("reports\\", text)
         self.assertNotIn("reports/", text)
         self.assertNotIn("#", text)
+
+    def test_report_period_wording_for_one_day(self) -> None:
+        text = telegram.build_command_response("/report 1")
+        self.assertIn("GR-сводка за сегодня", text)
 
     def test_watchlist_is_limited_for_user_and_has_tail_hint(self) -> None:
         db_path = self._db_path("telegram_watchlist_limit.db")
@@ -483,6 +487,56 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         text = telegram.build_command_response("/sources", db_path=db_path)
 
         self.assertNotIn("много шума", text)
+        self.assertNotIn("⚠️", text)
+        self.assertIn("новых публикаций не найдено", text)
+
+    def test_status_ignores_far_future_published_at(self) -> None:
+        db_path = self._db_path("telegram_status_future_date.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=1,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Документ с ошибочной будущей датой",
+            url="https://example.com/future",
+            action_level="requires_attention",
+            page_type="measure_card",
+        )
+        document.published_at = datetime.now(timezone.utc) + timedelta(days=365)
+        save_document(document, db_path)
+
+        text = telegram.build_command_response("/status", db_path=db_path)
+        self.assertNotIn("2027-", text)
+
+    def test_status_handles_missing_and_future_published_at_together(self) -> None:
+        db_path = self._db_path("telegram_status_mixed_dates.db")
+        init_db(db_path)
+        doc_missing = self._doc(
+            doc_id=1,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Документ без даты публикации",
+            url="https://example.com/missing",
+            action_level="requires_attention",
+            page_type="measure_card",
+        )
+        doc_missing.published_at = None
+        save_document(doc_missing, db_path)
+
+        doc_future = self._doc(
+            doc_id=2,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Документ с будущей датой",
+            url="https://example.com/future2",
+            action_level="requires_attention",
+            page_type="measure_card",
+        )
+        doc_future.published_at = datetime.now(timezone.utc) + timedelta(days=400)
+        save_document(doc_future, db_path)
+
+        text = telegram.build_command_response("/status", db_path=db_path)
+        self.assertIn("Статус AHSTEP GR Monitor", text)
 
     def test_sources_hides_raw_exception_details(self) -> None:
         db_path = self._db_path("telegram_sources_errors.db")
