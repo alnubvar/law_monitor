@@ -195,21 +195,202 @@ class OcrRuntimeTest(unittest.TestCase):
             ocr_pages_processed=2,
         )
         with patch("app.pipeline.ocr_runtime.extract_text_from_pdf", return_value=mocked):
-            result = run_ocr_queue(
-                source_name=source_name,
-                limit=1,
-                db_path=db_path,
-            )
+            with patch("app.pipeline.ocr_runtime.reanalyze_documents_by_url", return_value=1) as reanalyze:
+                result = run_ocr_queue(
+                    source_name=source_name,
+                    limit=1,
+                    db_path=db_path,
+                )
 
         self.assertEqual(result.checked, 1)
         self.assertEqual(result.success, 1)
         self.assertEqual(result.updated, 1)
+        self.assertEqual(result.reanalyzed, 1)
+        reanalyze.assert_called_once_with([url], db_path=db_path)
         updated_doc = get_document_by_url(url, db_path=db_path)
         self.assertIsNotNone(updated_doc)
         assert updated_doc is not None
         self.assertIn("OCR extracted text", updated_doc.raw_text)
         done_rows = list_ocr_queue(db_path=db_path, statuses=["done"], limit=10)
         self.assertEqual(len(done_rows), 1)
+
+    def test_ocr_run_reanalyzes_only_successfully_updated_documents(self) -> None:
+        db_path = self._db_path("ocr_run_targeted_reanalysis.db")
+        init_db(db_path)
+        source_name = "Нормативные акты Краснодарского края"
+        success_url = "https://example.com/ocr-success-targeted.pdf"
+        failed_url = "https://example.com/ocr-failed-targeted.pdf"
+        self._seed_document(
+            db_path=db_path,
+            url=success_url,
+            source_name=source_name,
+            action_level="watchlist",
+        )
+        self._seed_document(
+            db_path=db_path,
+            url=failed_url,
+            source_name=source_name,
+            action_level="watchlist",
+        )
+        upsert_ocr_queue_item(
+            document_url=success_url,
+            source_name=source_name,
+            title="Успешный OCR",
+            priority="high",
+            reason="scan_candidate_pdf",
+            db_path=db_path,
+        )
+        upsert_ocr_queue_item(
+            document_url=failed_url,
+            source_name=source_name,
+            title="Неуспешный OCR",
+            priority="high",
+            reason="scan_candidate_pdf",
+            db_path=db_path,
+        )
+
+        success_extraction = ExtractionResult(
+            raw_text="OCR extracted text",
+            document_type="pdf",
+            needs_ocr=False,
+            page_count=2,
+            extracted_text_length=18,
+            ocr_status="success",
+            ocr_text_length=18,
+            ocr_pages_processed=2,
+        )
+        failed_extraction = ExtractionResult(
+            raw_text="",
+            document_type="pdf",
+            needs_ocr=True,
+            page_count=2,
+            extracted_text_length=0,
+            ocr_status="failed",
+            ocr_error="ocr failed",
+        )
+        def _extract(url_value: str, **_: object) -> ExtractionResult:
+            if url_value == success_url:
+                return success_extraction
+            if url_value == failed_url:
+                return failed_extraction
+            raise AssertionError(f"Unexpected OCR URL: {url_value}")
+
+        with patch(
+            "app.pipeline.ocr_runtime.extract_text_from_pdf",
+            side_effect=_extract,
+        ):
+            with patch("app.pipeline.ocr_runtime.reanalyze_documents_by_url", return_value=1) as reanalyze:
+                result = run_ocr_queue(
+                    source_name=source_name,
+                    limit=2,
+                    db_path=db_path,
+                )
+
+        self.assertEqual(result.updated, 1)
+        self.assertEqual(result.failed, 1)
+        self.assertEqual(result.reanalyzed, 1)
+        reanalyze.assert_called_once_with([success_url], db_path=db_path)
+
+    def test_failed_ocr_does_not_trigger_reanalysis(self) -> None:
+        db_path = self._db_path("ocr_run_failed_no_reanalysis.db")
+        init_db(db_path)
+        source_name = "Нормативные акты Краснодарского края"
+        url = "https://example.com/ocr-failed-no-reanalysis.pdf"
+        self._seed_document(
+            db_path=db_path,
+            url=url,
+            source_name=source_name,
+            action_level="watchlist",
+        )
+        upsert_ocr_queue_item(
+            document_url=url,
+            source_name=source_name,
+            title="Скан НПА",
+            priority="high",
+            reason="scan_candidate_pdf",
+            db_path=db_path,
+        )
+
+        mocked = ExtractionResult(
+            raw_text="",
+            document_type="pdf",
+            needs_ocr=True,
+            page_count=2,
+            extracted_text_length=0,
+            ocr_status="failed",
+            ocr_error="ocr failed",
+        )
+        with patch("app.pipeline.ocr_runtime.extract_text_from_pdf", return_value=mocked):
+            with patch("app.pipeline.ocr_runtime.reanalyze_documents_by_url", return_value=0) as reanalyze:
+                result = run_ocr_queue(
+                    source_name=source_name,
+                    limit=1,
+                    db_path=db_path,
+                )
+
+        self.assertEqual(result.failed, 1)
+        self.assertEqual(result.reanalyzed, 0)
+        reanalyze.assert_not_called()
+
+    def test_targeted_reanalysis_updates_document_after_ocr_success(self) -> None:
+        db_path = self._db_path("ocr_run_real_reanalysis.db")
+        init_db(db_path)
+        source_name = "Нормативные акты Краснодарского края"
+        url = "https://example.com/ocr-real-reanalysis.pdf"
+        self._seed_document(
+            db_path=db_path,
+            url=url,
+            source_name=source_name,
+            action_level="watchlist",
+        )
+        upsert_ocr_queue_item(
+            document_url=url,
+            source_name=source_name,
+            title="Скан НПА",
+            priority="high",
+            reason="scan_candidate_pdf",
+            db_path=db_path,
+        )
+
+        mocked_extraction = ExtractionResult(
+            raw_text="Постановление о предоставлении субсидий на развитие АПК Краснодарского края",
+            document_type="pdf",
+            needs_ocr=False,
+            page_count=2,
+            extracted_text_length=74,
+            ocr_status="success",
+            ocr_text_length=74,
+            ocr_pages_processed=2,
+        )
+        mocked_analysis = AnalysisResult(
+            is_relevant=True,
+            relevance_reason="OCR-текст содержит сигнал о субсидиях для АПК",
+            normalized_title="Постановление о предоставлении субсидий",
+            topic="субсидии",
+            importance="high",
+            action_level="watchlist",
+            page_type="new_rule",
+            summary="Обновленный OCR-текст содержит сигнал о субсидиях.",
+            impact="Требуется наблюдение за условиями меры.",
+        )
+        with patch("app.pipeline.ocr_runtime.extract_text_from_pdf", return_value=mocked_extraction):
+            with patch("app.pipeline.analyze._build_client") as build_client:
+                build_client.return_value.analyze_document.return_value = mocked_analysis
+                result = run_ocr_queue(
+                    source_name=source_name,
+                    limit=1,
+                    db_path=db_path,
+                )
+
+        self.assertEqual(result.updated, 1)
+        self.assertEqual(result.reanalyzed, 1)
+        updated_doc = get_document_by_url(url, db_path=db_path)
+        self.assertIsNotNone(updated_doc)
+        assert updated_doc is not None
+        self.assertEqual(updated_doc.status, "analyzed")
+        self.assertEqual(updated_doc.action_level, "watchlist")
+        self.assertEqual(updated_doc.page_type, "new_rule")
+        self.assertIn("субсид", (updated_doc.summary or "").lower())
 
     def test_ocr_run_handles_fetch_error_without_crash(self) -> None:
         db_path = self._db_path("ocr_run_fetch_error.db")

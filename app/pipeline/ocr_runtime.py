@@ -6,6 +6,7 @@ from pathlib import Path
 from app.config import DB_PATH, get_source_config
 from app.extractors.ocr_extractor import OCR_STATUS_SUCCESS
 from app.extractors.pdf_extractor import extract_text_from_pdf
+from app.pipeline.analyze import reanalyze_documents_by_url
 from app.pipeline.deduplicate import compute_content_hash
 from app.storage import (
     determine_ocr_priority,
@@ -25,6 +26,7 @@ from app.storage import (
 class OCRRunResult:
     checked: int = 0
     updated: int = 0
+    reanalyzed: int = 0
     success: int = 0
     failed: int = 0
     unavailable: int = 0
@@ -110,6 +112,7 @@ def run_ocr_queue(
     db_path: Path | str = DB_PATH,
 ) -> OCRRunResult:
     result = OCRRunResult()
+    updated_document_urls: list[str] = []
     queue_rows = list_pending_ocr_queue(
         source_name=source_name,
         limit=limit,
@@ -186,6 +189,7 @@ def run_ocr_queue(
             )
             if updated_rows > 0:
                 result.updated += 1
+                updated_document_urls.append(url)
             update_ocr_queue_status(
                 document_url=url,
                 status="done",
@@ -235,11 +239,18 @@ def run_ocr_queue(
         if document is None:
             result.skipped += 1
 
+    if updated_document_urls:
+        result.reanalyzed = reanalyze_documents_by_url(
+            updated_document_urls,
+            db_path=db_path,
+        )
+
     mark_runtime_event(
         "ocr_run",
         details=(
-            f"checked={result.checked}; updated={result.updated}; success={result.success}; "
-            f"failed={result.failed}; unavailable={result.unavailable}; skipped={result.skipped}"
+            f"checked={result.checked}; updated={result.updated}; reanalyzed={result.reanalyzed}; "
+            f"success={result.success}; failed={result.failed}; unavailable={result.unavailable}; "
+            f"skipped={result.skipped}"
         ),
         db_path=db_path,
     )

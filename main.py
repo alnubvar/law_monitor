@@ -537,13 +537,10 @@ def main() -> int:
         print("OCR runtime run completed.")
         print(
             f"Checked={run_result.checked}, Updated={run_result.updated}, "
+            f"Reanalyzed={run_result.reanalyzed}, "
             f"Success={run_result.success}, Failed={run_result.failed}, "
             f"Unavailable={run_result.unavailable}, Skipped={run_result.skipped}"
         )
-        if run_result.updated > 0:
-            print(
-                "Next step: run `python main.py analyze --force` to reanalyze updated OCR texts."
-            )
         return 0
 
     if args.command == "ocr-check":
