@@ -735,6 +735,41 @@ def get_document_enrichment(
     return _row_to_document_enrichment(row)
 
 
+def list_document_enrichments(
+    document_urls: list[str],
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+    db_path: Path | str = DB_PATH,
+) -> dict[str, dict[str, Any]]:
+    normalized_urls = [url.strip() for url in document_urls if (url or "").strip()]
+    if not normalized_urls:
+        return {}
+    placeholders = ", ".join("?" for _ in normalized_urls)
+    clauses = [f"document_url IN ({placeholders})"]
+    parameters: list[Any] = list(normalized_urls)
+    if provider is not None:
+        clauses.append("provider = ?")
+        parameters.append(provider)
+    if model is not None:
+        clauses.append("model = ?")
+        parameters.append(model)
+    query = (
+        "SELECT * FROM document_enrichments "
+        f"WHERE {' AND '.join(clauses)} "
+        "ORDER BY updated_at DESC, id DESC"
+    )
+    with _connect_db(db_path) as connection:
+        rows = connection.execute(query, tuple(parameters)).fetchall()
+    by_url: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        payload = _row_to_document_enrichment(row)
+        document_url = str(payload.get("document_url") or "").strip()
+        if document_url and document_url not in by_url:
+            by_url[document_url] = payload
+    return by_url
+
+
 def count_document_enrichments(db_path: Path | str = DB_PATH) -> int:
     with _connect_db(db_path) as connection:
         row = connection.execute(

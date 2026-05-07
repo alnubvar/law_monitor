@@ -11,6 +11,7 @@ from app.llm.enrichment import (
     MockEnrichmentProvider,
     OpenAICompatibleEnrichmentProvider,
     build_document_enricher,
+    get_display_enrichment,
     is_enrichment_eligible,
 )
 from app.models import AnalysisResult, RawDocument
@@ -230,6 +231,56 @@ class LLMEnrichmentTest(unittest.TestCase):
         assert result is not None
         self.assertIn("provider timeout", result.error or "")
         self.assertEqual(result.confidence, 0.0)
+
+    def test_display_enrichment_ignores_error_rows(self) -> None:
+        display = get_display_enrichment(
+            {
+                "business_impact": "Влияние",
+                "recommended_action": "Действие",
+                "confidence": 0.9,
+                "error": "timeout",
+            }
+        )
+        self.assertIsNone(display)
+
+    def test_display_enrichment_ignores_low_confidence_rows(self) -> None:
+        display = get_display_enrichment(
+            {
+                "business_impact": "Влияние",
+                "recommended_action": "Действие",
+                "confidence": 0.4,
+                "error": None,
+            }
+        )
+        self.assertIsNone(display)
+
+    def test_display_enrichment_accepts_high_confidence_rows(self) -> None:
+        display = get_display_enrichment(
+            {
+                "executive_summary": "Кратко",
+                "business_impact": "Влияние",
+                "recommended_action": "Действие",
+                "deadline_hint": "Срок",
+                "confidence": 0.8,
+                "error": None,
+            }
+        )
+        self.assertIsNotNone(display)
+        assert display is not None
+        self.assertEqual(display["business_impact"], "Влияние")
+
+    def test_display_enrichment_ignores_empty_rows(self) -> None:
+        display = get_display_enrichment(
+            {
+                "executive_summary": "   ",
+                "business_impact": "",
+                "recommended_action": None,
+                "deadline_hint": "",
+                "confidence": 0.9,
+                "error": None,
+            }
+        )
+        self.assertIsNone(display)
 
     def test_invalid_json_from_openai_compatible_provider_becomes_error(self) -> None:
         provider = OpenAICompatibleEnrichmentProvider(

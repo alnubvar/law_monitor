@@ -10,9 +10,20 @@ from app.reports.markdown_report import (
     classify_document_bucket,
     generate_markdown_report,
 )
+from app.storage import init_db, save_document_enrichment
+from app.llm.enrichment import EnrichmentResult
 
 
 class ReportGenerationSmokeTest(unittest.TestCase):
+    def _db_path(self, name: str):
+        from pathlib import Path
+
+        path = Path("data/test_artifacts") / name
+        if path.exists():
+            path.unlink()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
     def _doc(
         self,
         *,
@@ -163,6 +174,185 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         )
         self.assertIn("Почему важно:", markdown)
         self.assertNotIn("Action level", markdown)
+
+    def test_report_uses_enrichment_when_available(self) -> None:
+        db_path = self._db_path("report_enrichment.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=500,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Льготное кредитование АПК",
+            url="https://gisp.gov.ru/nmp/measure/9564204",
+            action_level="requires_attention",
+            page_type="measure_card",
+            summary="Базовая summary.",
+        )
+        save_document_enrichment(
+            document_id=document.id,
+            document_url=document.url,
+            provider="mock",
+            model="mock-enrichment",
+            enrichment=EnrichmentResult(
+                executive_summary="Executive summary для руководителя.",
+                business_impact="Новая редакция меры меняет условия участия для заемщиков АПК.",
+                recommended_action="Проверить применимость обновленных условий и ответственного.",
+                deadline_hint="До 30 июня 2026 года.",
+                confidence=0.8,
+            ),
+            db_path=db_path,
+        )
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-07",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+            db_path=db_path,
+        )
+
+        self.assertIn("Executive summary для руководителя.", markdown)
+        self.assertIn("Новая редакция меры меняет условия участия для заемщиков АПК.", markdown)
+        self.assertIn("Проверить применимость обновленных условий и ответственного.", markdown)
+        self.assertIn("До 30 июня 2026 года.", markdown)
+
+    def test_report_falls_back_when_enrichment_missing(self) -> None:
+        document = self._doc(
+            doc_id=501,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Льготное кредитование АПК",
+            url="https://gisp.gov.ru/nmp/measure/9564204",
+            action_level="requires_attention",
+            page_type="measure_card",
+            summary="Базовая summary.",
+        )
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-07",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn("Почему важно: impact", markdown)
+        self.assertIn("Что проверить: Проверить условия участия и окно подачи.", markdown)
+
+    def test_report_ignores_errored_or_low_confidence_enrichment(self) -> None:
+        db_path = self._db_path("report_enrichment_low_conf.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=502,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Льготное кредитование АПК",
+            url="https://gisp.gov.ru/nmp/measure/9564204",
+            action_level="requires_attention",
+            page_type="measure_card",
+            summary="Базовая summary.",
+        )
+        save_document_enrichment(
+            document_id=document.id,
+            document_url=document.url,
+            provider="mock",
+            model="mock-enrichment",
+            enrichment=EnrichmentResult(
+                executive_summary="Не использовать",
+                business_impact="Не использовать",
+                recommended_action="Не использовать",
+                confidence=0.4,
+            ),
+            db_path=db_path,
+        )
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-07",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+            db_path=db_path,
+        )
+
+        self.assertNotIn("Не использовать", markdown)
+        self.assertIn("Почему важно: impact", markdown)
+
+    def test_report_ignores_errored_enrichment(self) -> None:
+        db_path = self._db_path("report_enrichment_error.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=504,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Льготное кредитование АПК",
+            url="https://gisp.gov.ru/nmp/measure/9564204",
+            action_level="requires_attention",
+            page_type="measure_card",
+            summary="Базовая summary.",
+        )
+        save_document_enrichment(
+            document_id=document.id,
+            document_url=document.url,
+            provider="mock",
+            model="mock-enrichment",
+            enrichment=EnrichmentResult(
+                executive_summary="Не использовать",
+                business_impact="Не использовать",
+                recommended_action="Не использовать",
+                confidence=0.9,
+                error="timeout",
+            ),
+            db_path=db_path,
+        )
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-07",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+            db_path=db_path,
+        )
+
+        self.assertNotIn("Не использовать", markdown)
+        self.assertIn("Почему важно: impact", markdown)
+
+    def test_report_clips_long_enrichment_safely(self) -> None:
+        db_path = self._db_path("report_enrichment_clip.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=503,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Льготное кредитование АПК",
+            url="https://gisp.gov.ru/nmp/measure/9564204",
+            action_level="requires_attention",
+            page_type="measure_card",
+            summary="Базовая summary.",
+        )
+        long_text = "Очень длинное executive пояснение " * 20
+        save_document_enrichment(
+            document_id=document.id,
+            document_url=document.url,
+            provider="mock",
+            model="mock-enrichment",
+            enrichment=EnrichmentResult(
+                executive_summary=long_text,
+                business_impact=long_text,
+                recommended_action=long_text,
+                confidence=0.8,
+            ),
+            db_path=db_path,
+        )
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-07",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+            db_path=db_path,
+        )
+
+        self.assertIn("...", markdown)
+        self.assertNotIn(long_text.strip(), markdown)
 
     def test_urgent_regional_npa_report_uses_stronger_reason_and_specific_hint(self) -> None:
         document = self._doc(

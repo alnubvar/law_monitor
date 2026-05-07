@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from abc import ABC, abstractmethod
 from functools import lru_cache
-from typing import Any
+from typing import Any, Mapping
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
@@ -13,6 +13,7 @@ from app import config
 from app.models import AnalysisResult, ActionLevel
 
 ELIGIBLE_ACTION_LEVELS: set[str] = {"requires_attention", "watchlist"}
+READ_PATH_MIN_CONFIDENCE = 0.5
 
 
 class EnrichmentResult(BaseModel):
@@ -305,3 +306,27 @@ def build_document_enricher() -> DocumentEnricher:
 @lru_cache(maxsize=1)
 def get_document_enricher() -> DocumentEnricher:
     return build_document_enricher()
+
+
+def get_display_enrichment(
+    enrichment_row: Mapping[str, Any] | None,
+    *,
+    min_confidence: float = READ_PATH_MIN_CONFIDENCE,
+) -> dict[str, str] | None:
+    if not enrichment_row:
+        return None
+    error = str(enrichment_row.get("error") or "").strip()
+    if error:
+        return None
+    confidence = enrichment_row.get("confidence")
+    if isinstance(confidence, (int, float)) and float(confidence) < min_confidence:
+        return None
+    fields = {
+        "executive_summary": str(enrichment_row.get("executive_summary") or "").strip(),
+        "business_impact": str(enrichment_row.get("business_impact") or "").strip(),
+        "recommended_action": str(enrichment_row.get("recommended_action") or "").strip(),
+        "deadline_hint": str(enrichment_row.get("deadline_hint") or "").strip(),
+    }
+    if not any(fields.values()):
+        return None
+    return fields

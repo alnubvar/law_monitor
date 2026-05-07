@@ -4,8 +4,10 @@ import re
 from collections.abc import Sequence
 
 from app.config import get_source_role
+from app.llm.enrichment import get_display_enrichment
 from app.models import RawDocument
 from app.operational_health import OperationalNotice, format_operational_notices_telegram
+from app.storage import list_document_enrichments
 from app.user_facing import user_facing_title
 from app.visibility import (
     classify_display_section,
@@ -53,12 +55,17 @@ def build_digest_message(
         return "Новых документов для уведомления не найдено."
 
     if _looks_like_hourly_alert(requires_attention, watchlist):
-        return _build_hourly_alert(requires_attention)
+        enrichment_by_url = list_document_enrichments([document.url for document in requires_attention])
+        return _build_hourly_alert(requires_attention, enrichment_by_url=enrichment_by_url)
+    enrichment_by_url = list_document_enrichments(
+        [document.url for document in [*requires_attention, *watchlist]],
+    )
     return _build_daily_digest(
         requires_attention,
         watchlist,
         report_path=report_path,
         operational_notices=list(operational_notices or []),
+        enrichment_by_url=enrichment_by_url,
     )
 
 
@@ -86,11 +93,21 @@ def _looks_like_hourly_alert(
     )
 
 
-def _build_hourly_alert(documents: Sequence[RawDocument]) -> str:
+def _build_hourly_alert(
+    documents: Sequence[RawDocument],
+    *,
+    enrichment_by_url: dict[str, dict[str, object]],
+) -> str:
     visible = list(documents[:HOURLY_REQUIRES_ATTENTION_LIMIT])
     lines = [f"🚨 Новые документы, требующие внимания: {len(documents)}"]
     for document in visible:
-        lines.extend(_format_digest_item(document, include_summary=True))
+        lines.extend(
+            _format_digest_item(
+                document,
+                include_summary=True,
+                enrichment=get_display_enrichment(enrichment_by_url.get(document.url)),
+            )
+        )
     hidden_count = len(documents) - len(visible)
     if hidden_count > 0:
         lines.append(f"... и еще {hidden_count}.")
@@ -103,6 +120,7 @@ def _build_daily_digest(
     *,
     report_path: str | None,
     operational_notices: Sequence[OperationalNotice],
+    enrichment_by_url: dict[str, dict[str, object]],
 ) -> str:
     sections = {section: [] for section in DAILY_SECTION_ORDER}
     for document in requires_attention:
@@ -131,7 +149,13 @@ def _build_daily_digest(
         visible = section_documents[: DAILY_SECTION_LIMITS[section]]
         include_summary = section == "requires_attention"
         for document in visible:
-            lines.extend(_format_digest_item(document, include_summary=include_summary))
+            lines.extend(
+                _format_digest_item(
+                    document,
+                    include_summary=include_summary,
+                    enrichment=get_display_enrichment(enrichment_by_url.get(document.url)),
+                )
+            )
         hidden_count = len(section_documents) - len(visible)
         if hidden_count > 0:
             lines.append(f"... и еще {hidden_count}.")
@@ -165,6 +189,7 @@ def _format_digest_item(
     document: RawDocument,
     *,
     include_summary: bool,
+    enrichment: dict[str, str] | None = None,
 ) -> list[str]:
     lines = [f"- {user_facing_title(document)}"]
     details: list[str] = []
@@ -180,17 +205,30 @@ def _format_digest_item(
         details.append(f"режим: {app_status}")
     if details:
         lines.append(f"  {'; '.join(details)}")
-    if document.deadline_text and not _is_inactive_or_closed(document):
-        lines.append(f"  Срок: {_truncate_text(document.deadline_text, DETAIL_MAX_CHARS)}")
-    if document.business_signal:
-        lines.append(
-            f"  Сигнал: {_truncate_text(document.business_signal, DETAIL_MAX_CHARS)}"
-        )
-    hint = _build_digest_action_hint(document)
+    deadline_text = (
+        enrichment.get("deadline_hint")
+        if enrichment and enrichment.get("deadline_hint")
+        else document.deadline_text
+    )
+    if deadline_text and not _is_inactive_or_closed(document):
+        lines.append(f"  Срок: {_truncate_text(deadline_text, DETAIL_MAX_CHARS)}")
+    signal_text = (
+        enrichment.get("business_impact")
+        if enrichment and enrichment.get("business_impact")
+        else document.business_signal
+    )
+    if signal_text:
+        lines.append(f"  Сигнал: {_truncate_text(signal_text, DETAIL_MAX_CHARS)}")
+    hint = _build_digest_action_hint(document, enrichment=enrichment)
     if hint:
         lines.append(f"  Что проверить: {hint}")
-    if include_summary and document.summary:
-        lines.append(f"  Кратко: {_truncate_text(document.summary, SUMMARY_MAX_CHARS)}")
+    summary_text = (
+        enrichment.get("executive_summary")
+        if enrichment and enrichment.get("executive_summary")
+        else document.summary
+    )
+    if include_summary and summary_text:
+        lines.append(f"  Кратко: {_truncate_text(summary_text, SUMMARY_MAX_CHARS)}")
     lines.append(f"  {document.url}")
     return lines
 
@@ -209,7 +247,13 @@ def _truncate_text(text: str, max_chars: int) -> str:
     return f"{normalized[: max_chars - 3].rstrip(' ,.;:-')}..."
 
 
-def _build_digest_action_hint(document: RawDocument) -> str:
+def _build_digest_action_hint(
+    document: RawDocument,
+    *,
+    enrichment: dict[str, str] | None = None,
+) -> str:
+    if enrichment and enrichment.get("recommended_action"):
+        return _truncate_text(enrichment["recommended_action"], DETAIL_MAX_CHARS)
     if document.application_status == "open" and document.deadline_text:
         return _truncate_text(document.deadline_text, DETAIL_MAX_CHARS)
     if document.application_status == "open":

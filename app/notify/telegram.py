@@ -12,6 +12,7 @@ import requests
 
 from app import config
 from app.config import get_source_role, load_sources
+from app.llm.enrichment import get_display_enrichment
 from app.models import RawDocument
 from app.notify.telegram_formatter import build_digest_message
 from app.operational_health import (
@@ -26,6 +27,7 @@ from app.storage import (
     create_tracking_item,
     deactivate_tracking_item,
     count_documents_by_action_level,
+    list_document_enrichments,
     get_active_tracking_item,
     get_document_by_url,
     init_db,
@@ -333,6 +335,7 @@ def _build_today_message(db_path: Path | str) -> str:
     today_documents = _select_today_visible_documents(db_path)
     if not today_documents:
         return "📅 Сегодня новых срочных документов нет."
+    enrichment_by_url = list_document_enrichments([document.url for document in today_documents], db_path=db_path)
     urgent_count = sum(1 for document in today_documents if user_facing_action_level(document) == "requires_attention")
     watchlist_documents = [document for document in today_documents if user_facing_action_level(document) == "watchlist"]
     urgent_documents = [document for document in today_documents if user_facing_action_level(document) == "requires_attention"]
@@ -343,11 +346,11 @@ def _build_today_message(db_path: Path | str) -> str:
         lines.append("Сегодня новых срочных документов нет.")
     else:
         lines.append(f"Требует внимания GR: {urgent_count}")
-        lines.extend(_format_document_lines(urgent_documents, include_summary=False))
+        lines.extend(_format_document_lines(urgent_documents, include_summary=False, enrichment_by_url=enrichment_by_url))
     if watchlist_documents:
         lines.append("")
         lines.append(f"📰 Отраслевые сигналы: {len(watchlist_documents)}")
-        lines.extend(_format_document_lines(watchlist_documents, include_summary=False))
+        lines.extend(_format_document_lines(watchlist_documents, include_summary=False, enrichment_by_url=enrichment_by_url))
     return _cap_message("\n".join(lines))
 
 
@@ -366,11 +369,12 @@ def _build_urgent_message(db_path: Path | str, *, days: int) -> str:
     )
     if not urgent_documents:
         return f"🚨 Требует внимания GR: новых документов нет за {days} дней."
+    enrichment_by_url = list_document_enrichments([document.url for document in urgent_documents], db_path=db_path)
     lines = [
         f"🚨 Требует внимания GR (за {days} дней)",
         f"Найдено документов: {len(urgent_documents)}",
     ]
-    lines.extend(_format_document_lines(urgent_documents, include_summary=False))
+    lines.extend(_format_document_lines(urgent_documents, include_summary=False, enrichment_by_url=enrichment_by_url))
     return _cap_message("\n".join(lines))
 
 
@@ -388,6 +392,7 @@ def _build_watchlist_message(db_path: Path | str, *, days: int) -> str:
     ]
     if not watchlist_documents:
         return f"👀 Документов на наблюдении за {days} дней нет."
+    enrichment_by_url = list_document_enrichments([document.url for document in watchlist_documents], db_path=db_path)
     shown_count = min(TELEGRAM_WATCHLIST_USER_LIMIT, len(watchlist_documents))
     lines = [
         f"👀 Документы на наблюдении (за {days} дней)",
@@ -398,6 +403,7 @@ def _build_watchlist_message(db_path: Path | str, *, days: int) -> str:
             include_summary=False,
             max_items=TELEGRAM_WATCHLIST_USER_LIMIT,
             include_hidden_hint=False,
+            enrichment_by_url=enrichment_by_url,
         )
     )
     if len(watchlist_documents) > shown_count:
@@ -419,7 +425,14 @@ def _build_report_message(db_path: Path | str, *, days: int) -> str:
         include_market_background=False,
     )
     notices = collect_operational_notices(db_path=db_path)
-    return _cap_message(_build_short_report_text(visible_documents, days=days, operational_notices=notices))
+    return _cap_message(
+        _build_short_report_text(
+            visible_documents,
+            days=days,
+            operational_notices=notices,
+            db_path=db_path,
+        )
+    )
 
 
 def _build_short_report_text(
@@ -427,7 +440,12 @@ def _build_short_report_text(
     *,
     days: int,
     operational_notices: Sequence[OperationalNotice] = (),
+    db_path: Path | str | None = None,
 ) -> str:
+    enrichment_by_url = list_document_enrichments(
+        [document.url for document in documents],
+        db_path=db_path or config.DB_PATH,
+    )
     sections = {
         "requires_attention": [],
         "measures_and_selections": [],
@@ -469,11 +487,16 @@ def _build_short_report_text(
         shown_blocks += 1
         lines.append(title)
         for document in section_documents[:2]:
-            reason = _build_user_facing_reason(document)
+            enrichment = get_display_enrichment(enrichment_by_url.get(document.url))
+            reason = _build_user_facing_reason(document, enrichment=enrichment)
             lines.append(f"- {user_facing_title(document, max_chars=150)}")
             if reason:
                 lines.append(f"  Почему важно: {reason[:120]}")
-            hint = _build_report_summary_action_hint(document, section=section)
+            if enrichment and enrichment.get("executive_summary"):
+                lines.append(f"  Кратко: {enrichment['executive_summary'][:120]}")
+            if enrichment and enrichment.get("deadline_hint"):
+                lines.append(f"  Срок: {enrichment['deadline_hint'][:120]}")
+            hint = _build_report_summary_action_hint(document, section=section, enrichment=enrichment)
             if hint:
                 lines.append(f"  Что проверить: {hint}")
             lines.append(f"  Источник: {document.url}")
@@ -534,6 +557,7 @@ def _build_search_message(db_path: Path | str, *, query: str) -> str:
             include_summary=False,
             max_items=5,
             include_hidden_hint=False,
+            enrichment_by_url=list_document_enrichments([document.url for document in results], db_path=db_path),
         )
     )
     lines.append(f"Показано {len(results)} результатов. Уточните запрос, чтобы сузить поиск.")
@@ -549,7 +573,14 @@ def _format_report_period_label(days: int) -> str:
     return f"GR-сводка за {days} дней"
 
 
-def _build_report_summary_action_hint(document: RawDocument, *, section: str) -> str:
+def _build_report_summary_action_hint(
+    document: RawDocument,
+    *,
+    section: str,
+    enrichment: dict[str, str] | None = None,
+) -> str:
+    if enrichment and enrichment.get("recommended_action"):
+        return enrichment["recommended_action"][:120]
     if document.application_status == "open" and document.deadline_text:
         return document.deadline_text[:120]
     if get_source_role(document.source_name) == "regional_npa" and document.page_type == "new_rule":
@@ -762,9 +793,13 @@ def _format_document_lines(
     include_summary: bool,
     max_items: int = TELEGRAM_LIST_LIMIT,
     include_hidden_hint: bool = True,
+    enrichment_by_url: dict[str, dict[str, object]] | None = None,
 ) -> list[str]:
     lines: list[str] = []
     for document in documents[:max_items]:
+        enrichment = get_display_enrichment(
+            (enrichment_by_url or {}).get(document.url)
+        )
         published_label = _fmt_dt(document.published_at)
         lines.append(f"- {user_facing_title(document, max_chars=160)}")
         meta_parts = [f"Источник: {document.source_name}"]
@@ -772,11 +807,18 @@ def _format_document_lines(
             meta_parts.append(f"Дата: {published_label}")
         meta_parts.append(f"Уровень: {_format_action_level(user_facing_action_level(document))}")
         lines.append(f"  {' | '.join(meta_parts)}")
-        reason = _build_user_facing_reason(document)
+        reason = _build_user_facing_reason(document, enrichment=enrichment)
         if reason:
             lines.append(f"  Почему важно: {reason[:140]}")
-        if include_summary and document.summary:
-            lines.append(f"  Кратко: {document.summary[:120]}")
+        summary_text = (
+            enrichment.get("executive_summary")
+            if enrichment and enrichment.get("executive_summary")
+            else document.summary
+        )
+        if include_summary and summary_text:
+            lines.append(f"  Кратко: {summary_text[:120]}")
+        if enrichment and enrichment.get("deadline_hint"):
+            lines.append(f"  Срок: {enrichment['deadline_hint'][:120]}")
         lines.append(f"  {document.url}")
     hidden_count = len(documents) - min(len(documents), max_items)
     if include_hidden_hint and hidden_count > 0:
@@ -784,7 +826,13 @@ def _format_document_lines(
     return lines
 
 
-def _build_user_facing_reason(document: RawDocument) -> str:
+def _build_user_facing_reason(
+    document: RawDocument,
+    *,
+    enrichment: dict[str, str] | None = None,
+) -> str:
+    if enrichment and enrichment.get("business_impact"):
+        return enrichment["business_impact"]
     if (
         classify_display_section(document) == "requires_attention"
         and get_source_role(document.source_name) == "regional_npa"

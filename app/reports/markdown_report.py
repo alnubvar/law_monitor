@@ -8,9 +8,12 @@ import re
 from typing import Iterable
 from urllib.parse import urlsplit, urlunsplit
 
+from app import config
 from app.config import get_source_role
+from app.llm.enrichment import get_display_enrichment
 from app.models import DigestItem, RawDocument, SourceErrorRecord
 from app.operational_health import OperationalNotice, format_operational_notices_markdown
+from app.storage import list_document_enrichments
 from app.user_facing import user_facing_action_level, user_facing_title
 from app.visibility import (
     classify_display_section as visibility_display_section,
@@ -135,6 +138,7 @@ def generate_markdown_report(
     include_registries: bool = False,
     include_market_background: bool = False,
     include_full_background: bool = False,
+    db_path: Path | str | None = None,
 ) -> str:
     document_list = list(documents)
     report_view = build_report_view(
@@ -149,6 +153,10 @@ def generate_markdown_report(
         include_full_background=include_full_background,
     )
     display_sections = _build_display_sections(report_view.flatten())
+    enrichment_by_url = list_document_enrichments(
+        [document.url for document in report_view.flatten()],
+        db_path=db_path or config.DB_PATH,
+    )
     notices = list(operational_notices or [])
 
     generated_at_value = generated_at or datetime.now()
@@ -171,7 +179,13 @@ def generate_markdown_report(
         if documents_for_bucket:
             for document in documents_for_bucket:
                 digest_item = _to_digest_item(document)
-                lines.extend(_format_human_item(digest_item, require_action=section == "requires_attention"))
+                lines.extend(
+                    _format_human_item(
+                        digest_item,
+                        require_action=section == "requires_attention",
+                        enrichment=get_display_enrichment(enrichment_by_url.get(document.url)),
+                    )
+                )
         else:
             lines.append(DISPLAY_EMPTY_MESSAGES[section])
             lines.append("")
@@ -472,12 +486,21 @@ def _shorten_summary(text: str | None) -> str:
     return f"{normalized[: SHORT_SUMMARY_MAX_CHARS - 3].rstrip(' ,.;:-')}..."
 
 
-def _format_human_item(item: DigestItem, *, require_action: bool) -> list[str]:
+def _format_human_item(
+    item: DigestItem,
+    *,
+    require_action: bool,
+    enrichment: dict[str, str] | None = None,
+) -> list[str]:
     lines = [
         f"### {item.title}",
-        f"- Почему важно: {_build_human_importance_text(item)}",
+        f"- Почему важно: {_build_human_importance_text(item, enrichment=enrichment)}",
     ]
-    action_text = _build_human_action_text(item)
+    if enrichment and enrichment.get("executive_summary"):
+        lines.append(f"- Кратко: {_shorten_summary(enrichment['executive_summary'])}")
+    if enrichment and enrichment.get("deadline_hint"):
+        lines.append(f"- Срок: {_shorten_summary(enrichment['deadline_hint'])}")
+    action_text = _build_human_action_text(item, enrichment=enrichment)
     if require_action or action_text:
         lines.append(f"- Что проверить: {action_text or 'Оценить влияние и определить следующий шаг.'}")
     lines.extend(
@@ -489,7 +512,13 @@ def _format_human_item(item: DigestItem, *, require_action: bool) -> list[str]:
     return lines
 
 
-def _build_human_importance_text(item: DigestItem) -> str:
+def _build_human_importance_text(
+    item: DigestItem,
+    *,
+    enrichment: dict[str, str] | None = None,
+) -> str:
+    if enrichment and enrichment.get("business_impact"):
+        return _shorten_summary(enrichment["business_impact"])
     if (
         item.action_level == "requires_attention"
         and get_source_role(item.source_name) == "regional_npa"
@@ -504,7 +533,13 @@ def _build_human_importance_text(item: DigestItem) -> str:
     return "Сигнал требует короткой оценки со стороны GR."
 
 
-def _build_human_action_text(item: DigestItem) -> str:
+def _build_human_action_text(
+    item: DigestItem,
+    *,
+    enrichment: dict[str, str] | None = None,
+) -> str:
+    if enrichment and enrichment.get("recommended_action"):
+        return _shorten_summary(enrichment["recommended_action"])
     if item.application_status == "open" and item.deadline_text:
         return f"Проверить сроки подачи и ответственного: {_shorten_summary(item.deadline_text)}"
     if item.application_status == "open":

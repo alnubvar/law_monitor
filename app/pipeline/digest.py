@@ -73,6 +73,7 @@ def run_digest(
         include_registries=include_registries,
         include_market_background=include_market_background,
         include_full_background=include_full_background,
+        db_path=resolved_db_path,
     )
 
     if output_path:

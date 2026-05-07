@@ -268,6 +268,136 @@ class TelegramFormatterTest(unittest.TestCase):
         self.assertIn("http://government.ru/docs/58669/", text)
         self.assertNotIn("http://government.ru/news/58669/", text)
 
+    def test_formatter_uses_enrichment_when_available(self) -> None:
+        document = self._doc(
+            doc_id=40,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Льготное кредитование АПК",
+            url="https://gisp.gov.ru/nmp/measure/9564204",
+            action_level="requires_attention",
+            page_type="measure_card",
+            summary="Базовая summary.",
+        )
+        document.business_signal = "Базовый сигнал."
+
+        with mock.patch(
+            "app.notify.telegram_formatter.list_document_enrichments",
+            return_value={
+                document.url: {
+                    "executive_summary": "Executive summary для Telegram.",
+                    "business_impact": "Новая редакция меры меняет условия участия для заемщиков АПК.",
+                    "recommended_action": "Проверить применимость обновленных условий и ответственного.",
+                    "deadline_hint": "До 30 июня 2026 года.",
+                    "confidence": 0.8,
+                    "error": None,
+                }
+            },
+        ):
+            text = build_digest_message([document])
+
+        self.assertIn("Executive summary для Telegram.", text)
+        self.assertIn("Новая редакция меры меняет условия участия для заемщиков АПК.", text)
+        self.assertIn("Проверить применимость обновленных условий и ответственного.", text)
+        self.assertIn("До 30 июня 2026 года.", text)
+
+    def test_formatter_falls_back_without_enrichment(self) -> None:
+        document = self._doc(
+            doc_id=41,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Льготное кредитование АПК",
+            url="https://gisp.gov.ru/nmp/measure/9564204",
+            action_level="requires_attention",
+            page_type="measure_card",
+            summary="Базовая summary.",
+        )
+        document.business_signal = "Базовый сигнал."
+
+        with mock.patch("app.notify.telegram_formatter.list_document_enrichments", return_value={}):
+            text = build_digest_message([document])
+
+        self.assertIn("Сигнал: Базовый сигнал.", text)
+        self.assertIn("Что проверить: Проверить применимость меры, сроки и ответственного.", text)
+        self.assertNotIn("Executive summary для Telegram.", text)
+
+    def test_formatter_ignores_errored_or_low_confidence_enrichment(self) -> None:
+        document = self._doc(
+            doc_id=42,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Льготное кредитование АПК",
+            url="https://gisp.gov.ru/nmp/measure/9564204",
+            action_level="requires_attention",
+            page_type="measure_card",
+            summary="Базовая summary.",
+        )
+        document.business_signal = "Базовый сигнал."
+
+        with mock.patch(
+            "app.notify.telegram_formatter.list_document_enrichments",
+            return_value={
+                document.url: {
+                    "executive_summary": "Не использовать",
+                    "business_impact": "Не использовать",
+                    "recommended_action": "Не использовать",
+                    "confidence": 0.4,
+                    "error": None,
+                }
+            },
+        ):
+            low_confidence_text = build_digest_message([document])
+
+        with mock.patch(
+            "app.notify.telegram_formatter.list_document_enrichments",
+            return_value={
+                document.url: {
+                    "executive_summary": "Не использовать",
+                    "business_impact": "Не использовать",
+                    "recommended_action": "Не использовать",
+                    "confidence": 0.9,
+                    "error": "timeout",
+                }
+            },
+        ):
+            errored_text = build_digest_message([document])
+
+        self.assertNotIn("Не использовать", low_confidence_text)
+        self.assertIn("Сигнал: Базовый сигнал.", low_confidence_text)
+        self.assertNotIn("Не использовать", errored_text)
+        self.assertIn("Сигнал: Базовый сигнал.", errored_text)
+
+    def test_formatter_clips_long_enrichment_safely(self) -> None:
+        document = self._doc(
+            doc_id=43,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Льготное кредитование АПК",
+            url="https://gisp.gov.ru/nmp/measure/9564204",
+            action_level="requires_attention",
+            page_type="measure_card",
+            summary="Базовая summary.",
+        )
+        long_text = "Очень длинное executive пояснение " * 20
+
+        with mock.patch(
+            "app.notify.telegram_formatter.list_document_enrichments",
+            return_value={
+                document.url: {
+                    "executive_summary": long_text,
+                    "business_impact": long_text,
+                    "recommended_action": long_text,
+                    "deadline_hint": long_text,
+                    "confidence": 0.8,
+                    "error": None,
+                }
+            },
+        ):
+            text = build_digest_message([document])
+
+        self.assertIn("...", text)
+        self.assertNotIn(long_text.strip(), text)
+
 
 if __name__ == "__main__":
     unittest.main()
