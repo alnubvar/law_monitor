@@ -82,6 +82,16 @@ class TelegramBotTest(unittest.TestCase):
         self.assertEqual(keyboard[4][0]["text"], "ℹ️ Помощь")
         self.assertTrue(payload["resize_keyboard"])
         self.assertTrue(payload["is_persistent"])
+        self.assertIn("one_time_keyboard", payload)
+        self.assertNotIn("one_tiime_keyboard", payload)
+        self.assertFalse(payload["one_time_keyboard"])
+
+    def test_report_period_keyboard_uses_correct_one_time_keyboard_key(self) -> None:
+        payload = telegram_bot.build_report_period_keyboard_payload()
+
+        self.assertIn("one_time_keyboard", payload)
+        self.assertNotIn("one_tiime_keyboard", payload)
+        self.assertTrue(payload["one_time_keyboard"])
 
     def test_dispatch_start_returns_welcome_text(self) -> None:
         result = telegram_bot.dispatch_input_text("/start")
@@ -232,6 +242,31 @@ class TelegramBotTest(unittest.TestCase):
         self.assertIn("/sendDocument", post.call_args.args[0])
         sent_document = post.call_args.kwargs["files"]["document"]
         self.assertTrue(sent_document[0].endswith(".txt"))
+
+    def test_service_attachment_notice_is_sent_without_default_keyboard(self) -> None:
+        report_path = self._offset_path("gr_monitoring_attachment_notice.txt")
+        report_path.write_text("report", encoding="utf-8")
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"ok": True, "result": {"message_id": 1}}
+
+        with patch.multiple(telegram_bot.config, TELEGRAM_BOT_TOKEN="token", TELEGRAM_API_TIMEOUT=30):
+            with patch("app.notify.telegram_bot._call_telegram_api", return_value={"ok": True}) as call_api:
+                with patch("app.notify.telegram_bot.requests.post", return_value=response):
+                    sent = telegram_bot._send_report_attachment(
+                        chat_id=123,
+                        proxies=None,
+                        days=7,
+                        db_path=None,
+                        prepared_path=report_path,
+                    )
+
+        self.assertTrue(sent)
+        first_send_message = call_api.call_args_list[0]
+        self.assertEqual(first_send_message.args[0], "sendMessage")
+        payload = first_send_message.kwargs["payload"]
+        self.assertEqual(payload["text"], "📎 Полный отчет во вложении")
+        self.assertNotIn("reply_markup", payload)
 
     def test_report_command_fallback_when_file_missing(self) -> None:
         update = {"update_id": 1, "message": {"chat": {"id": 123}, "text": "/report"}}

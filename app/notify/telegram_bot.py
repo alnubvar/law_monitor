@@ -503,6 +503,7 @@ def _send_response(
     text: str,
     proxies: dict[str, str] | None,
     reply_markup: Mapping[str, Any] | None = None,
+    include_default_keyboard: bool = True,
 ) -> bool:
     chunks = _split_message_chunks(text)
     for chunk in chunks:
@@ -510,8 +511,11 @@ def _send_response(
             "chat_id": chat_id,
             "text": chunk,
             "disable_web_page_preview": True,
-            "reply_markup": dict(reply_markup) if reply_markup is not None else build_reply_keyboard_payload(),
         }
+        if reply_markup is not None:
+            payload["reply_markup"] = dict(reply_markup)
+        elif include_default_keyboard:
+            payload["reply_markup"] = build_reply_keyboard_payload()
         try:
             _call_telegram_api(
                 "sendMessage",
@@ -541,7 +545,12 @@ def _send_report_attachment(
             proxies=proxies,
         )
 
-    if not _send_response(chat_id=chat_id, text="📎 Полный отчет во вложении", proxies=proxies):
+    if not _send_response(
+        chat_id=chat_id,
+        text="📎 Полный отчет во вложении",
+        proxies=proxies,
+        include_default_keyboard=False,
+    ):
         return False
 
     timeout = max(config.TELEGRAM_API_TIMEOUT + 5, 10)
