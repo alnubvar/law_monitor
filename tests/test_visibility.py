@@ -133,6 +133,84 @@ class VisibilityDecisionTest(unittest.TestCase):
 
         self.assertEqual([document.id for document in visible], [4])
 
+    def test_news_watchlist_noise_is_downgraded_to_background(self) -> None:
+        document = self._doc(
+            doc_id=6,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Рейтинг экспортных отгрузок зерна и фрахта за неделю",
+            url="https://www.zol.ru/n/freight-rating",
+            action_level="watchlist",
+            page_type="news_background",
+            summary="Обзор рынка зерна, фрахта и экспортных отгрузок без решений правительства.",
+        )
+        document.business_signal = "Новостной предвестник возможных изменений господдержки, экспорта или регулирования."
+        document.raw_text = (
+            "Еженедельный обзор рынка зерна, ставки фрахта, рейтинг экспортных отгрузок и оценки аналитиков."
+        )
+
+        self.assertEqual(effective_user_action_level(document), "background")
+        self.assertFalse(
+            should_show_document(
+                document,
+                surface="report",
+                relevant_only=False,
+                action_levels=["requires_attention", "watchlist"],
+            )
+        )
+        self.assertFalse(should_show_document(document, surface="telegram_digest", relevant_only=False))
+        self.assertFalse(should_show_document(document, surface="telegram_list", relevant_only=False))
+
+    def test_news_watchlist_with_regulatory_signal_stays_visible(self) -> None:
+        document = self._doc(
+            doc_id=7,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Правительство расширило программу господдержки экспортеров АПК",
+            url="https://www.zol.ru/n/export-support",
+            action_level="watchlist",
+            page_type="news_background",
+            summary="Изменены параметры программы поддержки и экспортного финансирования.",
+        )
+        document.business_signal = "Новостной предвестник возможных изменений господдержки, экспорта или регулирования."
+        document.raw_text = "Правительство утвердило изменения программы финансирования и меры поддержки экспорта АПК."
+
+        self.assertEqual(effective_user_action_level(document), "watchlist")
+        self.assertTrue(should_show_document(document, surface="report", relevant_only=False))
+        self.assertTrue(should_show_document(document, surface="telegram_digest", relevant_only=False))
+        self.assertTrue(should_show_document(document, surface="telegram_list", relevant_only=False))
+
+    def test_gisp_support_measure_is_unaffected_by_news_noise_guard(self) -> None:
+        document = self._doc(
+            doc_id=8,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Льготное кредитование АПК",
+            url="https://gisp.gov.ru/nmp/measure/9564204",
+            action_level="watchlist",
+            page_type="measure_card",
+            summary="Активная мера поддержки без разового дедлайна.",
+        )
+        document.business_signal = "Активная федеральная мера поддержки, действует на регулярной основе"
+        document.raw_text = "Мера поддержки действует на регулярной основе."
+
+        self.assertEqual(effective_user_action_level(document), "watchlist")
+
+    def test_regional_npa_is_unaffected_by_news_noise_guard(self) -> None:
+        document = self._doc(
+            doc_id=9,
+            source_name="Право Ставропольского края",
+            region="stavropol",
+            title="Постановление о внесении изменений в порядок предоставления субсидий",
+            url="https://pravo.stavregion.ru/document/98765",
+            action_level="watchlist",
+            page_type="new_rule",
+            summary="Изменения порядка предоставления субсидий.",
+        )
+        document.business_signal = "Региональный НПА по профильной теме: оставить в наблюдении."
+
+        self.assertEqual(effective_user_action_level(document), "watchlist")
+
 
 if __name__ == "__main__":
     unittest.main()

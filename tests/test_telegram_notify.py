@@ -229,6 +229,27 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         self.assertIn("Пошлина на экспорт пшеницы останется нулевой", text)
         self.assertNotIn("Старый документ", text)
 
+    def test_today_command_skips_noisy_market_watchlist(self) -> None:
+        db_path = self._db_path("telegram_today_noise.db")
+        init_db(db_path)
+        noisy = self._doc(
+            doc_id=1,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Фрахт и экспортные отгрузки зерна за неделю",
+            url="https://www.zol.ru/n/freight-week",
+            action_level="watchlist",
+            page_type="news_background",
+            summary="Общая рыночная аналитика без мер поддержки и без регуляторных изменений.",
+        )
+        noisy.business_signal = "Новостной предвестник возможных изменений господдержки, экспорта или регулирования."
+        noisy.raw_text = "Фрахт, экспортные отгрузки и общая аналитика зернового рынка."
+        save_document(noisy, db_path)
+
+        text = telegram.build_command_response("/today", db_path=db_path)
+
+        self.assertEqual(text, "📅 Сегодня новых срочных документов нет.")
+
     def test_watchlist_command_returns_watchlist_documents(self) -> None:
         db_path = self._db_path("telegram_watchlist.db")
         init_db(db_path)
@@ -250,6 +271,28 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         self.assertIn("Документы на наблюдении", text)
         self.assertIn("Уровень: наблюдение", text)
         self.assertIn("Пошлина на экспорт пшеницы останется нулевой", text)
+
+    def test_watchlist_command_hides_noisy_zol_market_news(self) -> None:
+        db_path = self._db_path("telegram_watchlist_noise.db")
+        init_db(db_path)
+        noisy = self._doc(
+            doc_id=1,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Рейтинг экспортных отгрузок и фрахта на зерновом рынке",
+            url="https://www.zol.ru/n/freight-rating",
+            action_level="watchlist",
+            page_type="news_background",
+            summary="Обзор рынка, фрахта и отгрузок без прямого регуляторного сигнала.",
+        )
+        noisy.business_signal = "Новостной предвестник возможных изменений господдержки, экспорта или регулирования."
+        noisy.raw_text = "Еженедельный обзор рынка зерна, ставки фрахта и рейтинг экспортных отгрузок."
+        save_document(noisy, db_path)
+
+        text = telegram.build_command_response("/watchlist", db_path=db_path)
+
+        self.assertIn("за 7 дней нет", text)
+        self.assertNotIn("Рейтинг экспортных отгрузок", text)
 
     def test_period_argument_overrides_default_for_urgent(self) -> None:
         db_path = self._db_path("telegram_urgent_period.db")

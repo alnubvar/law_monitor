@@ -94,11 +94,11 @@ class ReportGenerationSmokeTest(unittest.TestCase):
                 doc_id=index,
                 source_name="ZOL.ru - зерновые новости",
                 region="federal",
-                title=f"В Липецкой области яровой сев {index}",
+                title=f"В Липецкой области изменили порядок экспортных субсидий {index}",
                 url=f"https://www.zol.ru/n/lipetsk-{index}",
                 action_level="watchlist",
                 page_type="news_background",
-                summary="Фон вне целевой географии.",
+                summary="Правительство региона обновило порядок предоставления субсидий экспортерам.",
             )
             for index in range(1, 8)
         ]
@@ -704,6 +704,43 @@ class ReportGenerationSmokeTest(unittest.TestCase):
 
         self.assertIn("Новых пунктов, требующих внимания, не найдено.", markdown)
         self.assertNotIn("### Алжир проводит тендер", markdown)
+
+    def test_report_hides_noisy_watchlist_news_but_keeps_regulatory_news(self) -> None:
+        noisy_document = self._doc(
+            doc_id=1,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Рейтинг экспортных отгрузок и фрахта на зерновом рынке",
+            url="https://www.zol.ru/n/freight-rating",
+            action_level="watchlist",
+            page_type="news_background",
+            summary="Обзор рынка, фрахта и экспортных отгрузок.",
+        )
+        noisy_document.business_signal = "Новостной предвестник возможных изменений господдержки, экспорта или регулирования."
+        noisy_document.raw_text = "Еженедельный обзор рынка зерна, ставки фрахта и оценки аналитиков."
+
+        signal_document = self._doc(
+            doc_id=2,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Правительство расширило программу господдержки экспортеров АПК",
+            url="https://www.zol.ru/n/export-support",
+            action_level="watchlist",
+            page_type="news_background",
+            summary="Изменены параметры программы поддержки и экспортного финансирования.",
+        )
+        signal_document.business_signal = "Новостной предвестник возможных изменений господдержки, экспорта или регулирования."
+        signal_document.raw_text = "Правительство утвердило изменения программы финансирования и меры поддержки экспорта АПК."
+
+        markdown = generate_markdown_report(
+            [noisy_document, signal_document],
+            report_date="2026-05-05",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertNotIn("Рейтинг экспортных отгрузок", markdown)
+        self.assertIn("Правительство расширило программу господдержки экспортеров АПК", markdown)
 
 
 if __name__ == "__main__":

@@ -79,6 +79,10 @@ def effective_user_action_level(document: RawDocument) -> str | None:
         reason=document.relevance_reason,
         impact=document.impact,
         signal=document.business_signal,
+        title=document.title,
+        summary=document.summary,
+        raw_text=document.raw_text,
+        page_type=document.page_type,
     )
 
 
