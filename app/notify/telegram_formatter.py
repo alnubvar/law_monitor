@@ -4,41 +4,30 @@ import re
 from collections.abc import Sequence
 
 from app.models import RawDocument
-from app.reports.markdown_report import classify_display_section, classify_document_bucket
-from app.user_facing import user_facing_action_level, user_facing_title
+from app.user_facing import user_facing_title
+from app.visibility import classify_display_section, should_show_document
 
 HOURLY_REQUIRES_ATTENTION_LIMIT = 10
-TELEGRAM_WATCHLIST_BUCKETS = {
-    "support_reference",
-    "target_watchlist",
-    "industry_background",
-}
 DAILY_SECTION_ORDER = (
     "requires_attention",
-    "active_support_measures",
-    "support_documents",
+    "measures_and_selections",
     "regional_npa",
     "strategy_signals",
     "news_signals",
-    "background_reference",
 )
 DAILY_SECTION_TITLES = {
     "requires_attention": "🚨 Требует внимания",
-    "active_support_measures": "📢 Объявленные меры / отборы",
-    "support_documents": "📚 Документы по мерам поддержки",
+    "measures_and_selections": "📢 Меры и отборы",
     "regional_npa": "⚖️ Региональные НПА",
     "strategy_signals": "🏛 Стратегические сигналы",
     "news_signals": "📰 Новостные предвестники",
-    "background_reference": "📎 Фон / справочно",
 }
 DAILY_SECTION_LIMITS = {
     "requires_attention": 5,
-    "active_support_measures": 5,
-    "support_documents": 3,
+    "measures_and_selections": 5,
     "regional_npa": 3,
     "strategy_signals": 3,
     "news_signals": 5,
-    "background_reference": 3,
 }
 SUMMARY_MAX_CHARS = 140
 DETAIL_MAX_CHARS = 180
@@ -67,19 +56,12 @@ def _partition_digest_documents(
     requires_attention: list[RawDocument] = []
     watchlist: list[RawDocument] = []
     for document in documents:
-        if document.support_status == "inactive":
+        if not should_show_document(document, surface="telegram_digest", relevant_only=False):
             continue
-        if document.application_status == "closed":
-            continue
-        if document.page_type == "reference_page":
-            continue
-        bucket = classify_document_bucket(document)
-        display_action_level = user_facing_action_level(document)
-        if display_action_level == "requires_attention" and bucket == "requires_attention":
+        if classify_display_section(document) == "requires_attention":
             requires_attention.append(document)
             continue
-        if display_action_level == "watchlist" and bucket in TELEGRAM_WATCHLIST_BUCKETS:
-            watchlist.append(document)
+        watchlist.append(document)
     return requires_attention, watchlist
 
 
@@ -145,14 +127,14 @@ def _build_daily_summary_line(sections: dict[str, list[RawDocument]]) -> str:
     summary_parts: list[str] = []
     label_map = {
         "requires_attention": "Требует внимания",
-        "active_support_measures": "меры",
+        "measures_and_selections": "меры",
         "regional_npa": "НПА",
         "strategy_signals": "стратегия",
         "news_signals": "новости",
     }
     for section in (
         "requires_attention",
-        "active_support_measures",
+        "measures_and_selections",
         "regional_npa",
         "strategy_signals",
         "news_signals",

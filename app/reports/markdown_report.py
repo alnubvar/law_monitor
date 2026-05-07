@@ -8,65 +8,12 @@ import re
 from typing import Iterable
 from urllib.parse import urlsplit, urlunsplit
 
-from app.config import get_source_role
 from app.models import DigestItem, RawDocument, SourceErrorRecord
 from app.user_facing import user_facing_action_level, user_facing_title
-
-VISIBLE_WATCHLIST_PAGE_TYPES = {
-    "news_background",
-    "measure_card",
-    "new_rule",
-    "selection_announcement",
-    "deadline_update",
-}
-TARGET_REGION_MARKERS: dict[str, tuple[str, ...]] = {
-    "rostov": ("ростов", "донланд", "ростовской области"),
-    "krasnodar": ("краснодар", "кубани", "кубан", "краснодарского края"),
-    "stavropol": ("ставрополь", "ставропольского края"),
-}
-GLOBAL_MARKERS = (
-    "мексик",
-    "кндр",
-    "казахстан",
-    "австрали",
-    "южной коре",
-    "нигер",
-    "брикс",
-    "оаэ",
-    "китай",
-    "мировой рынок",
-    "зарубеж",
-    "экспортный рынок",
-)
-NON_TARGET_RF_MARKERS = (
-    "томск",
-    "томской области",
-    "ульянов",
-    "башкир",
-    "иркут",
-    "омск",
-    "липецк",
-    "пензен",
-    "саратов",
-    "краснояр",
-    "псков",
-    "волгоград",
-    "алтай",
-    "татарстан",
-    "чуваш",
-    "марий эл",
-    "мордов",
-)
-SUPPORT_PAGE_TYPES = {
-    "measure_card",
-    "new_rule",
-    "selection_announcement",
-    "deadline_update",
-    "reference_page",
-}
-REFERENCE_TITLE_WORD_RE = re.compile(
-    r"\b(анкета|форма|формы|памятка|инструкция|инструкции|образец)\b",
-    re.IGNORECASE,
+from app.visibility import (
+    classify_display_section as visibility_display_section,
+    should_show_document,
+    visibility_bucket,
 )
 SHORT_SUMMARY_MAX_CHARS = 180
 BACKGROUND_DEFAULT_LIMIT = 5
@@ -260,13 +207,14 @@ def build_report_view(
     visible_candidates: list[RawDocument] = []
     hidden_service_count = 0
     for document in report_candidates:
-        if user_facing_action_level(document) == "requires_attention":
-            visible_candidates.append(document)
-            continue
-        if _should_show_watchlist_document(
+        if should_show_document(
             document,
+            surface="report",
+            relevant_only=False,
+            action_levels=filtered_action_levels,
             include_section_pages=include_section_pages,
             include_registries=include_registries,
+            include_market_background=True,
         ):
             visible_candidates.append(document)
             continue
@@ -494,130 +442,18 @@ def _published_timestamp(document: RawDocument) -> float:
 def _build_display_sections(documents: Iterable[RawDocument]) -> dict[str, list[RawDocument]]:
     sections = {section: [] for section in DISPLAY_SECTION_ORDER}
     for document in documents:
-        section = classify_display_section(document)
+        section = visibility_display_section(document)
         if section in sections:
             sections[section].append(document)
     return sections
 
 
 def classify_display_section(document: RawDocument) -> str:
-    if user_facing_action_level(document) == "requires_attention":
-        return "requires_attention"
-    source_role = get_source_role(document.source_name)
-    if source_role in {"active_support_measures", "support_documents"}:
-        return "measures_and_selections"
-    if source_role == "regional_npa":
-        return "regional_npa"
-    if source_role == "strategy":
-        return "strategy_signals"
-    if source_role in {"news_signals", "unknown"}:
-        return "news_signals"
-    return "news_signals"
+    return visibility_display_section(document)
 
 
 def classify_document_bucket(document: RawDocument) -> str:
-    geo_scope = _detect_geo_scope(document)
-    if user_facing_action_level(document) == "requires_attention":
-        if geo_scope in {"target_region", "federal_rf"}:
-            return "requires_attention"
-        if _is_support_reference_document(document):
-            return "support_reference"
-        if geo_scope == "global_market":
-            return "market_background"
-        return "non_target_background"
-
-    if _is_support_reference_document(document):
-        if geo_scope == "global_market":
-            return "market_background"
-        return "support_reference" if geo_scope in {"target_region", "federal_rf"} else "non_target_background"
-
-    if geo_scope == "global_market":
-        return "market_background"
-    if geo_scope == "target_region":
-        return "target_watchlist"
-    if geo_scope == "non_target_rf":
-        return "non_target_background"
-    return "industry_background"
-
-
-def _should_show_watchlist_document(
-    document: RawDocument,
-    *,
-    include_section_pages: bool,
-    include_registries: bool,
-) -> bool:
-    page_type = document.page_type or "unknown"
-    if include_section_pages:
-        return page_type not in {"navigation", "unknown"}
-    if page_type in {"registry", "results_protocol"}:
-        return include_registries
-    if page_type == "reference_page":
-        return _is_support_reference_document(document)
-    return page_type in VISIBLE_WATCHLIST_PAGE_TYPES
-
-
-def _is_support_reference_document(document: RawDocument) -> bool:
-    source_key = f"{document.source_name} {document.source_url}".lower()
-    title_text = document.title.lower()
-    has_reference_title = bool(REFERENCE_TITLE_WORD_RE.search(title_text))
-    is_anti_corruption_reference = "корруп" in title_text and (
-        "форм" in title_text
-        or "деклар" in title_text
-        or "конфликт интерес" in title_text
-    )
-    if document.page_type == "reference_page":
-        if is_anti_corruption_reference:
-            return False
-        return has_reference_title or (
-            "гисп" in source_key
-            or document.level == "support_measures"
-            or "господдерж" in source_key
-            or "меры поддержки" in source_key
-        )
-    if has_reference_title:
-        return not is_anti_corruption_reference
-    if document.page_type in SUPPORT_PAGE_TYPES and (
-        "гисп" in source_key
-        or document.level == "support_measures"
-        or "господдерж" in source_key
-        or "меры поддержки" in source_key
-    ):
-        return True
-    return False
-
-
-def _detect_geo_scope(document: RawDocument) -> str:
-    target_text = " ".join(
-        part
-        for part in (
-            document.title.lower(),
-            document.source_name.lower(),
-            document.url.lower(),
-        )
-        if part
-    )
-    broad_text = " ".join(
-        part
-        for part in (
-            target_text,
-            (document.summary or "").lower(),
-            (document.relevance_reason or "").lower(),
-        )
-        if part
-    )
-
-    if document.region in {"rostov", "krasnodar", "stavropol"}:
-        return "target_region"
-    for markers in TARGET_REGION_MARKERS.values():
-        if any(marker in target_text for marker in markers):
-            return "target_region"
-    if any(marker in broad_text for marker in GLOBAL_MARKERS):
-        return "global_market"
-    if any(marker in broad_text for marker in NON_TARGET_RF_MARKERS):
-        return "non_target_rf"
-    if document.region == "federal":
-        return "federal_rf"
-    return "non_target_rf"
+    return visibility_bucket(document)
 
 
 def _shorten_summary(text: str | None) -> str:

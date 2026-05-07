@@ -14,9 +14,9 @@ from app import config
 from app.config import load_sources
 from app.models import RawDocument
 from app.notify.telegram_formatter import build_digest_message
-from app.pipeline.diagnostics import build_diagnostics_snapshot
-from app.reports.markdown_report import classify_display_section, select_visible_report_documents
 from app.user_facing import user_facing_action_level, user_facing_title
+from app.pipeline.diagnostics import build_diagnostics_snapshot
+from app.reports.markdown_report import select_visible_report_documents
 from app.storage import (
     create_tracking_item,
     deactivate_tracking_item,
@@ -34,6 +34,7 @@ from app.storage import (
     summarize_ocr_queue,
 )
 from app.storage import get_runtime_event, list_latest_source_audit
+from app.visibility import classify_display_section, should_show_document
 
 logger = logging.getLogger(__name__)
 TELEGRAM_URL_TOKEN_RE = re.compile(r"(https://api\.telegram\.org/bot)[^/\s]+", re.IGNORECASE)
@@ -351,12 +352,17 @@ def _build_urgent_message(db_path: Path | str, *, days: int) -> str:
 
 
 def _build_watchlist_message(db_path: Path | str, *, days: int) -> str:
-    watchlist_documents = list_recent_documents(
+    recent_documents = list_recent_documents(
         db_path=db_path,
         days=days,
         relevant_only=False,
         action_levels=["watchlist"],
     )
+    watchlist_documents = [
+        document
+        for document in recent_documents
+        if should_show_document(document, surface="telegram_list", relevant_only=False)
+    ]
     if not watchlist_documents:
         return f"👀 Документов на наблюдении за {days} дней нет."
     shown_count = min(TELEGRAM_WATCHLIST_USER_LIMIT, len(watchlist_documents))
@@ -402,8 +408,6 @@ def _build_short_report_text(documents: Sequence[RawDocument], *, days: int) -> 
     }
     for document in documents:
         section = classify_display_section(document)
-        if section in {"active_support_measures", "support_documents"}:
-            section = "measures_and_selections"
         if section in sections:
             sections[section].append(document)
 
