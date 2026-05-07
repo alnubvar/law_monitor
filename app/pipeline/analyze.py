@@ -4,6 +4,7 @@ import logging
 from collections.abc import Iterable
 
 from app.config import DB_PATH, load_keyword_groups, load_keywords
+from app.llm.enrichment import DocumentEnricher, get_document_enricher
 from app.llm.mock_client import MockLLMClient
 from app.storage import (
     count_documents_by_action_level,
@@ -27,6 +28,7 @@ def _build_client() -> MockLLMClient:
 
 def _analyze_documents(documents: Iterable, *, client: MockLLMClient, db_path) -> int:
     analyzed_count = 0
+    enricher = get_document_enricher()
     for document in documents:
         try:
             analysis = client.analyze_document(
@@ -41,6 +43,11 @@ def _analyze_documents(documents: Iterable, *, client: MockLLMClient, db_path) -
                 raise ValueError("Document id is missing")
             update_analysis(document.id, analysis, db_path=db_path)
             analyzed_count += 1
+            _run_optional_enrichment(
+                document=document,
+                analysis=analysis,
+                enricher=enricher,
+            )
         except Exception as exc:
             logger.exception(
                 "Analysis failed for document id=%s url=%s: %s",
@@ -50,6 +57,32 @@ def _analyze_documents(documents: Iterable, *, client: MockLLMClient, db_path) -
             )
             continue
     return analyzed_count
+
+
+def _run_optional_enrichment(
+    *,
+    document,
+    analysis,
+    enricher: DocumentEnricher,
+) -> None:
+    enrichment = enricher.maybe_enrich_document(
+        title=document.title,
+        raw_text=document.raw_text,
+        analysis=analysis,
+        source_name=document.source_name,
+        url=document.url,
+        level=document.level,
+        region=document.region,
+    )
+    if enrichment is None:
+        return
+    if enrichment.error:
+        logger.warning(
+            "LLM enrichment unavailable for document id=%s url=%s: %s",
+            document.id,
+            document.url,
+            enrichment.error,
+        )
 
 
 def reanalyze_documents_by_url(
