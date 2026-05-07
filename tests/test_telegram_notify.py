@@ -491,6 +491,8 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         text = telegram.build_command_response("/report")
 
         self.assertIn("GR-сводка", text)
+        self.assertIn("Включено в краткую сводку", text)
+        self.assertIn("Требует реакции", text)
         self.assertNotIn("сервер", text.lower())
         self.assertNotIn("urgent:", text)
         self.assertNotIn("reports\\", text)

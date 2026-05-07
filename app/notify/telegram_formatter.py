@@ -137,7 +137,7 @@ def _build_daily_digest(
 def _build_daily_summary_line(sections: dict[str, list[RawDocument]]) -> str:
     summary_parts: list[str] = []
     label_map = {
-        "requires_attention": "Требует внимания",
+        "requires_attention": "Требует реакции",
         "measures_and_selections": "меры",
         "regional_npa": "НПА",
         "strategy_signals": "стратегия",
@@ -181,6 +181,9 @@ def _format_digest_item(
         lines.append(
             f"  Сигнал: {_truncate_text(document.business_signal, DETAIL_MAX_CHARS)}"
         )
+    hint = _build_digest_action_hint(document)
+    if hint:
+        lines.append(f"  Что проверить: {hint}")
     if include_summary and document.summary:
         lines.append(f"  Кратко: {_truncate_text(document.summary, SUMMARY_MAX_CHARS)}")
     lines.append(f"  {document.url}")
@@ -199,3 +202,22 @@ def _truncate_text(text: str, max_chars: int) -> str:
     if len(normalized) <= max_chars:
         return normalized
     return f"{normalized[: max_chars - 3].rstrip(' ,.;:-')}..."
+
+
+def _build_digest_action_hint(document: RawDocument) -> str:
+    if document.application_status == "open" and document.deadline_text:
+        return _truncate_text(document.deadline_text, DETAIL_MAX_CHARS)
+    if document.application_status == "open":
+        return "Проверить условия участия и окно подачи."
+    section = classify_display_section(document)
+    if section == "requires_attention":
+        return "Проверить применимость меры, сроки и ответственного."
+    if section == "measures_and_selections":
+        return "Проверить условия участия и окно подачи."
+    if section == "regional_npa":
+        return "Проверить изменения порядка субсидирования и влияние на регионы присутствия."
+    if section == "strategy_signals":
+        return "Оценить влияние на меры господдержки и регулирование."
+    if section == "news_signals":
+        return "Оставить как отраслевой фон, без срочной реакции."
+    return ""

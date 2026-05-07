@@ -433,10 +433,10 @@ def _build_short_report_text(
 
     lines = [
         f"🧾 {_format_report_period_label(days)}",
-        f"📊 Всего видимых материалов: {len(documents)}",
+        f"📊 Включено в краткую сводку: {len(documents)}",
         (
-            f"🚨 Требует внимания: {len(sections['requires_attention'])} | "
-            f"📢 Меры: {len(sections['measures_and_selections'])} | "
+            f"🚨 Требует реакции: {len(sections['requires_attention'])} | "
+            f"📢 Меры и отборы: {len(sections['measures_and_selections'])} | "
             f"⚖️ Региональные изменения: {len(sections['regional_npa'])}"
         ),
         "",
@@ -464,10 +464,13 @@ def _build_short_report_text(
             lines.append(f"- {user_facing_title(document, max_chars=150)}")
             if reason:
                 lines.append(f"  Почему важно: {reason[:120]}")
-            lines.append(f"  Ссылка: {document.url}")
+            hint = _build_report_summary_action_hint(document, section=section)
+            if hint:
+                lines.append(f"  Что проверить: {hint}")
+            lines.append(f"  Источник: {document.url}")
         lines.append("")
 
-    lines.append("Полная версия во вложении .txt")
+    lines.append("Полная версия отчета — во вложении .txt")
     return "\n".join(lines).strip()
 
 
@@ -535,6 +538,22 @@ def _format_report_period_label(days: int) -> str:
         suffix = "дня" if days in {3} else "дней"
         return f"GR-сводка за {days} {suffix}"
     return f"GR-сводка за {days} дней"
+
+
+def _build_report_summary_action_hint(document: RawDocument, *, section: str) -> str:
+    if document.application_status == "open" and document.deadline_text:
+        return document.deadline_text[:120]
+    if section == "requires_attention":
+        return "Проверить применимость меры, сроки и ответственного."
+    if section == "measures_and_selections":
+        return "Проверить условия участия и окно подачи."
+    if section == "regional_npa":
+        return "Проверить изменения порядка субсидирования и влияние на регионы присутствия."
+    if section == "strategy_signals":
+        return "Оценить влияние на меры господдержки и регулирование."
+    if section == "news_signals":
+        return "Оставить как отраслевой фон, без срочной реакции."
+    return ""
 
 
 def _build_help_message() -> str:

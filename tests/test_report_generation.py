@@ -220,10 +220,11 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         )
 
         self.assertIn("## Сводка", markdown)
-        self.assertIn("Всего документов: 4", markdown)
-        self.assertIn("Требует внимания: 1", markdown)
+        self.assertIn("Проанализировано: 4", markdown)
+        self.assertIn("Требует реакции: 1", markdown)
         self.assertIn("На наблюдении: 1", markdown)
-        self.assertIn("Ключевой фокус: Льготное кредитование АПК", markdown)
+        self.assertIn("Включено в сводку: 2", markdown)
+        self.assertIn("Главный акцент: Льготное кредитование АПК", markdown)
         self.assertIn("## 📢 Меры и отборы", markdown)
 
     def test_report_does_not_fail_when_published_at_is_none(self) -> None:
@@ -247,7 +248,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             action_levels=["requires_attention", "watchlist"],
         )
 
-        self.assertIn("Всего документов: 1", markdown)
+        self.assertIn("Проанализировано: 1", markdown)
 
     def test_report_deduplicates_documents_with_same_url(self) -> None:
         older_document = self._doc(
@@ -489,8 +490,8 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         )
 
         self.assertIn("Почему важно:", markdown)
-        self.assertIn("Что сделать:", markdown)
-        self.assertIn("Ссылка:", markdown)
+        self.assertIn("Что проверить:", markdown)
+        self.assertIn("Источник:", markdown)
         self.assertIn("Активная федеральная мера поддержки", markdown)
 
     def test_report_uses_source_taxonomy_sections(self) -> None:
@@ -657,6 +658,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertIn("Почему важно:", markdown)
         self.assertIn("## 🚨 Требует внимания", markdown)
         self.assertIn("## Итог", markdown)
+        self.assertIn("Что проверить:", markdown)
         self.assertNotIn("Action level", markdown)
         self.assertNotIn("Тип страницы", markdown)
 
@@ -741,6 +743,82 @@ class ReportGenerationSmokeTest(unittest.TestCase):
 
         self.assertNotIn("Рейтинг экспортных отгрузок", markdown)
         self.assertIn("Правительство расширило программу господдержки экспортеров АПК", markdown)
+
+    def test_report_uses_role_specific_action_hints(self) -> None:
+        support_document = self._doc(
+            doc_id=1,
+            source_name="Минсельхоз Ростовской области - господдержка",
+            region="rostov",
+            title="Объявление о проведении отбора на предоставление субсидии",
+            url="https://mcx.donland.ru/selection",
+            action_level="requires_attention",
+            page_type="selection_announcement",
+            summary="Открыт прием заявок.",
+        )
+        support_document.application_status = "open"
+        support_document.deadline_text = "Прием заявок до 20.05.2026."
+
+        regional_npa = self._doc(
+            doc_id=2,
+            source_name="Право Ростовской области",
+            region="rostov",
+            title="Постановление о внесении изменений в порядок предоставления субсидий",
+            url="https://pravo.donland.ru/doc/view/id/42",
+            action_level="watchlist",
+            page_type="new_rule",
+            summary="Изменен порядок предоставления субсидий.",
+        )
+
+        news_document = self._doc(
+            doc_id=3,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Отраслевая новость по рынку зерна",
+            url="https://www.zol.ru/n/market-rf",
+            action_level="watchlist",
+            page_type="news_background",
+            summary="Фоновая новость без срочной реакции.",
+        )
+
+        markdown = generate_markdown_report(
+            [support_document, regional_npa, news_document],
+            report_date="2026-05-05",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+            include_market_background=True,
+        )
+
+        self.assertIn("Проверить сроки подачи и ответственного", markdown)
+        self.assertIn("Проверить изменения порядка субсидирования", markdown)
+        self.assertIn("Оставить как отраслевой фон, без срочной реакции.", markdown)
+
+    def test_report_clips_long_titles_cleanly(self) -> None:
+        long_title = (
+            "Постановление Правительства Ростовской области о внесении изменений в порядок предоставления "
+            "субсидий сельскохозяйственным товаропроизводителям и перерабатывающим предприятиям региона"
+        )
+        document = self._doc(
+            doc_id=1,
+            source_name="Право Ростовской области",
+            region="rostov",
+            title=long_title,
+            url="https://pravo.donland.ru/doc/view/id/very-long-title",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="Изменения порядка предоставления субсидий.",
+        )
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-05",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn("### Постановление Правительства Ростовской области", markdown)
+        self.assertIn("...", markdown)
+        self.assertIn("https://pravo.donland.ru/doc/view/id/very-long-title", markdown)
+        self.assertNotIn(long_title + "\n- Источник", markdown)
 
 
 if __name__ == "__main__":

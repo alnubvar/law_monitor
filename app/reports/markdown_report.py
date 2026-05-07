@@ -17,6 +17,8 @@ from app.visibility import (
     visibility_bucket,
 )
 SHORT_SUMMARY_MAX_CHARS = 180
+REPORT_TITLE_MAX_CHARS = 120
+REPORT_REACTION_TITLE_MAX_CHARS = 90
 BACKGROUND_DEFAULT_LIMIT = 5
 MARKET_BACKGROUND_LIMIT = 5
 REPORT_BUCKET_ORDER = (
@@ -90,7 +92,7 @@ class ReportView:
 
 def _to_digest_item(document: RawDocument) -> DigestItem:
     return DigestItem(
-        title=user_facing_title(document),
+        title=_report_title(document),
         region=document.region,
         source_name=document.source_name,
         url=document.url,
@@ -461,7 +463,7 @@ def classify_document_bucket(document: RawDocument) -> str:
 
 def _shorten_summary(text: str | None) -> str:
     if not text:
-        return "Нет summary"
+        return "Краткое пояснение пока не добавлено."
     normalized = re.sub(r"\s+", " ", text).strip()
     if len(normalized) <= SHORT_SUMMARY_MAX_CHARS:
         return normalized
@@ -475,10 +477,10 @@ def _format_human_item(item: DigestItem, *, require_action: bool) -> list[str]:
     ]
     action_text = _build_human_action_text(item)
     if require_action or action_text:
-        lines.append(f"- Что сделать: {action_text or 'Оценить влияние и держать на контроле'}")
+        lines.append(f"- Что проверить: {action_text or 'Оценить влияние и определить следующий шаг.'}")
     lines.extend(
         [
-            f"- Ссылка: {item.url}",
+            f"- Источник: {item.url}",
             "",
         ]
     )
@@ -492,17 +494,27 @@ def _build_human_importance_text(item: DigestItem) -> str:
         return _shorten_summary(item.impact)
     if item.summary:
         return _shorten_summary(item.summary)
-    return "Важный сигнал для мониторинга GR."
+    return "Сигнал требует короткой оценки со стороны GR."
 
 
 def _build_human_action_text(item: DigestItem) -> str:
     if item.application_status == "open" and item.deadline_text:
-        return f"Проверить сроки: {_shorten_summary(item.deadline_text)}"
+        return f"Проверить сроки подачи и ответственного: {_shorten_summary(item.deadline_text)}"
     if item.application_status == "open":
-        return "Проверить условия участия и возможные сроки подачи."
+        return "Проверить условия участия, окно подачи и ответственного по направлению."
+    if item.action_level == "requires_attention" and item.page_type in {"new_rule", "deadline_update"}:
+        return "Проверить применимость изменений, сроки и влияние на текущие заявки."
+    if item.page_type in {"selection_announcement", "measure_card"}:
+        return "Проверить условия участия и окно подачи."
+    if item.region in {"rostov", "krasnodar", "stavropol"} and item.page_type == "new_rule":
+        return "Проверить изменения порядка субсидирования и влияние на регионы присутствия."
+    if item.source_name.startswith("Правительство РФ") or item.source_name.startswith("Regulation.gov.ru"):
+        return "Оценить влияние на меры господдержки и регулирование."
+    if item.source_name.startswith("ZOL.ru"):
+        return "Оставить как отраслевой фон, без срочной реакции."
     if item.action_level == "requires_attention":
-        return "Проверить влияние на текущие GR-планы и подготовить позицию."
-    return "Добавить в наблюдение и отслеживать обновления."
+        return "Проверить применимость меры, сроки и ответственного."
+    return "Взять в наблюдение и вернуться к теме при следующих обновлениях."
 
 
 def _format_stats(
@@ -598,14 +610,6 @@ def _format_header_summary(
     watchlist_count = sum(
         1 for document in documents if user_facing_action_level(document) == "watchlist"
     )
-    hidden_background_irrelevant_count = sum(
-        1
-        for document in documents
-        if user_facing_action_level(document) in {"background", "irrelevant"}
-    )
-    published_with_date_count = sum(
-        1 for document in documents if document.published_at is not None
-    )
     period_text = (
         f"Последние {period_days} дн."
         if period_days is not None
@@ -614,13 +618,13 @@ def _format_header_summary(
     reaction_text = _build_reaction_summary(report_view)
     return [
         "## Сводка",
-        f"- Дата: {generated_at.strftime('%Y-%m-%d %H:%M')}",
+        f"- Подготовлено: {generated_at.strftime('%Y-%m-%d %H:%M')}",
         f"- Период: {period_text}",
-        f"- Всего документов: {len(documents)}",
-        f"- Требует внимания: {requires_attention_count}",
+        f"- Проанализировано: {len(documents)}",
+        f"- Включено в сводку: {report_view.total_visible}",
+        f"- Требует реакции: {requires_attention_count}",
         f"- На наблюдении: {watchlist_count}",
-        f"- Видимых в дайджесте: {report_view.total_visible}",
-        f"- Ключевой фокус: {reaction_text}",
+        f"- Главный акцент: {reaction_text}",
         "",
     ]
 
@@ -643,12 +647,20 @@ def _format_human_outro(display_sections: dict[str, list[RawDocument]]) -> list[
 def _build_reaction_summary(report_view: ReportView) -> str:
     requires_attention_documents = report_view.shown_buckets.get("requires_attention", [])
     if not requires_attention_documents:
-        return "Срочных GR-сигналов не найдено."
-    titles = [user_facing_title(document) for document in requires_attention_documents[:3]]
+        return "Срочных поводов для GR-реакции не выявлено."
+    titles = [_report_title(document, max_chars=REPORT_REACTION_TITLE_MAX_CHARS) for document in requires_attention_documents[:3]]
     if len(requires_attention_documents) > 3:
         extra_count = len(requires_attention_documents) - 3
         return f"{'; '.join(titles)}; и еще {extra_count}."
     return "; ".join(titles)
+
+
+def _report_title(document: RawDocument, *, max_chars: int = REPORT_TITLE_MAX_CHARS) -> str:
+    title = user_facing_title(document)
+    normalized = re.sub(r"\s+", " ", title).strip()
+    if len(normalized) <= max_chars:
+        return normalized
+    return f"{normalized[: max_chars - 3].rstrip(' ,.;:-')}..."
 
 
 def save_markdown_report(markdown: str, path: Path) -> None:

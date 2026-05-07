@@ -85,7 +85,7 @@ class OperationalHealthTest(unittest.TestCase):
         notices = collect_operational_notices(db_path=db_path)
 
         self.assertTrue(
-            any("ZOL.ru - зерновые новости: новых публикаций не найдено 5 дней" == notice.message for notice in notices)
+            any("ZOL.ru - зерновые новости: источник не обновлялся 5 дней" == notice.message for notice in notices)
         )
 
     def test_stale_support_source_detection(self) -> None:
@@ -109,7 +109,7 @@ class OperationalHealthTest(unittest.TestCase):
 
         self.assertTrue(
             any(
-                "Минсельхоз Ставропольского края - господдержка: новых публикаций не найдено 8 дней"
+                "Минсельхоз Ставропольского края - господдержка: источник не обновлялся 8 дней"
                 == notice.message
                 for notice in notices
             )
@@ -130,7 +130,7 @@ class OperationalHealthTest(unittest.TestCase):
         self.assertTrue(
             any(
                 notice.severity == "warning"
-                and notice.message == "Право Ставропольского края: ошибки доступа за последние 24 часа"
+                and notice.message == "Право Ставропольского края: были ошибки доступа за последние 24 часа"
                 for notice in notices
             )
         )
@@ -153,7 +153,7 @@ class OperationalHealthTest(unittest.TestCase):
         self.assertTrue(
             any(
                 notice.severity == "info"
-                and notice.message == "OCR queue: 7 документов ожидают обработки"
+                and notice.message == "OCR queue: в очереди 7 документов на обработку"
                 for notice in notices
             )
         )
@@ -202,8 +202,8 @@ class OperationalHealthTest(unittest.TestCase):
         path = run_demo_report(db_path=db_path, output_path=str(output_path))
         markdown = path.read_text(encoding="utf-8")
 
-        self.assertIn("## ⚠️ Системные замечания", markdown)
-        self.assertIn("ZOL.ru - зерновые новости: новых публикаций не найдено 5 дней", markdown)
+        self.assertIn("## ⚠️ На что обратить внимание по системе", markdown)
+        self.assertIn("ZOL.ru - зерновые новости: источник не обновлялся 5 дней", markdown)
 
     def test_telegram_digest_rendering_includes_operational_notices(self) -> None:
         document = self._doc(
@@ -222,13 +222,13 @@ class OperationalHealthTest(unittest.TestCase):
             operational_notices=[
                 OperationalNotice(
                     severity="warning",
-                    message="OCR queue: 7 документов ожидают обработки",
+                    message="OCR queue: в очереди 7 документов на обработку",
                 )
             ],
         )
 
-        self.assertIn("⚠️ Системные замечания", text)
-        self.assertIn("OCR queue: 7 документов ожидают обработки", text)
+        self.assertIn("⚠️ На что обратить внимание по системе", text)
+        self.assertIn("OCR queue: в очереди 7 документов на обработку", text)
 
     def test_report_and_status_include_notices_but_today_urgent_watchlist_do_not(self) -> None:
         db_path = self._db_path("operational_command_visibility.db")
@@ -264,12 +264,12 @@ class OperationalHealthTest(unittest.TestCase):
         urgent_text = build_command_response("/urgent", db_path=db_path)
         watchlist_text = build_command_response("/watchlist", db_path=db_path)
 
-        self.assertIn("Системные замечания", report_text)
-        self.assertIn("OCR queue: 7 документов ожидают обработки", report_text)
-        self.assertIn("Системные замечания", status_text)
-        self.assertNotIn("Системные замечания", today_text)
-        self.assertNotIn("Системные замечания", urgent_text)
-        self.assertNotIn("Системные замечания", watchlist_text)
+        self.assertIn("На что обратить внимание по системе", report_text)
+        self.assertIn("OCR queue: в очереди 7 документов на обработку", report_text)
+        self.assertIn("На что обратить внимание по системе", status_text)
+        self.assertNotIn("На что обратить внимание по системе", today_text)
+        self.assertNotIn("На что обратить внимание по системе", urgent_text)
+        self.assertNotIn("На что обратить внимание по системе", watchlist_text)
 
 
 if __name__ == "__main__":

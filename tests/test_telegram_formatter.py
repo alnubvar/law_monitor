@@ -77,6 +77,7 @@ class TelegramFormatterTest(unittest.TestCase):
 
         self.assertIn("🧾 Ежедневная GR-сводка", text)
         self.assertIn("🚨 Требует внимания (1)", text)
+        self.assertIn("Требует реакции: 1", text)
         self.assertIn("Льготное кредитование АПК", text)
 
     def test_inactive_measures_are_not_shown_as_urgent(self) -> None:
@@ -134,6 +135,7 @@ class TelegramFormatterTest(unittest.TestCase):
         self.assertIn("статус: активна", text)
         self.assertIn("режим: регулярная мера", text)
         self.assertIn("Сигнал: Активная федеральная мера поддержки", text)
+        self.assertIn("Что проверить: Проверить применимость меры, сроки и ответственного.", text)
         self.assertIn("https://gisp.gov.ru/nmp/measure/9512857", text)
 
     def test_long_text_is_truncated(self) -> None:
@@ -201,6 +203,23 @@ class TelegramFormatterTest(unittest.TestCase):
 
         self.assertIn("НПА Краснодарского края: документ после OCR", text)
         self.assertNotIn("requires OCR extraction", text)
+
+    def test_formatter_uses_news_background_hint_without_urgent_tone(self) -> None:
+        document = self._doc(
+            doc_id=1,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Пошлина на экспорт пшеницы останется нулевой",
+            url="https://www.zol.ru/n/1",
+            action_level="watchlist",
+            page_type="news_background",
+        )
+        document.business_signal = "Новостной предвестник возможных изменений господдержки."
+        document.notified = True
+
+        text = build_digest_message([document])
+
+        self.assertIn("Что проверить: Оставить как отраслевой фон, без срочной реакции.", text)
 
 
 if __name__ == "__main__":

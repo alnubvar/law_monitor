@@ -65,7 +65,7 @@ def format_operational_notices_markdown(
 ) -> list[str]:
     if not notices:
         return []
-    lines = ["## ⚠️ Системные замечания", ""]
+    lines = ["## ⚠️ На что обратить внимание по системе", ""]
     for notice in notices:
         prefix = "⚠️" if notice.severity == "warning" else "ℹ️"
         lines.append(f"- {prefix} {notice.message}")
@@ -78,7 +78,7 @@ def format_operational_notices_telegram(
 ) -> list[str]:
     if not notices:
         return []
-    lines = ["⚠️ Системные замечания"]
+    lines = ["⚠️ На что обратить внимание по системе"]
     for notice in notices:
         prefix = "⚠️" if notice.severity == "warning" else "ℹ️"
         lines.append(f"- {prefix} {notice.message}")
@@ -110,7 +110,7 @@ def _collect_source_error_notices(
     return [
         OperationalNotice(
             severity="warning",
-            message=f"{source_name}: {message}",
+            message=f"{source_name}: были {message}",
         )
         for source_name, message in sorted(errored_sources.items())
     ]
@@ -140,7 +140,7 @@ def _collect_stale_source_notices(
         notices.append(
             OperationalNotice(
                 severity="warning",
-                message=f"{source.name}: новых публикаций не найдено {stale_days} дней",
+                message=f"{source.name}: источник не обновлялся {stale_days} дней",
             )
         )
     return notices
@@ -154,14 +154,14 @@ def _collect_ocr_backlog_notices(
         return [
             OperationalNotice(
                 severity="warning",
-                message=f"OCR queue: {pending_count} документов ожидают обработки",
+                message=f"OCR queue: в очереди {pending_count} документов на обработку",
             )
         ]
     if pending_count >= OCR_BACKLOG_INFO_THRESHOLD:
         return [
             OperationalNotice(
                 severity="info",
-                message=f"OCR queue: {pending_count} документов ожидают обработки",
+                message=f"OCR queue: в очереди {pending_count} документов на обработку",
             )
         ]
     return []
