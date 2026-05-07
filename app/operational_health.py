@@ -6,9 +6,7 @@ from pathlib import Path
 from typing import Literal, Sequence
 
 from app.config import DB_PATH, get_source_role, load_sources
-from app.models import RawDocument
 from app.storage import (
-    list_documents,
     list_latest_source_audit,
     list_recent_source_errors,
     summarize_ocr_queue,
@@ -35,8 +33,6 @@ def collect_operational_notices(
     now: datetime | None = None,
 ) -> list[OperationalNotice]:
     current_time = _normalize_dt(now) or datetime.now(timezone.utc)
-    documents = list_documents(db_path=db_path)
-    latest_documents_by_source = _latest_document_by_source(documents)
     audit_by_source = {
         str(row.get("source_name") or ""): row
         for row in list_latest_source_audit(db_path=db_path)
@@ -52,7 +48,7 @@ def collect_operational_notices(
     )
     notices.extend(
         _collect_stale_source_notices(
-            latest_documents_by_source=latest_documents_by_source,
+            audit_by_source=audit_by_source,
             now=current_time,
         )
     )
@@ -118,7 +114,7 @@ def _collect_source_error_notices(
 
 def _collect_stale_source_notices(
     *,
-    latest_documents_by_source: dict[str, RawDocument],
+    audit_by_source: dict[str, dict[str, object]],
     now: datetime,
 ) -> list[OperationalNotice]:
     notices: list[OperationalNotice] = []
@@ -128,19 +124,22 @@ def _collect_stale_source_notices(
         threshold_days = _stale_threshold_days(source.name)
         if threshold_days is None:
             continue
-        latest_document = latest_documents_by_source.get(source.name)
-        if latest_document is None:
+        audit_row = audit_by_source.get(source.name)
+        if not audit_row:
             continue
-        latest_at = _normalize_dt(latest_document.published_at or latest_document.collected_at)
-        if latest_at is None:
+        latest_success_at = _normalize_dt(audit_row.get("success_at"))
+        if latest_success_at is None:
             continue
-        stale_days = (now.astimezone(timezone.utc).date() - latest_at.astimezone(timezone.utc).date()).days
+        stale_days = (
+            now.astimezone(timezone.utc).date()
+            - latest_success_at.astimezone(timezone.utc).date()
+        ).days
         if stale_days < threshold_days:
             continue
         notices.append(
             OperationalNotice(
                 severity="warning",
-                message=f"{source.name}: источник не обновлялся {stale_days} дней",
+                message=f"{source.name}: нет успешного сбора {stale_days} дней",
             )
         )
     return notices
@@ -165,23 +164,6 @@ def _collect_ocr_backlog_notices(
             )
         ]
     return []
-
-
-def _latest_document_by_source(documents: Sequence[RawDocument]) -> dict[str, RawDocument]:
-    latest_by_source: dict[str, RawDocument] = {}
-    for document in documents:
-        current = latest_by_source.get(document.source_name)
-        if current is None:
-            latest_by_source[document.source_name] = document
-            continue
-        current_dt = _normalize_dt(current.published_at or current.collected_at)
-        candidate_dt = _normalize_dt(document.published_at or document.collected_at)
-        if candidate_dt is None:
-            continue
-        if current_dt is None or candidate_dt > current_dt:
-            latest_by_source[document.source_name] = document
-    return latest_by_source
-
 
 def _stale_threshold_days(source_name: str) -> int | None:
     source_role = get_source_role(source_name)

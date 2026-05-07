@@ -13,6 +13,7 @@ from app.operational_health import OperationalNotice, format_operational_notices
 from app.user_facing import user_facing_action_level, user_facing_title
 from app.visibility import (
     classify_display_section as visibility_display_section,
+    deduplicate_user_facing_documents,
     should_show_document,
     visibility_bucket,
 )
@@ -284,7 +285,7 @@ def build_report_view(
 
 
 def select_best_report_documents(documents: Iterable[RawDocument]) -> list[RawDocument]:
-    document_list = list(documents)
+    document_list = deduplicate_user_facing_documents(list(documents))
     groups: list[list[RawDocument]] = []
     group_indexes: list[int] = []
     url_group_indexes: dict[str, int] = {}

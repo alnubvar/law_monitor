@@ -221,6 +221,34 @@ class TelegramFormatterTest(unittest.TestCase):
 
         self.assertIn("Что проверить: Оставить как отраслевой фон, без срочной реакции.", text)
 
+    def test_formatter_deduplicates_government_news_and_docs_pair(self) -> None:
+        news_document = self._doc(
+            doc_id=20,
+            source_name="Правительство РФ - новости",
+            region="federal",
+            title="Изменения в господдержке экспорта",
+            url="http://government.ru/news/58669/",
+            action_level="watchlist",
+            page_type="news_background",
+        )
+        docs_document = self._doc(
+            doc_id=21,
+            source_name="Правительство РФ - документы",
+            region="federal",
+            title="Изменения в господдержке экспорта",
+            url="http://government.ru/docs/58669/",
+            action_level="watchlist",
+            page_type="new_rule",
+        )
+        news_document.notified = True
+        docs_document.notified = True
+
+        text = build_digest_message([news_document, docs_document])
+
+        self.assertEqual(text.count("Изменения в господдержке экспорта"), 1)
+        self.assertIn("http://government.ru/docs/58669/", text)
+        self.assertNotIn("http://government.ru/news/58669/", text)
+
 
 if __name__ == "__main__":
     unittest.main()

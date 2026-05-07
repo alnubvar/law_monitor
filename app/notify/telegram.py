@@ -40,6 +40,7 @@ from app.storage import (
 )
 from app.storage import get_runtime_event, list_latest_source_audit
 from app.visibility import classify_display_section, should_show_document
+from app.visibility import deduplicate_user_facing_documents
 
 logger = logging.getLogger(__name__)
 TELEGRAM_URL_TOKEN_RE = re.compile(r"(https://api\.telegram\.org/bot)[^/\s]+", re.IGNORECASE)
@@ -374,7 +375,7 @@ def _build_watchlist_message(db_path: Path | str, *, days: int) -> str:
     )
     watchlist_documents = [
         document
-        for document in recent_documents
+        for document in deduplicate_user_facing_documents(recent_documents)
         if should_show_document(document, surface="telegram_list", relevant_only=False)
     ]
     if not watchlist_documents:

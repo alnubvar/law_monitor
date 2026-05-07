@@ -6,7 +6,11 @@ from collections.abc import Sequence
 from app.models import RawDocument
 from app.operational_health import OperationalNotice, format_operational_notices_telegram
 from app.user_facing import user_facing_title
-from app.visibility import classify_display_section, should_show_document
+from app.visibility import (
+    classify_display_section,
+    deduplicate_user_facing_documents,
+    should_show_document,
+)
 
 HOURLY_REQUIRES_ATTENTION_LIMIT = 10
 DAILY_SECTION_ORDER = (
@@ -62,7 +66,7 @@ def _partition_digest_documents(
 ) -> tuple[list[RawDocument], list[RawDocument]]:
     requires_attention: list[RawDocument] = []
     watchlist: list[RawDocument] = []
-    for document in documents:
+    for document in deduplicate_user_facing_documents(documents):
         if not should_show_document(document, surface="telegram_digest", relevant_only=False):
             continue
         if classify_display_section(document) == "requires_attention":

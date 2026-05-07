@@ -16,6 +16,7 @@ from app.pipeline.digest import run_demo_report
 from app.storage import (
     init_db,
     save_document,
+    save_source_audit_record,
     save_source_error,
     upsert_ocr_queue_item,
 )
@@ -68,6 +69,22 @@ class OperationalHealthTest(unittest.TestCase):
     def test_stale_news_source_detection(self) -> None:
         db_path = self._db_path("operational_stale_news.db")
         init_db(db_path)
+        stale_now = datetime.now(timezone.utc) - timedelta(days=5)
+        save_source_audit_record(
+            source_name="ZOL.ru - зерновые новости",
+            source_url="https://www.zol.ru",
+            enabled=True,
+            attempted_at=stale_now,
+            success_at=stale_now,
+            error_at=None,
+            error_message=None,
+            fetched_count=1,
+            saved_count=0,
+            existing_count=1,
+            duplicates_count=0,
+            item_errors_count=0,
+            db_path=db_path,
+        )
         save_document(
             self._doc(
                 doc_id=1,
@@ -85,12 +102,28 @@ class OperationalHealthTest(unittest.TestCase):
         notices = collect_operational_notices(db_path=db_path)
 
         self.assertTrue(
-            any("ZOL.ru - зерновые новости: источник не обновлялся 5 дней" == notice.message for notice in notices)
+            any("ZOL.ru - зерновые новости: нет успешного сбора 5 дней" == notice.message for notice in notices)
         )
 
     def test_stale_support_source_detection(self) -> None:
         db_path = self._db_path("operational_stale_support.db")
         init_db(db_path)
+        stale_now = datetime.now(timezone.utc) - timedelta(days=8)
+        save_source_audit_record(
+            source_name="Минсельхоз Ставропольского края - господдержка",
+            source_url="https://mshsk.ru",
+            enabled=True,
+            attempted_at=stale_now,
+            success_at=stale_now,
+            error_at=None,
+            error_message=None,
+            fetched_count=1,
+            saved_count=0,
+            existing_count=1,
+            duplicates_count=0,
+            item_errors_count=0,
+            db_path=db_path,
+        )
         save_document(
             self._doc(
                 doc_id=1,
@@ -109,7 +142,7 @@ class OperationalHealthTest(unittest.TestCase):
 
         self.assertTrue(
             any(
-                "Минсельхоз Ставропольского края - господдержка: источник не обновлялся 8 дней"
+                "Минсельхоз Ставропольского края - господдержка: нет успешного сбора 8 дней"
                 == notice.message
                 for notice in notices
             )
@@ -161,6 +194,22 @@ class OperationalHealthTest(unittest.TestCase):
     def test_no_notices_when_healthy(self) -> None:
         db_path = self._db_path("operational_healthy.db")
         init_db(db_path)
+        now = datetime.now(timezone.utc)
+        save_source_audit_record(
+            source_name="ZOL.ru - зерновые новости",
+            source_url="https://www.zol.ru",
+            enabled=True,
+            attempted_at=now,
+            success_at=now,
+            error_at=None,
+            error_message=None,
+            fetched_count=1,
+            saved_count=0,
+            existing_count=1,
+            duplicates_count=0,
+            item_errors_count=0,
+            db_path=db_path,
+        )
         save_document(
             self._doc(
                 doc_id=1,
@@ -179,12 +228,53 @@ class OperationalHealthTest(unittest.TestCase):
 
         self.assertEqual(notices, [])
 
+    def test_fresh_success_without_new_saved_documents_does_not_create_stale_warning(self) -> None:
+        db_path = self._db_path("operational_fresh_success_no_saved_docs.db")
+        init_db(db_path)
+        now = datetime.now(timezone.utc)
+        save_source_audit_record(
+            source_name="Regulation.gov.ru",
+            source_url="https://regulation.gov.ru",
+            enabled=True,
+            attempted_at=now,
+            success_at=now,
+            error_at=None,
+            error_message=None,
+            fetched_count=12,
+            saved_count=0,
+            existing_count=12,
+            duplicates_count=0,
+            item_errors_count=0,
+            db_path=db_path,
+        )
+
+        notices = collect_operational_notices(db_path=db_path)
+
+        self.assertFalse(any("источник не обновлялся" in notice.message for notice in notices))
+        self.assertFalse(any("нет успешного сбора" in notice.message for notice in notices))
+
     def test_report_rendering_includes_operational_notices(self) -> None:
         db_path = self._db_path("operational_report_render.db")
         output_path = Path("data/test_artifacts/operational_report_render.md")
         if output_path.exists():
             output_path.unlink()
         init_db(db_path)
+        stale_now = datetime.now(timezone.utc) - timedelta(days=5)
+        save_source_audit_record(
+            source_name="ZOL.ru - зерновые новости",
+            source_url="https://www.zol.ru",
+            enabled=True,
+            attempted_at=stale_now,
+            success_at=stale_now,
+            error_at=None,
+            error_message=None,
+            fetched_count=1,
+            saved_count=0,
+            existing_count=1,
+            duplicates_count=0,
+            item_errors_count=0,
+            db_path=db_path,
+        )
         save_document(
             self._doc(
                 doc_id=1,
@@ -203,7 +293,7 @@ class OperationalHealthTest(unittest.TestCase):
         markdown = path.read_text(encoding="utf-8")
 
         self.assertIn("## ⚠️ На что обратить внимание по системе", markdown)
-        self.assertIn("ZOL.ru - зерновые новости: источник не обновлялся 5 дней", markdown)
+        self.assertIn("ZOL.ru - зерновые новости: нет успешного сбора 5 дней", markdown)
 
     def test_telegram_digest_rendering_includes_operational_notices(self) -> None:
         document = self._doc(

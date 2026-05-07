@@ -180,6 +180,49 @@ class VisibilityDecisionTest(unittest.TestCase):
         self.assertTrue(should_show_document(document, surface="telegram_digest", relevant_only=False))
         self.assertTrue(should_show_document(document, surface="telegram_list", relevant_only=False))
 
+    def test_foreign_quota_news_is_not_user_facing_requires_attention(self) -> None:
+        document = self._doc(
+            doc_id=71,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Квота на импорт кукурузы в Турцию выбрана на 20%",
+            url="https://www.zol.ru/n/turkey-corn-import",
+            action_level="requires_attention",
+            page_type="news_background",
+            summary="Турецкая импортная квота по кукурузе выбрана на 20%.",
+        )
+        document.business_signal = "Новостной предвестник возможных изменений квот и внешней торговли."
+        document.raw_text = "Турция сообщила, что квота на импорт кукурузы выбрана на 20 процентов."
+
+        self.assertEqual(effective_user_action_level(document), "background")
+        self.assertFalse(
+            should_show_document(
+                document,
+                surface="report",
+                relevant_only=False,
+                action_levels=["requires_attention", "watchlist"],
+            )
+        )
+        self.assertFalse(should_show_document(document, surface="telegram_digest", relevant_only=False))
+        self.assertFalse(should_show_document(document, surface="telegram_list", relevant_only=False))
+
+    def test_russian_export_quota_news_remains_requires_attention_when_actionable(self) -> None:
+        document = self._doc(
+            doc_id=72,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Правительство РФ скорректировало экспортную квоту на зерно",
+            url="https://www.zol.ru/n/russian-export-quota",
+            action_level="requires_attention",
+            page_type="news_background",
+            summary="Изменены параметры экспортной квоты для российских поставок.",
+        )
+        document.business_signal = "Новостной предвестник изменения экспортных ограничений и регулирования."
+        document.raw_text = "Правительство РФ изменило экспортную квоту на зерно для российских компаний."
+
+        self.assertEqual(effective_user_action_level(document), "requires_attention")
+        self.assertTrue(should_show_document(document, surface="report", relevant_only=False))
+
     def test_gisp_support_measure_is_unaffected_by_news_noise_guard(self) -> None:
         document = self._doc(
             doc_id=8,

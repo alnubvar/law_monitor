@@ -356,6 +356,39 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertEqual(len(visible_documents), 1)
         self.assertEqual(visible_documents[0].url, "https://msh.krasnodar.ru/documents/subsidy-full")
 
+    def test_report_deduplicates_government_news_and_docs_by_shared_id(self) -> None:
+        news_document = self._doc(
+            doc_id=21,
+            source_name="Правительство РФ - новости",
+            region="federal",
+            title="Правительство РФ одобрило изменения в господдержке экспорта",
+            url="http://government.ru/news/58669/",
+            action_level="watchlist",
+            page_type="news_background",
+            summary="Короткая новостная версия.",
+        )
+        docs_document = self._doc(
+            doc_id=22,
+            source_name="Правительство РФ - документы",
+            region="federal",
+            title="Правительство РФ одобрило изменения в господдержке экспорта",
+            url="http://government.ru/docs/58669/",
+            action_level="watchlist",
+            page_type="new_rule",
+            summary="Более подробная документная версия.",
+        )
+        docs_document.raw_text = "Полный текст решения правительства. " * 100
+
+        report_view = build_report_view(
+            [news_document, docs_document],
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        visible_documents = report_view.flatten()
+        self.assertEqual(len(visible_documents), 1)
+        self.assertEqual(visible_documents[0].url, "http://government.ru/docs/58669/")
+
     def test_global_background_is_hidden_from_telegram_digest(self) -> None:
         from app.notify import telegram
 

@@ -250,6 +250,40 @@ class TelegramNotifySmokeTest(unittest.TestCase):
 
         self.assertEqual(text, "📅 Сегодня новых срочных документов нет.")
 
+    def test_today_deduplicates_government_news_and_docs_pair(self) -> None:
+        db_path = self._db_path("telegram_today_government_dedup.db")
+        init_db(db_path)
+        save_document(
+            self._doc(
+                doc_id=250,
+                source_name="Правительство РФ - новости",
+                region="federal",
+                title="Изменения в господдержке экспорта",
+                url="http://government.ru/news/58669/",
+                action_level="watchlist",
+                page_type="news_background",
+            ),
+            db_path,
+        )
+        save_document(
+            self._doc(
+                doc_id=251,
+                source_name="Правительство РФ - документы",
+                region="federal",
+                title="Изменения в господдержке экспорта",
+                url="http://government.ru/docs/58669/",
+                action_level="watchlist",
+                page_type="new_rule",
+            ),
+            db_path,
+        )
+
+        text = telegram.build_command_response("/today", db_path=db_path)
+
+        self.assertEqual(text.count("Изменения в господдержке экспорта"), 1)
+        self.assertIn("http://government.ru/docs/58669/", text)
+        self.assertNotIn("http://government.ru/news/58669/", text)
+
     def test_watchlist_command_returns_watchlist_documents(self) -> None:
         db_path = self._db_path("telegram_watchlist.db")
         init_db(db_path)
@@ -294,6 +328,28 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         self.assertIn("за 7 дней нет", text)
         self.assertNotIn("Рейтинг экспортных отгрузок", text)
 
+    def test_urgent_hides_foreign_quota_news_without_russia_marker(self) -> None:
+        db_path = self._db_path("telegram_urgent_foreign_quota.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=199,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Квота на импорт кукурузы в Турцию выбрана на 20%",
+            url="https://www.zol.ru/n/turkey-corn-import",
+            action_level="requires_attention",
+            page_type="news_background",
+            summary="Турецкая импортная квота по кукурузе выбрана на 20%.",
+        )
+        document.business_signal = "Новостной предвестник возможных изменений квот и внешней торговли."
+        document.raw_text = "Турция сообщила, что квота на импорт кукурузы выбрана на 20 процентов."
+        save_document(document, db_path)
+
+        text = telegram.build_command_response("/urgent", db_path=db_path)
+
+        self.assertIn("новых документов нет", text)
+        self.assertNotIn("Турцию", text)
+
     def test_period_argument_overrides_default_for_urgent(self) -> None:
         db_path = self._db_path("telegram_urgent_period.db")
         init_db(db_path)
@@ -332,6 +388,40 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         self.assertNotIn("Старый документ", text_default)
         self.assertIn("за 30 дней", text_30)
         self.assertIn("Старый документ", text_30)
+
+    def test_watchlist_deduplicates_government_news_and_docs_pair(self) -> None:
+        db_path = self._db_path("telegram_watchlist_government_dedup.db")
+        init_db(db_path)
+        save_document(
+            self._doc(
+                doc_id=301,
+                source_name="Правительство РФ - новости",
+                region="federal",
+                title="Изменения в господдержке экспорта",
+                url="http://government.ru/news/58669/",
+                action_level="watchlist",
+                page_type="news_background",
+            ),
+            db_path,
+        )
+        save_document(
+            self._doc(
+                doc_id=302,
+                source_name="Правительство РФ - документы",
+                region="federal",
+                title="Изменения в господдержке экспорта",
+                url="http://government.ru/docs/58669/",
+                action_level="watchlist",
+                page_type="new_rule",
+            ),
+            db_path,
+        )
+
+        text = telegram.build_command_response("/watchlist", db_path=db_path)
+
+        self.assertEqual(text.count("Изменения в господдержке экспорта"), 1)
+        self.assertIn("http://government.ru/docs/58669/", text)
+        self.assertNotIn("http://government.ru/news/58669/", text)
 
     def test_search_returns_top_results(self) -> None:
         db_path = self._db_path("telegram_search.db")

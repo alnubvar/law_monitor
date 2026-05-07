@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from typing import Literal
+from urllib.parse import urlsplit, urlunsplit
 
 from app.config import get_source_role
 from app.models import RawDocument
@@ -68,6 +70,10 @@ REFERENCE_TITLE_WORD_RE = re.compile(
     r"\b(анкета|форма|формы|памятка|инструкция|инструкции|образец)\b",
     re.IGNORECASE,
 )
+GOVERNMENT_DUPLICATE_RE = re.compile(
+    r"^https?://government\.ru/(?:news|docs)/(?P<doc_id>\d+)/?$",
+    re.IGNORECASE,
+)
 
 VisibilitySurface = Literal["report", "telegram_digest", "telegram_list"]
 
@@ -84,6 +90,24 @@ def effective_user_action_level(document: RawDocument) -> str | None:
         raw_text=document.raw_text,
         page_type=document.page_type,
     )
+
+
+def deduplicate_user_facing_documents(
+    documents: Sequence[RawDocument],
+) -> list[RawDocument]:
+    selected_by_key: dict[str, RawDocument] = {}
+    ordered_keys: list[str] = []
+    for document in documents:
+        dedup_key = _user_facing_dedup_key(document)
+        if dedup_key not in selected_by_key:
+            selected_by_key[dedup_key] = document
+            ordered_keys.append(dedup_key)
+            continue
+        selected_by_key[dedup_key] = _prefer_user_facing_document(
+            selected_by_key[dedup_key],
+            document,
+        )
+    return [selected_by_key[key] for key in ordered_keys]
 
 
 def classify_display_section(document: RawDocument) -> str:
@@ -257,3 +281,97 @@ def _detect_geo_scope(document: RawDocument) -> str:
     if document.region == "federal":
         return "federal_rf"
     return "non_target_rf"
+
+
+def _user_facing_dedup_key(document: RawDocument) -> str:
+    government_key = _government_canonical_key(document.url)
+    if government_key:
+        return government_key
+    normalized_url = _normalized_url_key(document.url)
+    if normalized_url:
+        return normalized_url
+    return f"title::{(document.title or '').strip().lower()}::{document.id or 0}"
+
+
+def _government_canonical_key(url: str | None) -> str | None:
+    normalized_url = (url or "").strip()
+    if not normalized_url:
+        return None
+    match = GOVERNMENT_DUPLICATE_RE.match(normalized_url)
+    if not match:
+        return None
+    document_id = str(match.group("doc_id") or "").strip()
+    if not document_id:
+        return None
+    return f"government.ru:{document_id}"
+
+
+def _normalized_url_key(url: str | None) -> str | None:
+    normalized_url = (url or "").strip()
+    if not normalized_url:
+        return None
+    parsed = urlsplit(normalized_url)
+    if not parsed.scheme or not parsed.netloc:
+        return normalized_url.lower().rstrip("/")
+    return urlunsplit(
+        (
+            parsed.scheme.lower(),
+            parsed.netloc.lower(),
+            parsed.path.rstrip("/"),
+            parsed.query,
+            "",
+        )
+    )
+
+
+def _prefer_user_facing_document(left: RawDocument, right: RawDocument) -> RawDocument:
+    left_score = _user_facing_document_score(left)
+    right_score = _user_facing_document_score(right)
+    if right_score > left_score:
+        return right
+    return left
+
+
+def _user_facing_document_score(document: RawDocument) -> tuple[int, int, int, int, int]:
+    return (
+        _government_docs_preference(document),
+        _document_text_quality_score(document),
+        _document_fact_score(document),
+        len((document.summary or "").strip()),
+        int(document.id or 0),
+    )
+
+
+def _government_docs_preference(document: RawDocument) -> int:
+    normalized_url = (document.url or "").strip().lower()
+    if "/docs/" in normalized_url:
+        return 1
+    return 0
+
+
+def _document_text_quality_score(document: RawDocument) -> int:
+    text_length = len((document.raw_text or "").strip())
+    if text_length >= 5000:
+        return 3
+    if text_length >= 1000:
+        return 2
+    if text_length >= 100:
+        return 1
+    return 0
+
+
+def _document_fact_score(document: RawDocument) -> int:
+    score = 0
+    if document.deadline_text:
+        score += 3
+    if document.application_status and document.application_status != "unknown":
+        score += 2
+    if document.support_status and document.support_status != "unknown":
+        score += 1
+    if document.npa_number:
+        score += 1
+    if document.terms_text:
+        score += 1
+    if document.business_signal:
+        score += 1
+    return score
