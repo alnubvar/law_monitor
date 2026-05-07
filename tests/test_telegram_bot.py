@@ -9,6 +9,7 @@ import requests
 
 from app.models import RawDocument
 from app.notify import telegram_bot
+from app.run_lock import WriterLockHeldError
 from app.storage import init_db, save_document
 
 
@@ -287,6 +288,17 @@ class TelegramBotTest(unittest.TestCase):
         with patch("app.notify.telegram_bot._refresh_lock", mock_lock):
             text = telegram_bot._run_manual_refresh(db_path=None)
         self.assertIn("уже выполняется", text)
+
+    def test_refresh_returns_friendly_message_when_global_writer_lock_is_held(self) -> None:
+        mock_lock = Mock()
+        mock_lock.acquire.return_value = True
+        with patch("app.notify.telegram_bot._refresh_lock", mock_lock):
+            with patch(
+                "app.notify.telegram_bot.writer_lock",
+                side_effect=WriterLockHeldError(lock_path=Path("data/runtime/writer.lock")),
+            ):
+                text = telegram_bot._run_manual_refresh(db_path=None)
+        self.assertIn("Обновление уже выполняется, попробуйте позже.", text)
 
     def test_refresh_reports_problematic_sources_count(self) -> None:
         mock_lock = Mock()

@@ -16,6 +16,7 @@ load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_DIR = BASE_DIR / "config"
 DATA_DIR = BASE_DIR / "data"
+RUNTIME_DIR = DATA_DIR / "runtime"
 DOCUMENTS_DIR = DATA_DIR / "documents"
 REPORTS_DIR = BASE_DIR / "reports"
 DOCS_DIR = BASE_DIR / "docs"
@@ -105,6 +106,7 @@ def setup_logging(level: str | None = None) -> None:
 
 def ensure_directories() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     DOCS_DIR.mkdir(parents=True, exist_ok=True)

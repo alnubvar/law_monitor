@@ -3,14 +3,20 @@ from __future__ import annotations
 import io
 import sys
 import unittest
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 from unittest.mock import patch
 
 import main as cli_main
 from app.pipeline.ocr_runtime import OCRBackfillResult, OCRRunResult
+from app.run_lock import WriterLockHeldError
 
 
 class MainCliOcrQueueTest(unittest.TestCase):
+    @contextmanager
+    def _blocked_writer_lock(self, *_args, **_kwargs):
+        raise WriterLockHeldError(lock_path=cli_main.Path("data/runtime/writer.lock"))
+        yield
+
     def test_ocr_queue_cli_lists_pending(self) -> None:
         with patch("main.setup_logging"):
             with patch(
@@ -101,6 +107,41 @@ class MainCliOcrQueueTest(unittest.TestCase):
         )
         output = buffer.getvalue()
         self.assertIn("OCR queue updated: status=done", output)
+
+    def test_collect_cli_is_blocked_when_writer_lock_is_held(self) -> None:
+        with patch("main.setup_logging"):
+            with patch("main.writer_lock", side_effect=self._blocked_writer_lock):
+                with patch.object(sys, "argv", ["main.py", "collect"]):
+                    buffer = io.StringIO()
+                    with redirect_stdout(buffer):
+                        exit_code = cli_main.main()
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Another write operation is already running", buffer.getvalue())
+
+    def test_read_only_ocr_queue_is_unaffected_by_writer_lock(self) -> None:
+        with patch("main.setup_logging"):
+            with patch(
+                "main.summarize_ocr_queue",
+                return_value={
+                    "pending": 0,
+                    "high_priority": 0,
+                    "high_priority_pending": 0,
+                    "in_review": 0,
+                    "done": 0,
+                    "skipped": 0,
+                    "done_skipped": 0,
+                },
+            ):
+                with patch("main.list_ocr_queue", return_value=[]):
+                    with patch("main.writer_lock") as writer_lock:
+                        with patch.object(sys, "argv", ["main.py", "ocr-queue"]):
+                            buffer = io.StringIO()
+                            with redirect_stdout(buffer):
+                                exit_code = cli_main.main()
+
+        self.assertEqual(exit_code, 0)
+        writer_lock.assert_not_called()
 
     def test_ocr_run_cli_works_with_mocked_runtime(self) -> None:
         mocked_result = OCRRunResult(

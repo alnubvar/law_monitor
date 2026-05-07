@@ -18,6 +18,7 @@ from app.notify.telegram import (
 from app.pipeline.analyze import run_analyze
 from app.pipeline.collect import run_collect
 from app.pipeline.digest import run_digest
+from app.run_lock import WriterLockHeldError, writer_lock
 from app.reports.markdown_report import select_visible_report_documents
 from app.storage import (
     count_documents_by_action_level,
@@ -92,33 +93,43 @@ def notify_new_requires_attention() -> int:
 
 
 def run_hourly_cycle() -> tuple[int, int, int]:
-    logger.info("Hourly cycle started.")
-    collected_count = run_collect()
-    analyzed_count = run_analyze()
-    notified_count = notify_new_requires_attention()
-    requires_attention_count = count_documents_by_action_level("requires_attention")
-    logger.info(
-        "Hourly cycle finished: collected=%s analyzed=%s requires_attention=%s notified=%s",
-        collected_count,
-        analyzed_count,
-        requires_attention_count,
-        notified_count,
-    )
-    return collected_count, analyzed_count, notified_count
+    try:
+        with writer_lock("scheduler-hourly-cycle"):
+            logger.info("Hourly cycle started.")
+            collected_count = run_collect()
+            analyzed_count = run_analyze()
+            notified_count = notify_new_requires_attention()
+            requires_attention_count = count_documents_by_action_level("requires_attention")
+            logger.info(
+                "Hourly cycle finished: collected=%s analyzed=%s requires_attention=%s notified=%s",
+                collected_count,
+                analyzed_count,
+                requires_attention_count,
+                notified_count,
+            )
+            return collected_count, analyzed_count, notified_count
+    except WriterLockHeldError:
+        logger.warning("Hourly cycle skipped because another write operation is already running.")
+        return 0, 0, 0
 
 
 def run_daily_report_cycle(days: int = 7) -> str:
-    logger.info("Daily report cycle started.")
-    report_path = str(run_digest(days=days))
-    visible_documents = _build_visible_digest_documents(days=days)
-    if visible_documents:
-        send_digest(visible_documents, db_path=DB_PATH)
-    logger.info(
-        "Daily report cycle finished: report=%s visible_documents=%s",
-        report_path,
-        len(visible_documents),
-    )
-    return report_path
+    try:
+        with writer_lock("scheduler-daily-report"):
+            logger.info("Daily report cycle started.")
+            report_path = str(run_digest(days=days))
+            visible_documents = _build_visible_digest_documents(days=days)
+            if visible_documents:
+                send_digest(visible_documents, db_path=DB_PATH)
+            logger.info(
+                "Daily report cycle finished: report=%s visible_documents=%s",
+                report_path,
+                len(visible_documents),
+            )
+            return report_path
+    except WriterLockHeldError:
+        logger.warning("Daily report cycle skipped because another write operation is already running.")
+        return ""
 
 
 def run_scheduler(*, once: bool = False, days: int = 7) -> None:

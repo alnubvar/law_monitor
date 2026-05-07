@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -16,6 +17,7 @@ from app.pipeline.ocr_runtime import backfill_ocr_queue_from_audit, run_ocr_queu
 from app.pipeline.tracking import run_check_tracked
 from app.pipeline.run import run_pipeline
 from app.pipeline.smoke import run_smoke_check
+from app.run_lock import WriterLockHeldError, writer_lock
 from app.scheduler import run_scheduler, send_test_notification
 from app.storage import (
     backfill_missing_published_at,
@@ -383,54 +385,49 @@ def _render_ocr_queue_lines(
     return lines
 
 
+def _run_writer_command(operation: str, callback: Callable[[], int]) -> int:
+    try:
+        with writer_lock(operation):
+            return callback()
+    except WriterLockHeldError:
+        print("Another write operation is already running. Try again later.")
+        return 1
+
+
 def main() -> int:
     setup_logging()
     parser = build_parser()
     args = parser.parse_args()
 
     if args.command == "init-db":
-        init_db()
-        print("Database initialized.")
-        return 0
+        return _run_writer_command(
+            "init-db",
+            lambda: _cli_init_db(),
+        )
 
     if args.command == "collect":
-        count = run_collect_with_options(
-            source_name=args.source,
-            limit=args.limit,
-            audit_existing=args.audit_existing,
+        return _run_writer_command(
+            "collect",
+            lambda: _cli_collect(args),
         )
-        print(f"Collected {count} new documents.")
-        return 0
 
     if args.command == "audit-extraction":
-        count = run_collect_with_options(
-            source_name=args.source,
-            limit=args.limit,
-            audit_existing=True,
+        return _run_writer_command(
+            "audit-extraction",
+            lambda: _cli_audit_extraction(args),
         )
-        print(f"Extraction audit completed. New documents inserted: {count}.")
-        return 0
 
     if args.command == "analyze":
-        count = run_analyze(limit=args.limit, reanalyze=args.force)
-        print(f"Analyzed {count} documents.")
-        return 0
+        return _run_writer_command(
+            "analyze",
+            lambda: _cli_analyze(args),
+        )
 
     if args.command == "report":
-        output_path = run_digest(
-            days=args.days,
-            output_path=args.output,
-            relevant_only=args.relevant_only,
-            max_items=args.max_items,
-            action_levels=args.action_level,
-            include_background=args.include_background,
-            include_section_pages=args.include_section_pages,
-            include_registries=args.include_registries,
-            include_market_background=args.include_market_background,
-            include_full_background=args.include_full_background,
+        return _run_writer_command(
+            "report",
+            lambda: _cli_report(args),
         )
-        print(f"Report saved to {Path(output_path).resolve()}")
-        return 0
 
     if args.command == "diagnostics":
         print(run_diagnostics(days=args.days))
@@ -447,24 +444,13 @@ def main() -> int:
         return 0
 
     if args.command == "run":
-        result = run_pipeline(
-            days=args.days,
-            output_path=args.output,
-            analyze_limit=args.limit,
-            force_reanalyze=args.force_analyze,
+        return _run_writer_command(
+            "run",
+            lambda: _cli_run(args),
         )
-        print(
-            "Pipeline finished. "
-            f"Collected={result.collected_count}, "
-            f"Analyzed={result.analyzed_count}, "
-            f"Report={Path(result.report_path).resolve()}"
-        )
-        return 0
 
     if args.command == "run-scheduler":
-        run_scheduler(once=args.once, days=args.days)
-        print("Scheduler run completed." if args.once else "Scheduler started.")
-        return 0
+        return _cli_run_scheduler(args)
 
     if args.command == "notify-test":
         sent = send_test_notification()
@@ -488,13 +474,10 @@ def main() -> int:
         return 0
 
     if args.command == "check-tracked":
-        result = run_check_tracked()
-        print(
-            "Tracked check finished. "
-            f"Checked={result.checked}, Changed={result.changed}, "
-            f"Notified={result.notified}, Errors={result.errors}"
+        return _run_writer_command(
+            "check-tracked",
+            _cli_check_tracked,
         )
-        return 0
 
     if args.command == "ocr-queue":
         status_values = [args.status] if args.status else ["pending", "in_review"]
@@ -518,30 +501,16 @@ def main() -> int:
         return 0
 
     if args.command == "ocr-mark":
-        updated = update_ocr_queue_status(
-            document_url=args.url,
-            status=args.status,
-            notes=args.notes,
+        return _run_writer_command(
+            "ocr-mark",
+            lambda: _cli_ocr_mark(args),
         )
-        if not updated:
-            print("OCR queue item not found for provided URL.")
-            return 1
-        print(f"OCR queue updated: status={args.status}")
-        return 0
 
     if args.command == "ocr-run":
-        run_result = run_ocr_queue(
-            source_name=args.source,
-            limit=args.limit,
+        return _run_writer_command(
+            "ocr-run",
+            lambda: _cli_ocr_run(args),
         )
-        print("OCR runtime run completed.")
-        print(
-            f"Checked={run_result.checked}, Updated={run_result.updated}, "
-            f"Reanalyzed={run_result.reanalyzed}, "
-            f"Success={run_result.success}, Failed={run_result.failed}, "
-            f"Unavailable={run_result.unavailable}, Skipped={run_result.skipped}"
-        )
-        return 0
 
     if args.command == "ocr-check":
         runtime = get_ocr_runtime_status()
@@ -563,24 +532,147 @@ def main() -> int:
         return 0
 
     if args.command == "ocr-backfill":
-        backfill_result = backfill_ocr_queue_from_audit(
-            source_name=args.source,
-            limit=args.limit,
+        return _run_writer_command(
+            "ocr-backfill",
+            lambda: _cli_ocr_backfill(args),
         )
-        print("OCR queue backfill completed.")
-        print(
-            f"scanned={backfill_result.scanned}; queued={backfill_result.queued}; "
-            f"existing={backfill_result.existing}; skipped={backfill_result.skipped}"
-        )
-        return 0
 
     if args.command == "backfill-dates":
-        updated = backfill_missing_published_at()
-        print(f"backfill-dates: updated {updated} documents.")
-        return 0
+        return _run_writer_command(
+            "backfill-dates",
+            _cli_backfill_dates,
+        )
 
     parser.print_help()
     return 1
+
+
+def _cli_init_db() -> int:
+    init_db()
+    print("Database initialized.")
+    return 0
+
+
+def _cli_collect(args: argparse.Namespace) -> int:
+    count = run_collect_with_options(
+        source_name=args.source,
+        limit=args.limit,
+        audit_existing=args.audit_existing,
+    )
+    print(f"Collected {count} new documents.")
+    return 0
+
+
+def _cli_audit_extraction(args: argparse.Namespace) -> int:
+    count = run_collect_with_options(
+        source_name=args.source,
+        limit=args.limit,
+        audit_existing=True,
+    )
+    print(f"Extraction audit completed. New documents inserted: {count}.")
+    return 0
+
+
+def _cli_analyze(args: argparse.Namespace) -> int:
+    count = run_analyze(limit=args.limit, reanalyze=args.force)
+    print(f"Analyzed {count} documents.")
+    return 0
+
+
+def _cli_report(args: argparse.Namespace) -> int:
+    output_path = run_digest(
+        days=args.days,
+        output_path=args.output,
+        relevant_only=args.relevant_only,
+        max_items=args.max_items,
+        action_levels=args.action_level,
+        include_background=args.include_background,
+        include_section_pages=args.include_section_pages,
+        include_registries=args.include_registries,
+        include_market_background=args.include_market_background,
+        include_full_background=args.include_full_background,
+    )
+    print(f"Report saved to {Path(output_path).resolve()}")
+    return 0
+
+
+def _cli_run(args: argparse.Namespace) -> int:
+    result = run_pipeline(
+        days=args.days,
+        output_path=args.output,
+        analyze_limit=args.limit,
+        force_reanalyze=args.force_analyze,
+    )
+    print(
+        "Pipeline finished. "
+        f"Collected={result.collected_count}, "
+        f"Analyzed={result.analyzed_count}, "
+        f"Report={Path(result.report_path).resolve()}"
+    )
+    return 0
+
+
+def _cli_run_scheduler(args: argparse.Namespace) -> int:
+    run_scheduler(once=args.once, days=args.days)
+    print("Scheduler run completed." if args.once else "Scheduler started.")
+    return 0
+
+
+def _cli_check_tracked() -> int:
+    result = run_check_tracked()
+    print(
+        "Tracked check finished. "
+        f"Checked={result.checked}, Changed={result.changed}, "
+        f"Notified={result.notified}, Errors={result.errors}"
+    )
+    return 0
+
+
+def _cli_ocr_mark(args: argparse.Namespace) -> int:
+    updated = update_ocr_queue_status(
+        document_url=args.url,
+        status=args.status,
+        notes=args.notes,
+    )
+    if not updated:
+        print("OCR queue item not found for provided URL.")
+        return 1
+    print(f"OCR queue updated: status={args.status}")
+    return 0
+
+
+def _cli_ocr_run(args: argparse.Namespace) -> int:
+    run_result = run_ocr_queue(
+        source_name=args.source,
+        limit=args.limit,
+    )
+    print("OCR runtime run completed.")
+    print(
+        f"Checked={run_result.checked}, Updated={run_result.updated}, "
+        f"Reanalyzed={run_result.reanalyzed}, "
+        f"Success={run_result.success}, Failed={run_result.failed}, "
+        f"Unavailable={run_result.unavailable}, Skipped={run_result.skipped}"
+    )
+    return 0
+
+
+def _cli_ocr_backfill(args: argparse.Namespace) -> int:
+    backfill_result = backfill_ocr_queue_from_audit(
+        source_name=args.source,
+        limit=args.limit,
+    )
+    print("OCR queue backfill completed.")
+    print(
+        f"scanned={backfill_result.scanned}; queued={backfill_result.queued}; "
+        f"existing={backfill_result.existing}; skipped={backfill_result.skipped}"
+    )
+    return 0
+
+
+def _cli_backfill_dates() -> int:
+    updated = backfill_missing_published_at()
+    print(f"backfill-dates: updated {updated} documents.")
+    return 0
 
 
 if __name__ == "__main__":

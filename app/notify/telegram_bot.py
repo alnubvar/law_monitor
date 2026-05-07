@@ -22,6 +22,7 @@ from app.notify.telegram import (
 )
 from app.operational_health import collect_operational_notices
 from app.reports.markdown_report import generate_markdown_report
+from app.run_lock import WriterLockHeldError, writer_lock
 from app.pipeline.analyze import run_analyze
 from app.pipeline.collect import run_collect
 from app.pipeline.digest import run_digest
@@ -697,8 +698,14 @@ def _build_period_report_attachment(*, days: int, db_path: Path | str | None) ->
 
 def _run_manual_refresh(*, db_path: Path | str | None) -> str:
     if not _refresh_lock.acquire(blocking=False):
-        return "⏳ Обновление уже выполняется. Дождитесь завершения текущего запуска."
+        return "⏳ Обновление уже выполняется, попробуйте позже."
+    lock_context = None
     try:
+        try:
+            lock_context = writer_lock("telegram-refresh")
+            lock_context.__enter__()
+        except WriterLockHeldError:
+            return "⏳ Обновление уже выполняется, попробуйте позже."
         last_refresh = get_runtime_event("manual_refresh", db_path=db_path or config.DB_PATH)
         if last_refresh and last_refresh.get("updated_at") is not None:
             refreshed_at = last_refresh["updated_at"]
@@ -737,6 +744,10 @@ def _run_manual_refresh(*, db_path: Path | str | None) -> str:
         logger.exception("Manual refresh failed.")
         return "❌ Обновление завершилось с ошибкой. Проверьте /sources и повторите позже."
     finally:
+        try:
+            lock_context.__exit__(None, None, None)  # type: ignore[union-attr]
+        except Exception:
+            pass
         _refresh_lock.release()
 
 
