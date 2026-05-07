@@ -164,6 +164,36 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertIn("Почему важно:", markdown)
         self.assertNotIn("Action level", markdown)
 
+    def test_urgent_regional_npa_report_uses_stronger_reason_and_specific_hint(self) -> None:
+        document = self._doc(
+            doc_id=150,
+            source_name="Право Ставропольского края",
+            region="stavropol",
+            title="О внесении изменений в порядок предоставления субсидий",
+            url="https://pravo.stavregion.ru/document/98765",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="Изменения порядка предоставления субсидий.",
+        )
+        document.business_signal = "Региональный НПА по профильной теме: оставить в наблюдении."
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-07",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn(
+            "Региональный НПА меняет порядок/условия поддержки: требуется проверка GR.",
+            markdown,
+        )
+        self.assertIn(
+            "Проверить изменения порядка субсидирования, сроки вступления в силу и затронутые регионы/организации.",
+            markdown,
+        )
+        self.assertNotIn("оставить в наблюдении", markdown)
+
     def test_report_header_contains_key_counters(self) -> None:
         requires_attention_document = self._doc(
             doc_id=1,

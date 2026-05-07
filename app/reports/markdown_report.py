@@ -8,6 +8,7 @@ import re
 from typing import Iterable
 from urllib.parse import urlsplit, urlunsplit
 
+from app.config import get_source_role
 from app.models import DigestItem, RawDocument, SourceErrorRecord
 from app.operational_health import OperationalNotice, format_operational_notices_markdown
 from app.user_facing import user_facing_action_level, user_facing_title
@@ -489,6 +490,11 @@ def _format_human_item(item: DigestItem, *, require_action: bool) -> list[str]:
 
 
 def _build_human_importance_text(item: DigestItem) -> str:
+    if (
+        item.action_level == "requires_attention"
+        and get_source_role(item.source_name) == "regional_npa"
+    ):
+        return "Региональный НПА меняет порядок/условия поддержки: требуется проверка GR."
     if item.business_signal:
         return _shorten_summary(item.business_signal)
     if item.impact:
@@ -503,12 +509,14 @@ def _build_human_action_text(item: DigestItem) -> str:
         return f"Проверить сроки подачи и ответственного: {_shorten_summary(item.deadline_text)}"
     if item.application_status == "open":
         return "Проверить условия участия, окно подачи и ответственного по направлению."
+    if get_source_role(item.source_name) == "regional_npa" and item.page_type == "new_rule":
+        return "Проверить изменения порядка субсидирования, сроки вступления в силу и затронутые регионы/организации."
     if item.action_level == "requires_attention" and item.page_type in {"new_rule", "deadline_update"}:
         return "Проверить применимость изменений, сроки и влияние на текущие заявки."
     if item.page_type in {"selection_announcement", "measure_card"}:
         return "Проверить условия участия и окно подачи."
     if item.region in {"rostov", "krasnodar", "stavropol"} and item.page_type == "new_rule":
-        return "Проверить изменения порядка субсидирования и влияние на регионы присутствия."
+        return "Проверить изменения порядка субсидирования, сроки вступления в силу и затронутые регионы/организации."
     if item.source_name.startswith("Правительство РФ") or item.source_name.startswith("Regulation.gov.ru"):
         return "Оценить влияние на меры господдержки и регулирование."
     if item.source_name.startswith("ZOL.ru"):

@@ -192,6 +192,58 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         self.assertIn("Уровень: требует внимания", text)
         self.assertIn("Льготное кредитование АПК", text)
 
+    def test_status_counts_follow_user_facing_visibility_and_match_urgent_after_downgrade_and_dedup(self) -> None:
+        db_path = self._db_path("telegram_status_user_facing_counts.db")
+        init_db(db_path)
+        russian_urgent = self._doc(
+            doc_id=10,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Льготное кредитование АПК",
+            url="https://gisp.gov.ru/nmp/measure/9564204",
+            action_level="requires_attention",
+            page_type="measure_card",
+        )
+        foreign_noise = self._doc(
+            doc_id=11,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Квота на импорт кукурузы в Турцию выбрана на 20%",
+            url="https://www.zol.ru/n/turkey-corn-import",
+            action_level="requires_attention",
+            page_type="news_background",
+            summary="Турецкая импортная квота по кукурузе выбрана на 20%.",
+        )
+        foreign_noise.business_signal = "Новостной предвестник возможных изменений квот и внешней торговли."
+        foreign_noise.raw_text = "Турция сообщила, что квота на импорт кукурузы выбрана на 20 процентов."
+        gov_news = self._doc(
+            doc_id=12,
+            source_name="Правительство РФ - новости",
+            region="federal",
+            title="Изменения в господдержке экспорта",
+            url="http://government.ru/news/58669/",
+            action_level="requires_attention",
+            page_type="new_rule",
+        )
+        gov_docs = self._doc(
+            doc_id=13,
+            source_name="Правительство РФ - документы",
+            region="federal",
+            title="Изменения в господдержке экспорта",
+            url="http://government.ru/docs/58669/",
+            action_level="requires_attention",
+            page_type="new_rule",
+        )
+        for document in (russian_urgent, foreign_noise, gov_news, gov_docs):
+            save_document(document, db_path)
+
+        status_text = telegram.build_command_response("/status", db_path=db_path)
+        urgent_text = telegram.build_command_response("/urgent", db_path=db_path)
+
+        self.assertIn("требует внимания — 2", status_text)
+        self.assertIn("Найдено документов: 2", urgent_text)
+        self.assertNotIn("требует внимания — 4", status_text)
+
     def test_today_command_returns_visible_today_documents(self) -> None:
         db_path = self._db_path("telegram_today.db")
         init_db(db_path)
@@ -349,6 +401,27 @@ class TelegramNotifySmokeTest(unittest.TestCase):
 
         self.assertIn("новых документов нет", text)
         self.assertNotIn("Турцию", text)
+
+    def test_urgent_regional_npa_uses_stronger_reason_wording(self) -> None:
+        db_path = self._db_path("telegram_urgent_regional_reason.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=210,
+            source_name="Право Ставропольского края",
+            region="stavropol",
+            title="О внесении изменений в порядок предоставления субсидий",
+            url="https://pravo.stavregion.ru/document/98765",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="Изменения порядка предоставления субсидий.",
+        )
+        document.business_signal = "Региональный НПА по профильной теме: оставить в наблюдении."
+        save_document(document, db_path)
+
+        text = telegram.build_command_response("/urgent", db_path=db_path)
+
+        self.assertIn("Региональный НПА меняет порядок/условия поддержки: требуется проверка GR.", text)
+        self.assertNotIn("оставить в наблюдении", text)
 
     def test_period_argument_overrides_default_for_urgent(self) -> None:
         db_path = self._db_path("telegram_urgent_period.db")

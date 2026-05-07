@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 
+from app.config import get_source_role
 from app.models import RawDocument
 from app.operational_health import OperationalNotice, format_operational_notices_telegram
 from app.user_facing import user_facing_title
@@ -213,13 +214,13 @@ def _build_digest_action_hint(document: RawDocument) -> str:
         return _truncate_text(document.deadline_text, DETAIL_MAX_CHARS)
     if document.application_status == "open":
         return "Проверить условия участия и окно подачи."
+    if get_source_role(document.source_name) == "regional_npa" and document.page_type == "new_rule":
+        return "Проверить изменения порядка субсидирования, сроки вступления в силу и затронутые регионы/организации."
     section = classify_display_section(document)
     if section == "requires_attention":
         return "Проверить применимость меры, сроки и ответственного."
     if section == "measures_and_selections":
         return "Проверить условия участия и окно подачи."
-    if section == "regional_npa":
-        return "Проверить изменения порядка субсидирования и влияние на регионы присутствия."
     if section == "strategy_signals":
         return "Оценить влияние на меры господдержки и регулирование."
     if section == "news_signals":

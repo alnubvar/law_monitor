@@ -221,6 +221,25 @@ class TelegramFormatterTest(unittest.TestCase):
 
         self.assertIn("Что проверить: Оставить как отраслевой фон, без срочной реакции.", text)
 
+    def test_formatter_uses_specific_regional_npa_hint(self) -> None:
+        document = self._doc(
+            doc_id=30,
+            source_name="Право Ставропольского края",
+            region="stavropol",
+            title="О внесении изменений в порядок предоставления субсидий",
+            url="https://pravo.stavregion.ru/document/98765",
+            action_level="watchlist",
+            page_type="new_rule",
+        )
+        document.notified = True
+
+        text = build_digest_message([document])
+
+        self.assertIn(
+            "Что проверить: Проверить изменения порядка субсидирования, сроки вступления в силу и затронутые регионы/организации.",
+            text,
+        )
+
     def test_formatter_deduplicates_government_news_and_docs_pair(self) -> None:
         news_document = self._doc(
             doc_id=20,

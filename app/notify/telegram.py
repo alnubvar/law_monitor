@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 import requests
 
 from app import config
-from app.config import load_sources
+from app.config import get_source_role, load_sources
 from app.models import RawDocument
 from app.notify.telegram_formatter import build_digest_message
 from app.operational_health import (
@@ -295,8 +295,16 @@ def _build_status_message(db_path: Path | str) -> str:
     ]
     latest_publish = max(valid_published_dates, default=None)
     latest_report = _find_latest_report_file()
-    requires_attention_count = count_documents_by_action_level("requires_attention", db_path=db_path)
-    watchlist_count = count_documents_by_action_level("watchlist", db_path=db_path)
+    requires_attention_count = sum(
+        1
+        for document in visible_documents
+        if user_facing_action_level(document) == "requires_attention"
+    )
+    watchlist_count = sum(
+        1
+        for document in visible_documents
+        if user_facing_action_level(document) == "watchlist"
+    )
     lines = [
         "📊 Статус AHSTEP GR Monitor",
         f"Обновлено: {now.strftime('%Y-%m-%d %H:%M')}",
@@ -461,7 +469,7 @@ def _build_short_report_text(
         shown_blocks += 1
         lines.append(title)
         for document in section_documents[:2]:
-            reason = (document.business_signal or document.impact or document.summary or "").strip()
+            reason = _build_user_facing_reason(document)
             lines.append(f"- {user_facing_title(document, max_chars=150)}")
             if reason:
                 lines.append(f"  Почему важно: {reason[:120]}")
@@ -544,12 +552,12 @@ def _format_report_period_label(days: int) -> str:
 def _build_report_summary_action_hint(document: RawDocument, *, section: str) -> str:
     if document.application_status == "open" and document.deadline_text:
         return document.deadline_text[:120]
+    if get_source_role(document.source_name) == "regional_npa" and document.page_type == "new_rule":
+        return "Проверить изменения порядка субсидирования, сроки вступления в силу и затронутые регионы/организации."
     if section == "requires_attention":
         return "Проверить применимость меры, сроки и ответственного."
     if section == "measures_and_selections":
         return "Проверить условия участия и окно подачи."
-    if section == "regional_npa":
-        return "Проверить изменения порядка субсидирования и влияние на регионы присутствия."
     if section == "strategy_signals":
         return "Оценить влияние на меры господдержки и регулирование."
     if section == "news_signals":
@@ -764,7 +772,7 @@ def _format_document_lines(
             meta_parts.append(f"Дата: {published_label}")
         meta_parts.append(f"Уровень: {_format_action_level(user_facing_action_level(document))}")
         lines.append(f"  {' | '.join(meta_parts)}")
-        reason = (document.business_signal or document.summary or "").strip()
+        reason = _build_user_facing_reason(document)
         if reason:
             lines.append(f"  Почему важно: {reason[:140]}")
         if include_summary and document.summary:
@@ -774,6 +782,15 @@ def _format_document_lines(
     if include_hidden_hint and hidden_count > 0:
         lines.append(f"... и еще {hidden_count}.")
     return lines
+
+
+def _build_user_facing_reason(document: RawDocument) -> str:
+    if (
+        classify_display_section(document) == "requires_attention"
+        and get_source_role(document.source_name) == "regional_npa"
+    ):
+        return "Региональный НПА меняет порядок/условия поддержки: требуется проверка GR."
+    return (document.business_signal or document.impact or document.summary or "").strip()
 
 
 def _fmt_dt(value: datetime | None) -> str | None:
