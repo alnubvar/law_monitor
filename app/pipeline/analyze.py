@@ -8,6 +8,7 @@ from app.llm.enrichment import DocumentEnricher, get_document_enricher
 from app.llm.mock_client import MockLLMClient
 from app.storage import (
     count_documents_by_action_level,
+    save_document_enrichment,
     get_document_by_url,
     init_db,
     list_unanalyzed_documents,
@@ -47,6 +48,7 @@ def _analyze_documents(documents: Iterable, *, client: MockLLMClient, db_path) -
                 document=document,
                 analysis=analysis,
                 enricher=enricher,
+                db_path=db_path,
             )
         except Exception as exc:
             logger.exception(
@@ -64,6 +66,7 @@ def _run_optional_enrichment(
     document,
     analysis,
     enricher: DocumentEnricher,
+    db_path,
 ) -> None:
     enrichment = enricher.maybe_enrich_document(
         title=document.title,
@@ -76,6 +79,22 @@ def _run_optional_enrichment(
     )
     if enrichment is None:
         return
+    try:
+        save_document_enrichment(
+            document_id=document.id,
+            document_url=document.url,
+            provider=enricher.provider_name,
+            model=enricher.model_name,
+            enrichment=enrichment,
+            db_path=db_path,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to persist LLM enrichment for document id=%s url=%s: %s",
+            document.id,
+            document.url,
+            exc,
+        )
     if enrichment.error:
         logger.warning(
             "LLM enrichment unavailable for document id=%s url=%s: %s",

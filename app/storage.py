@@ -10,6 +10,7 @@ from typing import Any
 
 from app.config import DB_PATH, ensure_directories
 from app.extractors.date_extractor import infer_published_at
+from app.llm.enrichment import EnrichmentResult
 from app.models import AnalysisResult, RawDocument, SourceErrorRecord
 
 logger = logging.getLogger(__name__)
@@ -397,6 +398,31 @@ def init_db(db_path: Path | str = DB_PATH) -> None:
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_tracking_events_item_detected ON tracking_events(tracking_item_id, detected_at DESC)"
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS document_enrichments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id INTEGER,
+                document_url TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL DEFAULT '',
+                executive_summary TEXT,
+                business_impact TEXT,
+                recommended_action TEXT,
+                deadline_hint TEXT,
+                confidence REAL,
+                error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_document_enrichments_key ON document_enrichments(document_url, provider, model)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_document_enrichments_updated_at ON document_enrichments(updated_at DESC)"
+        )
         connection.commit()
     logger.info("Database initialized at %s", db_path)
 
@@ -613,6 +639,119 @@ def update_analysis(
             ),
         )
         connection.commit()
+
+
+def save_document_enrichment(
+    *,
+    document_id: int | None,
+    document_url: str,
+    provider: str,
+    model: str,
+    enrichment: EnrichmentResult,
+    db_path: Path | str = DB_PATH,
+) -> int:
+    now = datetime.now(timezone.utc)
+    normalized_provider = (provider or "").strip() or "unknown"
+    normalized_model = (model or "").strip()
+    with _connect_db(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO document_enrichments (
+                document_id,
+                document_url,
+                provider,
+                model,
+                executive_summary,
+                business_impact,
+                recommended_action,
+                deadline_hint,
+                confidence,
+                error,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(document_url, provider, model) DO UPDATE SET
+                document_id = excluded.document_id,
+                executive_summary = excluded.executive_summary,
+                business_impact = excluded.business_impact,
+                recommended_action = excluded.recommended_action,
+                deadline_hint = excluded.deadline_hint,
+                confidence = excluded.confidence,
+                error = excluded.error,
+                updated_at = excluded.updated_at
+            """,
+            (
+                document_id,
+                document_url,
+                normalized_provider,
+                normalized_model,
+                enrichment.executive_summary,
+                enrichment.business_impact,
+                enrichment.recommended_action,
+                enrichment.deadline_hint,
+                enrichment.confidence,
+                enrichment.error,
+                _serialize_dt(now),
+                _serialize_dt(now),
+            ),
+        )
+        row = connection.execute(
+            """
+            SELECT id
+            FROM document_enrichments
+            WHERE document_url = ? AND provider = ? AND model = ?
+            LIMIT 1
+            """,
+            (document_url, normalized_provider, normalized_model),
+        ).fetchone()
+        connection.commit()
+    return int(row["id"]) if row is not None else 0
+
+
+def get_document_enrichment(
+    document_url: str,
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+    db_path: Path | str = DB_PATH,
+) -> dict[str, Any] | None:
+    clauses = ["document_url = ?"]
+    parameters: list[Any] = [document_url]
+    if provider is not None:
+        clauses.append("provider = ?")
+        parameters.append(provider)
+    if model is not None:
+        clauses.append("model = ?")
+        parameters.append(model)
+    query = (
+        "SELECT * FROM document_enrichments "
+        f"WHERE {' AND '.join(clauses)} "
+        "ORDER BY updated_at DESC LIMIT 1"
+    )
+    with _connect_db(db_path) as connection:
+        row = connection.execute(query, tuple(parameters)).fetchone()
+    if row is None:
+        return None
+    return _row_to_document_enrichment(row)
+
+
+def count_document_enrichments(db_path: Path | str = DB_PATH) -> int:
+    with _connect_db(db_path) as connection:
+        row = connection.execute(
+            "SELECT COUNT(*) AS count FROM document_enrichments"
+        ).fetchone()
+    if row is None:
+        return 0
+    return int(row["count"] or 0)
+
+
+def _row_to_document_enrichment(row: sqlite3.Row) -> dict[str, Any]:
+    payload: dict[str, Any] = dict(row)
+    payload["created_at"] = _parse_dt(payload.get("created_at"))
+    payload["updated_at"] = _parse_dt(payload.get("updated_at"))
+    if payload.get("confidence") is not None:
+        payload["confidence"] = float(payload["confidence"])
+    return payload
 
 
 def list_recent_documents(

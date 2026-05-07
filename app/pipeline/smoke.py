@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app import config
+from app.storage import count_document_enrichments
 from app.notify import telegram
 from app.pipeline.diagnostics import _SYSTEM_PROXY_ENV_VARS, run_diagnostics
 from app.pipeline.digest import run_digest
@@ -194,6 +195,13 @@ def run_smoke_check(
             result.add_fail("regression fixtures found", "0")
     except Exception as exc:
         result.add_fail("regression fixtures found", str(exc))
+
+    try:
+        enabled_label = "enabled" if config.LLM_ENRICHMENT_ENABLED else "disabled"
+        stored_count = count_document_enrichments(db_path=resolved_db_path)
+        result.add_ok("LLM enrichment", f"{enabled_label}; stored rows: {stored_count}")
+    except Exception as exc:
+        result.add_fail("LLM enrichment", str(exc))
 
     return result
 

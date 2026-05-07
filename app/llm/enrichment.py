@@ -224,10 +224,14 @@ class DocumentEnricher:
         enabled: bool,
         provider: BaseEnrichmentProvider | None = None,
         provider_error: str | None = None,
+        provider_name: str = "",
+        model_name: str = "",
     ) -> None:
         self.enabled = enabled
         self.provider = provider
         self.provider_error = provider_error
+        self.provider_name = provider_name
+        self.model_name = model_name
 
     def maybe_enrich_document(
         self,
@@ -272,7 +276,12 @@ def build_document_enricher() -> DocumentEnricher:
         return DocumentEnricher(enabled=False)
     provider_name = (config.LLM_PROVIDER or "mock").strip().lower()
     if provider_name == "mock":
-        return DocumentEnricher(enabled=True, provider=MockEnrichmentProvider())
+        return DocumentEnricher(
+            enabled=True,
+            provider=MockEnrichmentProvider(),
+            provider_name="mock",
+            model_name=config.LLM_MODEL or "mock-enrichment",
+        )
     if provider_name in {"openai", "openai-compatible", "openai_compatible", "lmstudio", "ollama"}:
         return DocumentEnricher(
             enabled=True,
@@ -282,10 +291,14 @@ def build_document_enricher() -> DocumentEnricher:
                 model=config.LLM_MODEL,
                 timeout_seconds=config.REQUEST_TIMEOUT,
             ),
+            provider_name=provider_name,
+            model_name=config.LLM_MODEL or "",
         )
     return DocumentEnricher(
         enabled=True,
         provider_error=f"unsupported LLM provider: {provider_name}",
+        provider_name=provider_name,
+        model_name=config.LLM_MODEL or "",
     )
 
 

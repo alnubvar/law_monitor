@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -14,6 +15,12 @@ from app.llm.enrichment import (
 )
 from app.models import AnalysisResult, RawDocument
 from app.pipeline import analyze as analyze_pipeline
+from app.storage import (
+    count_document_enrichments,
+    get_document_enrichment,
+    init_db,
+    save_document_enrichment,
+)
 
 
 def _analysis_result(action_level: str) -> AnalysisResult:
@@ -62,6 +69,92 @@ class _FailingProvider(MockEnrichmentProvider):
 
 
 class LLMEnrichmentTest(unittest.TestCase):
+    def _db_path(self, name: str) -> Path:
+        path = Path("data/test_artifacts") / name
+        if path.exists():
+            path.unlink()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def test_init_db_creates_document_enrichments_table(self) -> None:
+        db_path = self._db_path("llm_enrichment_table.db")
+        init_db(db_path)
+
+        connection = sqlite3.connect(str(db_path))
+        try:
+            row = connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'document_enrichments'"
+            ).fetchone()
+        finally:
+            connection.close()
+
+        self.assertIsNotNone(row)
+
+    def test_save_and_get_enrichment_work(self) -> None:
+        db_path = self._db_path("llm_enrichment_save_get.db")
+        init_db(db_path)
+        row_id = save_document_enrichment(
+            document_id=1,
+            document_url="https://example.test/doc",
+            provider="mock",
+            model="mock-enrichment",
+            enrichment=EnrichmentResult(
+                executive_summary="Кратко",
+                business_impact="Влияние",
+                recommended_action="Действие",
+                deadline_hint="Срок",
+                confidence=0.5,
+            ),
+            db_path=db_path,
+        )
+
+        enrichment = get_document_enrichment(
+            "https://example.test/doc",
+            provider="mock",
+            model="mock-enrichment",
+            db_path=db_path,
+        )
+
+        self.assertGreater(row_id, 0)
+        self.assertIsNotNone(enrichment)
+        assert enrichment is not None
+        self.assertEqual(enrichment["executive_summary"], "Кратко")
+        self.assertEqual(enrichment["recommended_action"], "Действие")
+        self.assertEqual(enrichment["confidence"], 0.5)
+
+    def test_upsert_updates_existing_enrichment(self) -> None:
+        db_path = self._db_path("llm_enrichment_upsert.db")
+        init_db(db_path)
+        first_id = save_document_enrichment(
+            document_id=1,
+            document_url="https://example.test/doc",
+            provider="mock",
+            model="mock-enrichment",
+            enrichment=EnrichmentResult(executive_summary="Первая версия", confidence=0.2),
+            db_path=db_path,
+        )
+        second_id = save_document_enrichment(
+            document_id=1,
+            document_url="https://example.test/doc",
+            provider="mock",
+            model="mock-enrichment",
+            enrichment=EnrichmentResult(executive_summary="Вторая версия", confidence=0.7),
+            db_path=db_path,
+        )
+
+        enrichment = get_document_enrichment(
+            "https://example.test/doc",
+            provider="mock",
+            model="mock-enrichment",
+            db_path=db_path,
+        )
+
+        self.assertEqual(first_id, second_id)
+        self.assertEqual(count_document_enrichments(db_path=db_path), 1)
+        assert enrichment is not None
+        self.assertEqual(enrichment["executive_summary"], "Вторая версия")
+        self.assertEqual(enrichment["confidence"], 0.7)
+
     def test_disabled_path_does_nothing(self) -> None:
         with mock.patch("app.config.LLM_ENRICHMENT_ENABLED", False):
             enricher = build_document_enricher()
@@ -163,11 +256,18 @@ class LLMEnrichmentTest(unittest.TestCase):
         self.assertIn("invalid JSON", result.error or "")
 
     def test_analyze_pipeline_continues_when_enrichment_fails(self) -> None:
+        db_path = self._db_path("llm_enrichment_failure_persist.db")
+        init_db(db_path)
         document = _raw_document()
         analysis = _analysis_result("requires_attention")
         client = mock.Mock()
         client.analyze_document.return_value = analysis
-        enricher = DocumentEnricher(enabled=True, provider=_FailingProvider())
+        enricher = DocumentEnricher(
+            enabled=True,
+            provider=_FailingProvider(),
+            provider_name="mock",
+            model_name="mock-enrichment",
+        )
 
         with mock.patch(
             "app.pipeline.analyze.get_document_enricher",
@@ -177,15 +277,140 @@ class LLMEnrichmentTest(unittest.TestCase):
                 processed = analyze_pipeline._analyze_documents(
                     [document],
                     client=client,
-                    db_path=Path("data/test_artifacts/llm_enrichment.db"),
+                    db_path=db_path,
                 )
 
         self.assertEqual(processed, 1)
         update_analysis_mock.assert_called_once_with(
             document.id,
             analysis,
-            db_path=Path("data/test_artifacts/llm_enrichment.db"),
+            db_path=db_path,
         )
+        enrichment = get_document_enrichment(
+            document.url,
+            provider="mock",
+            model="mock-enrichment",
+            db_path=db_path,
+        )
+        self.assertIsNotNone(enrichment)
+
+    def test_disabled_enrichment_does_not_write_rows(self) -> None:
+        db_path = self._db_path("llm_enrichment_disabled_no_rows.db")
+        init_db(db_path)
+        document = _raw_document()
+        analysis = _analysis_result("watchlist")
+        client = mock.Mock()
+        client.analyze_document.return_value = analysis
+        enricher = DocumentEnricher(enabled=False)
+
+        with mock.patch("app.pipeline.analyze.get_document_enricher", return_value=enricher):
+            with mock.patch("app.pipeline.analyze.update_analysis"):
+                processed = analyze_pipeline._analyze_documents(
+                    [document],
+                    client=client,
+                    db_path=db_path,
+                )
+
+        self.assertEqual(processed, 1)
+        self.assertEqual(count_document_enrichments(db_path=db_path), 0)
+
+    def test_enabled_mock_enrichment_writes_rows_for_eligible_docs(self) -> None:
+        db_path = self._db_path("llm_enrichment_mock_write.db")
+        init_db(db_path)
+        document = _raw_document()
+        analysis = _analysis_result("requires_attention")
+        client = mock.Mock()
+        client.analyze_document.return_value = analysis
+        enricher = DocumentEnricher(
+            enabled=True,
+            provider=MockEnrichmentProvider(),
+            provider_name="mock",
+            model_name="mock-enrichment",
+        )
+
+        with mock.patch("app.pipeline.analyze.get_document_enricher", return_value=enricher):
+            with mock.patch("app.pipeline.analyze.update_analysis"):
+                processed = analyze_pipeline._analyze_documents(
+                    [document],
+                    client=client,
+                    db_path=db_path,
+                )
+
+        self.assertEqual(processed, 1)
+        self.assertEqual(count_document_enrichments(db_path=db_path), 1)
+        enrichment = get_document_enrichment(
+            document.url,
+            provider="mock",
+            model="mock-enrichment",
+            db_path=db_path,
+        )
+        self.assertIsNotNone(enrichment)
+        assert enrichment is not None
+        self.assertTrue(enrichment["executive_summary"])
+
+    def test_background_and_irrelevant_do_not_write_rows(self) -> None:
+        db_path = self._db_path("llm_enrichment_non_eligible.db")
+        init_db(db_path)
+        document = _raw_document()
+        client = mock.Mock()
+        enricher = DocumentEnricher(
+            enabled=True,
+            provider=MockEnrichmentProvider(),
+            provider_name="mock",
+            model_name="mock-enrichment",
+        )
+
+        with mock.patch("app.pipeline.analyze.get_document_enricher", return_value=enricher):
+            with mock.patch("app.pipeline.analyze.update_analysis"):
+                client.analyze_document.return_value = _analysis_result("background")
+                background_processed = analyze_pipeline._analyze_documents(
+                    [document],
+                    client=client,
+                    db_path=db_path,
+                )
+                client.analyze_document.return_value = _analysis_result("irrelevant")
+                irrelevant_processed = analyze_pipeline._analyze_documents(
+                    [document],
+                    client=client,
+                    db_path=db_path,
+                )
+
+        self.assertEqual(background_processed, 1)
+        self.assertEqual(irrelevant_processed, 1)
+        self.assertEqual(count_document_enrichments(db_path=db_path), 0)
+
+    def test_provider_failure_does_not_break_analyze_and_stores_error(self) -> None:
+        db_path = self._db_path("llm_enrichment_provider_error.db")
+        init_db(db_path)
+        document = _raw_document()
+        analysis = _analysis_result("watchlist")
+        client = mock.Mock()
+        client.analyze_document.return_value = analysis
+        enricher = DocumentEnricher(
+            enabled=True,
+            provider=_FailingProvider(),
+            provider_name="mock",
+            model_name="mock-enrichment",
+        )
+
+        with mock.patch("app.pipeline.analyze.get_document_enricher", return_value=enricher):
+            with mock.patch("app.pipeline.analyze.update_analysis"):
+                processed = analyze_pipeline._analyze_documents(
+                    [document],
+                    client=client,
+                    db_path=db_path,
+                )
+
+        self.assertEqual(processed, 1)
+        enrichment = get_document_enrichment(
+            document.url,
+            provider="mock",
+            model="mock-enrichment",
+            db_path=db_path,
+        )
+        self.assertIsNotNone(enrichment)
+        assert enrichment is not None
+        self.assertIn("provider timeout", enrichment["error"] or "")
 
 
 if __name__ == "__main__":
