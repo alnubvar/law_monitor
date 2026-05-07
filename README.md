@@ -147,6 +147,12 @@ python -m unittest -v
 
 Deployment guide: [docs/deployment.md](docs/deployment.md)
 
+Operations docs:
+
+- [docs/PRODUCTION_RUNBOOK.md](docs/PRODUCTION_RUNBOOK.md)
+- [docs/ACCEPTANCE_CHECKLIST.md](docs/ACCEPTANCE_CHECKLIST.md)
+- [docs/BACKUP_RESTORE.md](docs/BACKUP_RESTORE.md)
+
 This repository currently recommends Windows-first MVP deployment (`Task Scheduler` + SQLite), with optional Linux `systemd` examples.
 
 Windows OCR note (optional local runtime):
