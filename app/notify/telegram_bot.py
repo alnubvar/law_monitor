@@ -20,6 +20,7 @@ from app.notify.telegram import (
     build_command_response,
     sanitize_telegram_exception_message,
 )
+from app.operational_health import collect_operational_notices
 from app.reports.markdown_report import generate_markdown_report
 from app.pipeline.analyze import run_analyze
 from app.pipeline.collect import run_collect
@@ -679,6 +680,7 @@ def _build_period_report_attachment(*, days: int, db_path: Path | str | None) ->
             documents,
             report_date=datetime.now().strftime("%Y-%m-%d"),
             period_days=days,
+            operational_notices=collect_operational_notices(db_path=resolved_db_path),
             source_errors=source_errors,
         )
         txt_content = _markdown_to_plain_text(markdown)

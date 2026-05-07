@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from app.config import DOCS_DIR, REPORTS_DIR, ensure_directories
+from app.operational_health import collect_operational_notices
 from app.reports.markdown_report import generate_markdown_report, save_markdown_report
 from app.storage import (
     backfill_missing_published_at,
@@ -31,6 +32,7 @@ def run_digest(
     intro_note: str | None = None,
 ) -> Path:
     ensure_directories()
+    resolved_db_path = Path(db_path) if db_path is not None else None
     if db_path is None:
         init_db()
         backfill_missing_published_at()
@@ -57,6 +59,11 @@ def run_digest(
         period_days=days,
         report_title=report_title,
         intro_note=intro_note,
+        operational_notices=(
+            collect_operational_notices(db_path=resolved_db_path)
+            if resolved_db_path is not None
+            else collect_operational_notices()
+        ),
         relevant_only=relevant_only,
         max_items=max_items,
         source_errors=source_errors,

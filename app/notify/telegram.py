@@ -14,6 +14,11 @@ from app import config
 from app.config import load_sources
 from app.models import RawDocument
 from app.notify.telegram_formatter import build_digest_message
+from app.operational_health import (
+    OperationalNotice,
+    collect_operational_notices,
+    format_operational_notices_telegram,
+)
 from app.user_facing import user_facing_action_level, user_facing_title
 from app.pipeline.diagnostics import build_diagnostics_snapshot
 from app.reports.markdown_report import select_visible_report_documents
@@ -183,12 +188,17 @@ def send_test_message(command_name: str = "notify-test") -> bool:
     )
 
 
-def send_digest(documents: Sequence[RawDocument]) -> bool:
+def send_digest(
+    documents: Sequence[RawDocument],
+    *,
+    db_path: Path | str | None = None,
+) -> bool:
     if not documents:
         logger.info("No documents for Telegram digest. Skipping.")
         return False
 
-    return send_message(build_digest_message(documents))
+    notices = collect_operational_notices(db_path=db_path) if db_path is not None else []
+    return send_message(build_digest_message(documents, operational_notices=notices))
 
 
 def build_command_response(
@@ -302,6 +312,10 @@ def _build_status_message(db_path: Path | str) -> str:
         f"Отчет: {'доступен' if latest_report else 'пока не сформирован'}",
         f"Telegram-уведомления: {'включены' if is_configured() else 'не настроены'}",
     ]
+    notices = collect_operational_notices(db_path=db_path)
+    if notices:
+        lines.append("")
+        lines.extend(format_operational_notices_telegram(notices))
     lines.extend(_build_freshness_lines(db_path))
     return _cap_message("\n".join(lines))
 
@@ -395,10 +409,16 @@ def _build_report_message(db_path: Path | str, *, days: int) -> str:
         action_levels=["requires_attention", "watchlist"],
         include_market_background=False,
     )
-    return _cap_message(_build_short_report_text(visible_documents, days=days))
+    notices = collect_operational_notices(db_path=db_path)
+    return _cap_message(_build_short_report_text(visible_documents, days=days, operational_notices=notices))
 
 
-def _build_short_report_text(documents: Sequence[RawDocument], *, days: int) -> str:
+def _build_short_report_text(
+    documents: Sequence[RawDocument],
+    *,
+    days: int,
+    operational_notices: Sequence[OperationalNotice] = (),
+) -> str:
     sections = {
         "requires_attention": [],
         "measures_and_selections": [],
@@ -421,6 +441,9 @@ def _build_short_report_text(documents: Sequence[RawDocument], *, days: int) -> 
         ),
         "",
     ]
+    if operational_notices:
+        lines.extend(format_operational_notices_telegram(operational_notices))
+        lines.append("")
     block_order = [
         ("🚨 Требует внимания", sections["requires_attention"]),
         ("📢 Меры и отборы", sections["measures_and_selections"]),

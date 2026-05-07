@@ -5,6 +5,7 @@ import time
 from datetime import datetime
 
 from app.config import (
+    DB_PATH,
     SCHEDULER_DAILY_REPORT_HOUR,
     SCHEDULER_HOURLY_INTERVAL_MINUTES,
 )
@@ -78,7 +79,7 @@ def notify_new_requires_attention() -> int:
         return 0
 
     logger.info("Preparing Telegram alerts for %s new requires_attention documents.", len(alert_documents))
-    sent = send_digest(alert_documents)
+    sent = send_digest(alert_documents, db_path=DB_PATH)
     if not sent:
         logger.info("Telegram notification was not sent. Documents remain unnotified.")
         return 0
@@ -111,7 +112,7 @@ def run_daily_report_cycle(days: int = 7) -> str:
     report_path = str(run_digest(days=days))
     visible_documents = _build_visible_digest_documents(days=days)
     if visible_documents:
-        send_digest(visible_documents)
+        send_digest(visible_documents, db_path=DB_PATH)
     logger.info(
         "Daily report cycle finished: report=%s visible_documents=%s",
         report_path,

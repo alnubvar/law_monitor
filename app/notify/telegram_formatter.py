@@ -4,6 +4,7 @@ import re
 from collections.abc import Sequence
 
 from app.models import RawDocument
+from app.operational_health import OperationalNotice, format_operational_notices_telegram
 from app.user_facing import user_facing_title
 from app.visibility import classify_display_section, should_show_document
 
@@ -37,6 +38,7 @@ def build_digest_message(
     documents: Sequence[RawDocument],
     *,
     report_path: str | None = None,
+    operational_notices: Sequence[OperationalNotice] | None = None,
 ) -> str:
     if not documents:
         return "Новых документов для уведомления не найдено."
@@ -47,7 +49,12 @@ def build_digest_message(
 
     if _looks_like_hourly_alert(requires_attention, watchlist):
         return _build_hourly_alert(requires_attention)
-    return _build_daily_digest(requires_attention, watchlist, report_path=report_path)
+    return _build_daily_digest(
+        requires_attention,
+        watchlist,
+        report_path=report_path,
+        operational_notices=list(operational_notices or []),
+    )
 
 
 def _partition_digest_documents(
@@ -90,6 +97,7 @@ def _build_daily_digest(
     watchlist: Sequence[RawDocument],
     *,
     report_path: str | None,
+    operational_notices: Sequence[OperationalNotice],
 ) -> str:
     sections = {section: [] for section in DAILY_SECTION_ORDER}
     for document in requires_attention:
@@ -105,6 +113,9 @@ def _build_daily_digest(
     ]
     if report_path:
         lines.append(f"Полный report: {report_path}")
+    if operational_notices:
+        lines.append("")
+        lines.extend(format_operational_notices_telegram(operational_notices))
 
     for section in DAILY_SECTION_ORDER:
         section_documents = sections[section]

@@ -9,6 +9,7 @@ from typing import Iterable
 from urllib.parse import urlsplit, urlunsplit
 
 from app.models import DigestItem, RawDocument, SourceErrorRecord
+from app.operational_health import OperationalNotice, format_operational_notices_markdown
 from app.user_facing import user_facing_action_level, user_facing_title
 from app.visibility import (
     classify_display_section as visibility_display_section,
@@ -120,6 +121,7 @@ def generate_markdown_report(
     generated_at: datetime | None = None,
     report_title: str | None = None,
     intro_note: str | None = None,
+    operational_notices: Iterable[OperationalNotice] | None = None,
     relevant_only: bool = True,
     max_items: int | None = None,
     source_errors: Iterable[SourceErrorRecord] | None = None,
@@ -143,7 +145,7 @@ def generate_markdown_report(
         include_full_background=include_full_background,
     )
     display_sections = _build_display_sections(report_view.flatten())
-    error_records = list(source_errors or [])
+    notices = list(operational_notices or [])
 
     generated_at_value = generated_at or datetime.now()
     lines: list[str] = [report_title or f"# GR-дайджест за {report_date}", ""]
@@ -158,6 +160,7 @@ def generate_markdown_report(
             generated_at=generated_at_value,
         )
     )
+    lines.extend(format_operational_notices_markdown(notices))
     for section in DISPLAY_SECTION_ORDER:
         lines.append(DISPLAY_SECTION_TITLES[section])
         documents_for_bucket = display_sections.get(section, [])
