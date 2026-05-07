@@ -7,7 +7,7 @@
   "raw_text": "В правительстве подтвердили параметры экспортной пошлины и меры поддержки экспорта АПК.",
   "level": "news",
   "region": "federal",
-  "expected_action_level": "watchlist",
+  "expected_action_level": "requires_attention",
   "expected_page_type": "news_background",
   "expected_source_role": "news_signals",
   "expected_business_signal_contains": "Новостной предвестник"

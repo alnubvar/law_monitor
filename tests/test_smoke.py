@@ -9,6 +9,8 @@ from unittest import mock
 from app.pipeline.smoke import run_smoke_check
 from app.storage import init_db
 
+REGRESSION_FIXTURES_DIR = Path("tests/fixtures/regression")
+
 
 class SmokeCheckTest(unittest.TestCase):
     def _db_path(self, name: str) -> Path:
@@ -98,7 +100,8 @@ class SmokeCheckTest(unittest.TestCase):
         ):
             result = run_smoke_check(db_path=db_path)
 
-        self.assertIn("[OK] regression fixtures found: 28", result.render_text())
+        expected_count = len(list(REGRESSION_FIXTURES_DIR.glob("*.json")))
+        self.assertIn(f"[OK] regression fixtures found: {expected_count}", result.render_text())
 
     def test_smoke_check_returns_structured_result_and_text(self) -> None:
         db_path = self._db_path("smoke_structured.db")

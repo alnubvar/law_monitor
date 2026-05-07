@@ -874,7 +874,7 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         )
 
         self.assertEqual(result.page_type, "new_rule")
-        self.assertEqual(result.action_level, "watchlist")
+        self.assertEqual(result.action_level, "requires_attention")
 
     def test_msh_krasnodar_subsidy_pdf_is_not_unknown_page_type(self) -> None:
         client = MockLLMClient(["субсидии сельское хозяйство"])
@@ -944,7 +944,7 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         )
 
         self.assertEqual(result.page_type, "selection_announcement")
-        self.assertEqual(result.action_level, "watchlist")
+        self.assertEqual(result.action_level, "requires_attention")
 
     def test_pravo_donland_listing_is_background_reference_page(self) -> None:
         client = MockLLMClient(["субсидии сельское хозяйство"])
@@ -981,7 +981,7 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         )
 
         self.assertEqual(result.page_type, "new_rule")
-        self.assertEqual(result.action_level, "watchlist")
+        self.assertEqual(result.action_level, "requires_attention")
 
     def test_mshsk_listing_is_background_reference_page(self) -> None:
         client = MockLLMClient(["субсидии сельское хозяйство"])
@@ -1017,7 +1017,7 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         )
 
         self.assertEqual(result.page_type, "selection_announcement")
-        self.assertEqual(result.action_level, "watchlist")
+        self.assertEqual(result.action_level, "requires_attention")
 
     def test_pravo_stavregion_listing_is_background_reference_page(self) -> None:
         client = MockLLMClient(["субсидии сельское хозяйство"])
@@ -1051,7 +1051,7 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         )
 
         self.assertEqual(result.page_type, "new_rule")
-        self.assertEqual(result.action_level, "watchlist")
+        self.assertEqual(result.action_level, "requires_attention")
 
     def test_regional_npa_archive_listing_is_background_or_irrelevant(self) -> None:
         client = MockLLMClient(["сельское хозяйство"])
@@ -1110,7 +1110,7 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         self.assertTrue((result.normalized_title or "").startswith("О внесении изменений"))
         self.assertNotEqual(result.normalized_title, "Просмотр")
 
-    def test_zol_export_support_signal_is_watchlist(self) -> None:
+    def test_zol_export_support_signal_is_requires_attention(self) -> None:
         client = MockLLMClient(["Поддержка экспорта АПК", "экспортная пошлина"])
 
         result = client.analyze_document(
@@ -1122,7 +1122,7 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
             region="federal",
         )
 
-        self.assertEqual(result.action_level, "watchlist")
+        self.assertEqual(result.action_level, "requires_attention")
 
     def test_zol_broad_export_story_with_secondary_quota_is_background(self) -> None:
         client = MockLLMClient(["экспорт зерна", "квота на экспорт"])
@@ -1204,7 +1204,7 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
 
         self.assertEqual(result.action_level, "background")
 
-    def test_zol_government_support_signal_is_watchlist(self) -> None:
+    def test_zol_government_support_signal_is_requires_attention(self) -> None:
         client = MockLLMClient(["господдержка АПК", "субсидии"])
 
         result = client.analyze_document(
@@ -1216,6 +1216,25 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
             region="federal",
         )
 
+        self.assertEqual(result.action_level, "requires_attention")
+
+    def test_regional_generic_agro_npa_stays_watchlist_not_requires_attention(self) -> None:
+        client = MockLLMClient(["сельское хозяйство", "агропромышленный комплекс"])
+
+        result = client.analyze_document(
+            "Постановление Правительства Ростовской области о развитии агропромышленного комплекса",
+            (
+                "Постановление Правительства Ростовской области о развитии агропромышленного комплекса "
+                "и мониторинге реализации отраслевой программы без изменения порядка предоставления субсидий "
+                "и без сроков подачи заявок."
+            ),
+            source_name="Право Ростовской области",
+            url="https://pravo.donland.ru/doc/view/id/program-agr-2026/",
+            level="regional",
+            region="rostov",
+        )
+
+        self.assertEqual(result.page_type, "new_rule")
         self.assertEqual(result.action_level, "watchlist")
 
     def test_non_agro_government_fuel_news_is_background(self) -> None:

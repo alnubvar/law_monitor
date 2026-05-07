@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import re
 
 from app.llm.facts_extractor import DocumentFacts
 from app.models import SourceRole
@@ -47,6 +48,51 @@ PROJECT_DISCUSSION_SIGNALS = (
     "проект постановления",
     "проект приказа",
     "консультац",
+)
+SUPPORT_CHANGE_MARKERS = (
+    "внесены изменения",
+    "внести изменения",
+    "внесении изменений",
+    "изменение порядка",
+    "изменения в порядок",
+    "утвержден порядок",
+    "утверждён порядок",
+    "новая мера поддержки",
+    "новые меры поддержки",
+    "изменение условий",
+    "льготное кредитование",
+    "субсид",
+    "возмещение части затрат",
+    "компенсация затрат",
+)
+EXPORT_CONTROL_MARKERS = (
+    "экспортн",
+    "импортн",
+    "пошлин",
+    "квот",
+    "ограничен",
+    "запрет",
+)
+GOVERNMENT_DECISION_MARKERS = (
+    "правительств",
+    "кабмин",
+    "минсельхоз",
+    "утверд",
+    "ввод",
+    "ввел",
+    "продлил",
+    "продлен",
+    "продлён",
+    "изменил",
+    "подтверд",
+    "решени",
+    "поруч",
+)
+NEGATED_ACTION_PATTERNS = (
+    r"без(?:\s+\w+){0,3}\s+изменени",
+    r"без(?:\s+\w+){0,3}\s+срок\w*\s+подач",
+    r"без(?:\s+\w+){0,3}\s+прием\w*\s+заяв",
+    r"без(?:\s+\w+){0,3}\s+приём\w*\s+заяв",
 )
 
 
@@ -142,12 +188,32 @@ def detect_action_level(
     if is_service_page or page_type == "navigation" or content_quality in {"navigation", "empty"}:
         if source_role == "strategy" and has_strategy_signal:
             return "watchlist"
+        if (
+            source_role == "regional_npa"
+            and has_regional_npa_signal
+            and _has_strong_regional_npa_action_signal(
+                title_text=title_text,
+                lead_text=lead_text,
+                facts=facts,
+            )
+        ):
+            return "requires_attention"
         if source_role == "regional_npa" and has_regional_npa_signal:
             return "watchlist"
         return "irrelevant"
     if looks_irrelevant(title_text, body_text):
         if source_role == "strategy" and has_strategy_signal:
             return "watchlist"
+        if (
+            source_role == "regional_npa"
+            and has_regional_npa_signal
+            and _has_strong_regional_npa_action_signal(
+                title_text=title_text,
+                lead_text=lead_text,
+                facts=facts,
+            )
+        ):
+            return "requires_attention"
         if source_role == "regional_npa" and has_regional_npa_signal:
             return "watchlist"
         return "irrelevant"
@@ -306,8 +372,24 @@ def detect_action_level(
     if is_support_context_value and page_type in ACTIONABLE_PAGE_TYPES:
         if not (is_target_region_value or is_federal_measure_value):
             return "background"
+        if (
+            source_role == "regional_npa"
+            and _has_strong_regional_npa_action_signal(
+                title_text=title_text,
+                lead_text=lead_text,
+                facts=facts,
+            )
+        ):
+            return "requires_attention"
         if facts.support_status == "inactive":
             return "background"
+        if _has_strong_support_action_signal(
+            page_type=page_type,
+            title_text=title_text,
+            lead_text=lead_text,
+            facts=facts,
+        ):
+            return "requires_attention"
         if facts.support_status == "active" and facts.application_status == "open":
             return "requires_attention"
         if (
@@ -324,6 +406,16 @@ def detect_action_level(
             return "watchlist"
         return "background"
     if source_role == "regional_npa":
+        if (
+            page_type in ACTIONABLE_PAGE_TYPES
+            and has_regional_npa_signal
+            and _has_strong_regional_npa_action_signal(
+                title_text=title_text,
+                lead_text=lead_text,
+                facts=facts,
+            )
+        ):
+            return "requires_attention"
         if has_project_discussion_signal and has_regional_npa_signal:
             return "watchlist"
         if page_type in ACTIONABLE_PAGE_TYPES and has_regional_npa_signal:
@@ -338,6 +430,12 @@ def detect_action_level(
     if page_type in ACTIONABLE_PAGE_TYPES and has_strict_action_signal:
         if facts.support_status != "inactive" and facts.application_status != "closed":
             return "requires_attention"
+    if (
+        source_role == "news_signals"
+        and has_news_signal_value
+        and _has_strong_news_action_signal(title_text=title_text, lead_text=lead_text)
+    ):
+        return "requires_attention"
     if page_type in WATCHLIST_ONLY_PAGE_TYPES:
         if has_any_action_signal or has_watch_in_title or has_watch_in_body or explicit_keywords:
             return "watchlist"
@@ -357,6 +455,54 @@ def detect_action_level(
     if has_any_action_signal or explicit_keywords:
         return "background"
     return "irrelevant"
+
+
+def _has_strong_support_action_signal(
+    *,
+    page_type: str,
+    title_text: str,
+    lead_text: str,
+    facts: DocumentFacts,
+) -> bool:
+    text = f"{title_text} {lead_text}"
+    if facts.application_status == "open":
+        return True
+    if page_type == "deadline_update" and facts.deadline_text:
+        return True
+    if facts.deadline_text and any(marker in text for marker in SUPPORT_CHANGE_MARKERS):
+        return True
+    return False
+
+
+def _has_strong_regional_npa_action_signal(
+    *,
+    title_text: str,
+    lead_text: str,
+    facts: DocumentFacts,
+) -> bool:
+    text = f"{title_text} {lead_text}"
+    if any(re.search(pattern, text) for pattern in NEGATED_ACTION_PATTERNS):
+        return False
+    has_support_change = any(marker in text for marker in SUPPORT_CHANGE_MARKERS)
+    if not has_support_change:
+        return False
+    if facts.deadline_text:
+        return True
+    return "порядок предоставления субсид" in text or "изменени" in text
+
+
+def _has_strong_news_action_signal(*, title_text: str, lead_text: str) -> bool:
+    text = f"{title_text} {lead_text}"
+    has_export_control = any(marker in text for marker in EXPORT_CONTROL_MARKERS)
+    has_decision = any(marker in text for marker in GOVERNMENT_DECISION_MARKERS)
+    has_support_change = any(marker in text for marker in SUPPORT_CHANGE_MARKERS)
+    if has_export_control and has_decision:
+        return True
+    if has_support_change and has_decision and (
+        "экспорт" in text or "апк" in text or "сельск" in text
+    ):
+        return True
+    return False
 
 
 def build_business_signal(

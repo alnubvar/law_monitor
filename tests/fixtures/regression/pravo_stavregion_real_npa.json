@@ -8,7 +8,6 @@
   "title": "Постановление Правительства Ставропольского края от 29.04.2026 № 123-п «О внесении изменений в порядок предоставления субсидий сельскохозяйственным товаропроизводителям»",
   "url": "https://pravo.stavregion.ru/document/98765",
   "raw_text": "Постановление Правительства Ставропольского края от 29.04.2026 № 123-п. О внесении изменений в порядок предоставления субсидий сельскохозяйственным товаропроизводителям Ставропольского края.",
-  "expected_action_level": "watchlist",
-  "expected_page_type": "new_rule",
-  "expected_not_action_level": "requires_attention"
+  "expected_action_level": "requires_attention",
+  "expected_page_type": "new_rule"
 }

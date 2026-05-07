@@ -7,7 +7,7 @@
   "raw_text": "МИНИСТЕРСТВО СЕЛЬСКОГО ХОЗЯЙСТВА КРАСНОДАРСКОГО КРАЯ О внесении изменений в приказ министерства сельского хозяйства Краснодарского края о предоставлении субсидий сельхозтоваропроизводителям.",
   "level": "regional",
   "region": "krasnodar",
-  "expected_action_level": "watchlist",
+  "expected_action_level": "requires_attention",
   "expected_page_type": "new_rule",
   "expected_source_role": "regional_npa",
   "expected_business_signal_contains": "Региональный НПА"

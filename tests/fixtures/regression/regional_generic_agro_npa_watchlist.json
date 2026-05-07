@@ -1,0 +1,14 @@
+{
+  "id": "regional_generic_agro_npa_watchlist",
+  "source_name": "Право Ростовской области",
+  "source_role": "regional_npa",
+  "expected_source_role": "regional_npa",
+  "level": "regional",
+  "region": "rostov",
+  "title": "Постановление Правительства Ростовской области о развитии агропромышленного комплекса",
+  "url": "https://pravo.donland.ru/doc/view/id/program-agr-2026/",
+  "raw_text": "Постановление Правительства Ростовской области о развитии агропромышленного комплекса и мониторинге реализации отраслевой программы без изменения порядка предоставления субсидий и без сроков подачи заявок.",
+  "expected_action_level": "watchlist",
+  "expected_page_type": "new_rule",
+  "expected_not_action_level": "requires_attention"
+}
