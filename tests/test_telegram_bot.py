@@ -60,11 +60,7 @@ class TelegramBotTest(unittest.TestCase):
                     {"command": "watchlist", "description": "наблюдение"},
                     {"command": "report", "description": "последний отчет"},
                     {"command": "sources", "description": "источники"},
-                    {"command": "ocr", "description": "OCR triage"},
                     {"command": "search", "description": "поиск по архиву"},
-                    {"command": "track", "description": "добавить в отслеживание"},
-                    {"command": "untrack", "description": "убрать из отслеживания"},
-                    {"command": "tracked", "description": "отслеживаемые документы"},
                     {"command": "refresh", "description": "обновить данные"},
                 ]
             },
@@ -76,14 +72,13 @@ class TelegramBotTest(unittest.TestCase):
         keyboard = payload["keyboard"]
         self.assertEqual(keyboard[0][0]["text"], "📊 Статус")
         self.assertEqual(keyboard[0][1]["text"], "🚨 Срочное")
-        self.assertEqual(keyboard[1][0]["text"], "📅 Сегодня")
-        self.assertEqual(keyboard[1][1]["text"], "👀 Наблюдение")
+        self.assertEqual(keyboard[1][0]["text"], "👀 Наблюдение")
+        self.assertEqual(keyboard[1][1]["text"], "📅 Сегодня")
         self.assertEqual(keyboard[2][0]["text"], "📄 Отчёт")
         self.assertEqual(keyboard[2][1]["text"], "🛰 Источники")
         self.assertEqual(keyboard[3][0]["text"], "🔎 Поиск")
-        self.assertEqual(keyboard[3][1]["text"], "⭐ Отслеживаемое")
-        self.assertEqual(keyboard[4][0]["text"], "🔄 Обновить данные")
-        self.assertEqual(keyboard[5][0]["text"], "ℹ️ Помощь")
+        self.assertEqual(keyboard[3][1]["text"], "🔄 Обновить данные")
+        self.assertEqual(keyboard[4][0]["text"], "ℹ️ Помощь")
         self.assertTrue(payload["resize_keyboard"])
         self.assertTrue(payload["is_persistent"])
 
@@ -106,13 +101,35 @@ class TelegramBotTest(unittest.TestCase):
         self.assertEqual(telegram_bot.normalize_incoming_command("🚨 Срочное"), "/urgent")
         self.assertEqual(telegram_bot.normalize_incoming_command("🔄 Обновить данные"), "/refresh")
         self.assertEqual(telegram_bot.normalize_incoming_command("🔎 Поиск"), "/search")
-        self.assertEqual(telegram_bot.normalize_incoming_command("⭐ Отслеживаемое"), "/tracked")
 
-        with patch("app.notify.telegram_bot.build_command_response", return_value="mapped"):
+        with patch("app.notify.telegram_bot.build_command_response", return_value="mapped") as build:
             result = telegram_bot.dispatch_input_text("📄 Отчёт")
 
         self.assertEqual(result.command, "/report")
         self.assertEqual(result.response_text, "mapped")
+        build.assert_called_once_with("/report", db_path=None, default_days=7, chat_id=None)
+
+    def test_button_text_variation_selectors_are_normalized(self) -> None:
+        self.assertEqual(telegram_bot.normalize_incoming_command("ℹ Помощь"), "/help")
+        self.assertEqual(telegram_bot.normalize_incoming_command("📄   Отчёт"), "/report")
+
+    def test_all_reply_keyboard_buttons_dispatch_to_slash_handlers(self) -> None:
+        cases = {
+            "📊 Статус": "/status",
+            "🚨 Срочное": "/urgent",
+            "👀 Наблюдение": "/watchlist",
+            "📅 Сегодня": "/today",
+            "📄 Отчёт": "/report",
+            "🛰 Источники": "/sources",
+            "ℹ️ Помощь": "/help",
+        }
+        for button_text, expected_command in cases.items():
+            with self.subTest(button=button_text):
+                with patch("app.notify.telegram_bot.build_command_response", return_value="mapped") as build:
+                    result = telegram_bot.dispatch_input_text(button_text)
+                self.assertEqual(result.command, expected_command)
+                self.assertEqual(result.response_text, "mapped")
+                build.assert_called_once_with(expected_command, db_path=None, default_days=7, chat_id=None)
 
     def test_unknown_command_returns_help_hint(self) -> None:
         result = telegram_bot.dispatch_input_text("/unknown")
@@ -288,6 +305,51 @@ class TelegramBotTest(unittest.TestCase):
                                         text = telegram_bot._run_manual_refresh(db_path=None)
         self.assertIn("Проблемных источников: 2", text)
 
+    def test_refresh_update_sends_fast_ack_before_final_result(self) -> None:
+        update = {"update_id": 1, "message": {"chat": {"id": 123}, "text": "🔄 Обновить данные"}}
+        with patch.multiple(telegram_bot.config, TELEGRAM_CHAT_ID="123"):
+            with patch("app.notify.telegram_bot._send_response", return_value=True) as send_response:
+                with patch("app.notify.telegram_bot._run_manual_refresh", return_value="✅ Обновление завершено"):
+                    telegram_bot._process_update(update, db_path=None, proxies=None)
+
+        self.assertEqual(send_response.call_count, 2)
+        self.assertIn("Обновление запущено", send_response.call_args_list[0].kwargs["text"])
+        self.assertIn("Обновление завершено", send_response.call_args_list[1].kwargs["text"])
+
+    def test_period_reply_buttons_resolve_before_default_period_lookup(self) -> None:
+        db_path = self._offset_path("telegram_period_buttons.db")
+        cases = {
+            "🚨 Срочное": "/urgent 7",
+            "👀 Наблюдение": "/watchlist 7",
+            "📄 Отчёт": "/report 7",
+        }
+        with patch.multiple(telegram_bot.config, TELEGRAM_CHAT_ID="123"):
+            for button_text, expected_text in cases.items():
+                with self.subTest(button=button_text):
+                    update = {"update_id": 1, "message": {"chat": {"id": 123}, "text": button_text}}
+                    with patch("app.notify.telegram_bot._send_response", return_value=True):
+                        with patch("app.notify.telegram_bot._send_report_attachment", return_value=True):
+                            with patch("app.notify.telegram_bot.build_command_response", return_value="ok") as build:
+                                telegram_bot._process_update(update, db_path=str(db_path), proxies=None)
+                    self.assertEqual(build.call_args.args[0], expected_text)
+
+    def test_search_button_prompts_and_next_message_searches_archive(self) -> None:
+        telegram_bot._pending_search_chats.clear()
+        db_path = self._offset_path("telegram_search_flow.db")
+        update_prompt = {"update_id": 1, "message": {"chat": {"id": 123}, "text": "🔎 Поиск"}}
+        update_query = {"update_id": 2, "message": {"chat": {"id": 123}, "text": "экспорт"}}
+
+        with patch.multiple(telegram_bot.config, TELEGRAM_CHAT_ID="123"):
+            with patch("app.notify.telegram_bot._send_response", return_value=True) as send_response:
+                with patch("app.notify.telegram_bot.build_command_response", return_value="search result") as build:
+                    telegram_bot._process_update(update_prompt, db_path=str(db_path), proxies=None)
+                    telegram_bot._process_update(update_query, db_path=str(db_path), proxies=None)
+
+        self.assertIn("Введите запрос для поиска по архиву", send_response.call_args_list[0].kwargs["text"])
+        build.assert_called_once()
+        self.assertEqual(build.call_args.args[0], "/search экспорт")
+        self.assertEqual(send_response.call_args_list[1].kwargs["text"], "search result")
+
     def test_period_command_persists_and_reuses_default_days_per_chat(self) -> None:
         update_explicit = {"update_id": 1, "message": {"chat": {"id": 123}, "text": "/report 30"}}
         update_plain = {"update_id": 2, "message": {"chat": {"id": 123}, "text": "/report"}}
@@ -304,7 +366,7 @@ class TelegramBotTest(unittest.TestCase):
 
     def test_tracked_button_dispatches_tracked_command(self) -> None:
         with patch("app.notify.telegram_bot.build_command_response", return_value="tracked"):
-            result = telegram_bot.dispatch_input_text("⭐ Отслеживаемое")
+            result = telegram_bot.dispatch_input_text("/tracked")
         self.assertEqual(result.command, "/tracked")
         self.assertEqual(result.response_text, "tracked")
 

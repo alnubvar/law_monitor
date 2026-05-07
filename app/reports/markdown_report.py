@@ -10,6 +10,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from app.config import get_source_role
 from app.models import DigestItem, RawDocument, SourceErrorRecord
+from app.user_facing import user_facing_action_level, user_facing_title
 
 VISIBLE_WATCHLIST_PAGE_TYPES = {
     "news_background",
@@ -141,12 +142,12 @@ class ReportView:
 
 def _to_digest_item(document: RawDocument) -> DigestItem:
     return DigestItem(
-        title=document.title,
+        title=user_facing_title(document),
         region=document.region,
         source_name=document.source_name,
         url=document.url,
         importance=document.importance,
-        action_level=document.action_level,
+        action_level=user_facing_action_level(document),
         page_type=document.page_type,
         summary=document.summary,
         impact=document.impact,
@@ -248,18 +249,18 @@ def build_report_view(
         report_candidates = [
             document
             for document in report_candidates
-            if document.action_level != "irrelevant"
+            if user_facing_action_level(document) != "irrelevant"
         ]
     report_candidates = [
         document
         for document in report_candidates
-        if document.action_level in filtered_action_levels
+        if user_facing_action_level(document) in filtered_action_levels
     ]
 
     visible_candidates: list[RawDocument] = []
     hidden_service_count = 0
     for document in report_candidates:
-        if document.action_level == "requires_attention":
+        if user_facing_action_level(document) == "requires_attention":
             visible_candidates.append(document)
             continue
         if _should_show_watchlist_document(
@@ -500,7 +501,7 @@ def _build_display_sections(documents: Iterable[RawDocument]) -> dict[str, list[
 
 
 def classify_display_section(document: RawDocument) -> str:
-    if document.action_level == "requires_attention":
+    if user_facing_action_level(document) == "requires_attention":
         return "requires_attention"
     source_role = get_source_role(document.source_name)
     if source_role in {"active_support_measures", "support_documents"}:
@@ -516,7 +517,7 @@ def classify_display_section(document: RawDocument) -> str:
 
 def classify_document_bucket(document: RawDocument) -> str:
     geo_scope = _detect_geo_scope(document)
-    if document.action_level == "requires_attention":
+    if user_facing_action_level(document) == "requires_attention":
         if geo_scope in {"target_region", "federal_rf"}:
             return "requires_attention"
         if _is_support_reference_document(document):
@@ -678,10 +679,10 @@ def _format_stats(
     medium_count = sum(1 for document in documents if document.importance == "medium")
     low_count = sum(1 for document in documents if document.importance == "low")
     requires_attention_count = sum(
-        1 for document in documents if document.action_level == "requires_attention"
+        1 for document in documents if user_facing_action_level(document) == "requires_attention"
     )
     watchlist_count = sum(
-        1 for document in documents if document.action_level == "watchlist"
+        1 for document in documents if user_facing_action_level(document) == "watchlist"
     )
     background_count = sum(
         1 for document in documents if document.action_level == "background"
@@ -753,15 +754,15 @@ def _format_header_summary(
     generated_at: datetime,
 ) -> list[str]:
     requires_attention_count = sum(
-        1 for document in documents if document.action_level == "requires_attention"
+        1 for document in documents if user_facing_action_level(document) == "requires_attention"
     )
     watchlist_count = sum(
-        1 for document in documents if document.action_level == "watchlist"
+        1 for document in documents if user_facing_action_level(document) == "watchlist"
     )
     hidden_background_irrelevant_count = sum(
         1
         for document in documents
-        if document.action_level in {"background", "irrelevant"}
+        if user_facing_action_level(document) in {"background", "irrelevant"}
     )
     published_with_date_count = sum(
         1 for document in documents if document.published_at is not None
@@ -804,7 +805,7 @@ def _build_reaction_summary(report_view: ReportView) -> str:
     requires_attention_documents = report_view.shown_buckets.get("requires_attention", [])
     if not requires_attention_documents:
         return "Срочных GR-сигналов не найдено."
-    titles = [document.title for document in requires_attention_documents[:3]]
+    titles = [user_facing_title(document) for document in requires_attention_documents[:3]]
     if len(requires_attention_documents) > 3:
         extra_count = len(requires_attention_documents) - 3
         return f"{'; '.join(titles)}; и еще {extra_count}."

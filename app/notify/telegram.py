@@ -16,6 +16,7 @@ from app.models import RawDocument
 from app.notify.telegram_formatter import build_digest_message
 from app.pipeline.diagnostics import build_diagnostics_snapshot
 from app.reports.markdown_report import classify_display_section, select_visible_report_documents
+from app.user_facing import user_facing_action_level, user_facing_title
 from app.storage import (
     create_tracking_item,
     deactivate_tracking_item,
@@ -57,6 +58,7 @@ TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 TELEGRAM_SAFE_MESSAGE_LENGTH = 3900
 TELEGRAM_LIST_LIMIT = 10
 TELEGRAM_WATCHLIST_USER_LIMIT = 5
+SEARCH_PROMPT_MESSAGE = "🔎 Введите запрос для поиска по архиву."
 
 
 def is_configured() -> bool:
@@ -305,9 +307,9 @@ def _build_today_message(db_path: Path | str) -> str:
     today_documents = _select_today_visible_documents(db_path)
     if not today_documents:
         return "📅 Сегодня новых срочных документов нет."
-    urgent_count = sum(1 for document in today_documents if document.action_level == "requires_attention")
-    watchlist_documents = [document for document in today_documents if document.action_level == "watchlist"]
-    urgent_documents = [document for document in today_documents if document.action_level == "requires_attention"]
+    urgent_count = sum(1 for document in today_documents if user_facing_action_level(document) == "requires_attention")
+    watchlist_documents = [document for document in today_documents if user_facing_action_level(document) == "watchlist"]
+    urgent_documents = [document for document in today_documents if user_facing_action_level(document) == "requires_attention"]
     lines = [
         f"📅 Сегодня ({_today_utc().isoformat()})",
     ]
@@ -430,7 +432,7 @@ def _build_short_report_text(documents: Sequence[RawDocument], *, days: int) -> 
         lines.append(title)
         for document in section_documents[:2]:
             reason = (document.business_signal or document.impact or document.summary or "").strip()
-            lines.append(f"- {document.title[:150]}")
+            lines.append(f"- {user_facing_title(document, max_chars=150)}")
             if reason:
                 lines.append(f"  Почему важно: {reason[:120]}")
             lines.append(f"  Ссылка: {document.url}")
@@ -477,7 +479,7 @@ def _build_sources_message(db_path: Path | str) -> str:
 def _build_search_message(db_path: Path | str, *, query: str) -> str:
     normalized_query = query.strip()
     if not normalized_query:
-        return "🔎 Укажи поисковый запрос: /search <ключевые слова>"
+        return SEARCH_PROMPT_MESSAGE
     results = search_documents(normalized_query, db_path=db_path, limit=5)
     if not results:
         return f"🔎 По запросу «{normalized_query}» ничего не найдено."
@@ -500,21 +502,16 @@ def _build_search_message(db_path: Path | str, *, query: str) -> str:
 def _build_help_message() -> str:
     return _cap_message("\n".join(
         [
-            "🤖 AHSTEP GR-monitoring команды:",
-            "/start — открыть меню GR-монитора",
-            "/status — состояние мониторинга",
-            "/today — сводка за сегодня",
-            "/urgent [days] — требует внимания (например, /urgent 30)",
-            "/watchlist [days] — наблюдение (например, /watchlist 30)",
-            "/report [days] — краткая сводка (например, /report 30)",
-            "/ocr — OCR triage queue (pending/high/top-5)",
+            "ℹ️ AHSTEP GR Monitor",
+            "Кнопки ниже открывают основные разделы мониторинга.",
+            "/status — состояние данных и источников",
+            "/urgent — документы, где нужна GR-реакция",
+            "/watchlist — материалы на наблюдении",
+            "/today — новое за сегодня",
+            "/report — краткая сводка и файл отчета",
+            "/sources — здоровье источников",
             "/search <запрос> — поиск по архиву",
-            "/track <url> — добавить документ в отслеживание",
-            "/untrack <url> — убрать документ из отслеживания",
-            "/tracked — список отслеживаемых документов",
-            "/sources — статус источников за 7 дней",
-            "/refresh — обновить collect/analyze/report (не чаще 1 раза в час)",
-            "/help — список команд",
+            "/refresh — запустить обновление данных",
         ]
     ))
 
@@ -703,11 +700,11 @@ def _format_document_lines(
     lines: list[str] = []
     for document in documents[:max_items]:
         published_label = _fmt_dt(document.published_at)
-        lines.append(f"- {document.title[:160]}")
+        lines.append(f"- {user_facing_title(document, max_chars=160)}")
         meta_parts = [f"Источник: {document.source_name}"]
         if published_label:
             meta_parts.append(f"Дата: {published_label}")
-        meta_parts.append(f"Уровень: {_format_action_level(document.action_level)}")
+        meta_parts.append(f"Уровень: {_format_action_level(user_facing_action_level(document))}")
         lines.append(f"  {' | '.join(meta_parts)}")
         reason = (document.business_signal or document.summary or "").strip()
         if reason:

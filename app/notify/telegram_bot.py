@@ -15,6 +15,7 @@ import requests
 
 from app import config
 from app.notify.telegram import (
+    SEARCH_PROMPT_MESSAGE,
     TELEGRAM_COMMANDS,
     build_command_response,
     sanitize_telegram_exception_message,
@@ -47,6 +48,7 @@ TELEGRAM_POLL_BACKOFF_MAX_SECONDS = 30.0
 TELEGRAM_POLL_IDLE_SLEEP_SECONDS = 0.3
 MANUAL_REFRESH_COOLDOWN_SECONDS = 3600
 _refresh_lock = threading.Lock()
+_pending_search_chats: set[str] = set()
 
 START_MESSAGE = (
     "AHSTEP GR Monitor запущен ✅\n\n"
@@ -67,19 +69,14 @@ BOT_COMMANDS: tuple[tuple[str, str], ...] = (
     ("watchlist", "наблюдение"),
     ("report", "последний отчет"),
     ("sources", "источники"),
-    ("ocr", "OCR triage"),
     ("search", "поиск по архиву"),
-    ("track", "добавить в отслеживание"),
-    ("untrack", "убрать из отслеживания"),
-    ("tracked", "отслеживаемые документы"),
     ("refresh", "обновить данные"),
 )
 REPLY_KEYBOARD_LAYOUT: tuple[tuple[str, ...], ...] = (
     ("📊 Статус", "🚨 Срочное"),
-    ("📅 Сегодня", "👀 Наблюдение"),
+    ("👀 Наблюдение", "📅 Сегодня"),
     ("📄 Отчёт", "🛰 Источники"),
-    ("🔎 Поиск", "⭐ Отслеживаемое"),
-    ("🔄 Обновить данные",),
+    ("🔎 Поиск", "🔄 Обновить данные"),
     ("ℹ️ Помощь",),
 )
 BUTTON_TO_COMMAND: Mapping[str, str] = {
@@ -90,9 +87,12 @@ BUTTON_TO_COMMAND: Mapping[str, str] = {
     "📄 Отчёт": "/report",
     "🛰 Источники": "/sources",
     "🔎 Поиск": "/search",
-    "⭐ Отслеживаемое": "/tracked",
     "🔄 Обновить данные": "/refresh",
     "ℹ️ Помощь": "/help",
+}
+NORMALIZED_BUTTON_TO_COMMAND: Mapping[str, str] = {
+    re.sub(r"\s+", " ", button.replace("\ufe0f", "")).strip(): command
+    for button, command in BUTTON_TO_COMMAND.items()
 }
 @dataclass(frozen=True)
 class DispatchResult:
@@ -209,6 +209,8 @@ def normalize_incoming_command(text: str) -> str | None:
     if not normalized:
         return None
     mapped_button = BUTTON_TO_COMMAND.get(normalized)
+    if not mapped_button:
+        mapped_button = NORMALIZED_BUTTON_TO_COMMAND.get(_normalize_button_text(normalized))
     if mapped_button:
         return mapped_button
     if not normalized.startswith("/"):
@@ -228,10 +230,13 @@ def dispatch_input_text(
     if command == "/start":
         return DispatchResult(command=command, response_text=START_MESSAGE)
     if command == "/refresh":
-        return DispatchResult(command=command, response_text="⏳ Обновляю данные, подождите...")
+        return DispatchResult(command=command, response_text="⏳ Обновление запущено...")
+    if command == "/search" and not _has_command_arguments(text):
+        return DispatchResult(command=command, response_text=SEARCH_PROMPT_MESSAGE)
     if command in TELEGRAM_COMMANDS:
+        command_text = _command_text_for_dispatch(command, text)
         response = build_command_response(
-            text,
+            command_text,
             db_path=db_path,
             default_days=default_days,
             chat_id=chat_id,
@@ -282,17 +287,35 @@ def _process_update(
 
     text = str(message.get("text") or "")
     incoming_command = normalize_incoming_command(text)
-    resolved_text = text
+    chat_key = str(chat_id)
+    if incoming_command is None and chat_key in _pending_search_chats:
+        _pending_search_chats.discard(chat_key)
+        response_text = build_command_response(
+            f"/search {text.strip()}",
+            db_path=db_path,
+            default_days=7,
+            chat_id=chat_id,
+        )
+        _send_response(chat_id=chat_id, text=response_text, proxies=proxies)
+        return
+    if incoming_command is not None and incoming_command != "/search":
+        _pending_search_chats.discard(chat_key)
+    resolved_text = _command_text_for_dispatch(incoming_command, text)
     default_days = 7
     if incoming_command in {"/report", "/urgent", "/watchlist"}:
         default_days, resolved_text = _resolve_period_command_text(
-            text=text,
+            text=resolved_text,
             chat_id=chat_id,
             db_path=db_path,
         )
     if incoming_command == "/refresh":
+        _send_response(chat_id=chat_id, text="⏳ Обновление запущено...", proxies=proxies)
         refresh_text = _run_manual_refresh(db_path=db_path)
         _send_response(chat_id=chat_id, text=refresh_text, proxies=proxies)
+        return
+    if incoming_command == "/search" and not _has_command_arguments(text):
+        _pending_search_chats.add(chat_key)
+        _send_response(chat_id=chat_id, text=SEARCH_PROMPT_MESSAGE, proxies=proxies)
         return
     dispatch_result = dispatch_input_text(
         resolved_text,
@@ -510,6 +533,27 @@ def _extract_report_days(text: str, *, default_days: int) -> int:
     if len(tokens) > 1 and tokens[1].isdigit():
         return max(1, min(int(tokens[1]), 365))
     return max(1, min(int(default_days), 365))
+
+
+def _command_text_for_dispatch(command: str | None, text: str) -> str:
+    if command is None:
+        return text
+    normalized = (text or "").strip()
+    if normalized.startswith("/"):
+        return normalized
+    return command
+
+
+def _normalize_button_text(text: str) -> str:
+    without_variation_selectors = (text or "").replace("\ufe0f", "")
+    return re.sub(r"\s+", " ", without_variation_selectors).strip()
+
+
+def _has_command_arguments(text: str) -> bool:
+    normalized = (text or "").strip()
+    if not normalized or not normalized.startswith("/"):
+        return False
+    return len(normalized.split(maxsplit=1)) > 1
 
 
 def _build_period_report_attachment(*, days: int, db_path: Path | str | None) -> Path | None:

@@ -135,7 +135,11 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         self.assertIn("/watchlist", text)
         self.assertIn("/report", text)
         self.assertIn("/sources", text)
-        self.assertIn("/ocr", text)
+        self.assertIn("/refresh", text)
+        self.assertNotIn("/ocr", text)
+        self.assertNotIn("/track", text)
+        self.assertNotIn("/untrack", text)
+        self.assertNotIn("/tracked", text)
 
     def test_ocr_command_shows_pending_and_top_documents(self) -> None:
         db_path = self._db_path("telegram_ocr_queue.db")
@@ -518,6 +522,47 @@ class TelegramNotifySmokeTest(unittest.TestCase):
 
         self.assertNotIn("Дата: n/a", text)
         self.assertNotIn("n/a", text)
+
+    def test_urgent_hides_news_market_background_false_attention(self) -> None:
+        db_path = self._db_path("telegram_urgent_zol_background.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=1,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Алжир проводит тендер по закупке пшеницы",
+            url="https://www.zol.ru/n/market-algeria-tender",
+            action_level="requires_attention",
+            page_type="news_background",
+        )
+        document.business_signal = "Рыночный или отраслевой фон без прямого регуляторного сигнала."
+        save_document(document, db_path)
+
+        text = telegram.build_command_response("/urgent", db_path=db_path)
+
+        self.assertIn("новых документов нет", text)
+        self.assertNotIn("Алжир проводит тендер", text)
+
+    def test_telegram_lists_use_ocr_fallback_title(self) -> None:
+        db_path = self._db_path("telegram_ocr_title_cleanup.db")
+        init_db(db_path)
+        save_document(
+            self._doc(
+                doc_id=1,
+                source_name="Нормативные акты Краснодарского края",
+                region="krasnodar",
+                title="document 'wgketjm9pqmq00n60yoyq8c0z2u13z38_cfa07cc203.pdf' requires OCR extraction",
+                url="https://admkrai.krasnodar.ru/upload/wgketjm9pqmq00n60yoyq8c0z2u13z38_cfa07cc203.pdf",
+                action_level="requires_attention",
+                page_type="new_rule",
+            ),
+            db_path,
+        )
+
+        text = telegram.build_command_response("/urgent", db_path=db_path)
+
+        self.assertIn("НПА Краснодарского края: документ после OCR", text)
+        self.assertNotIn("requires OCR extraction", text)
 
     def test_long_message_is_split_to_multiple_chunks(self) -> None:
         with patch.multiple(

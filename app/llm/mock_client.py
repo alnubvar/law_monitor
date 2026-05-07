@@ -15,6 +15,7 @@ from app.rules.business_signal_rules import (
     detect_importance,
     detect_topic,
 )
+from app.rules.news_background_guard import guard_news_signal_action_level
 from app.rules.news_rules import has_news_signal
 from app.rules.noise_rules import (
     SENTENCE_SPLIT_REGEX,
@@ -76,6 +77,7 @@ class MockLLMClient(BaseLLMClient):
             is_service_page=extracted.is_service_page,
             region=region,
         )
+        source_role = self._get_source_role(source_name)
         action_level = self._detect_action_level(
             title,
             cleaned_text,
@@ -115,6 +117,17 @@ class MockLLMClient(BaseLLMClient):
             level=level,
             region=region,
         )
+        guarded_action_level = guard_news_signal_action_level(
+            action_level,
+            source_role=source_role,
+            impact=impact,
+            signal=business_signal,
+        )
+        if guarded_action_level != action_level:
+            action_level = guarded_action_level or action_level
+            is_relevant = action_level != "irrelevant"
+            importance = self._detect_importance(action_level)
+            impact = self._build_impact(action_level, topic, facts=facts)
         reason = self._build_reason(
             action_level,
             matched_keywords,

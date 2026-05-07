@@ -25,6 +25,7 @@ from app.storage import (
     list_unnotified_requires_attention,
     mark_documents_notified,
 )
+from app.user_facing import user_facing_action_level
 
 logger = logging.getLogger(__name__)
 
@@ -54,14 +55,36 @@ def notify_new_requires_attention() -> int:
         logger.info("No new requires_attention documents to notify.")
         return 0
 
-    logger.info("Preparing Telegram alerts for %s new requires_attention documents.", len(documents))
-    sent = send_digest(documents)
+    alert_documents = [
+        document
+        for document in documents
+        if user_facing_action_level(document) == "requires_attention"
+    ]
+    suppressed_documents = [
+        document
+        for document in documents
+        if user_facing_action_level(document) != "requires_attention"
+    ]
+    if suppressed_documents:
+        mark_documents_notified(
+            [document.id for document in suppressed_documents if document.id is not None]
+        )
+        logger.info(
+            "Suppressed %s market/background documents from hourly requires_attention alert.",
+            len(suppressed_documents),
+        )
+    if not alert_documents:
+        logger.info("No user-facing requires_attention documents to notify.")
+        return 0
+
+    logger.info("Preparing Telegram alerts for %s new requires_attention documents.", len(alert_documents))
+    sent = send_digest(alert_documents)
     if not sent:
         logger.info("Telegram notification was not sent. Documents remain unnotified.")
         return 0
 
     updated = mark_documents_notified(
-        [document.id for document in documents if document.id is not None]
+        [document.id for document in alert_documents if document.id is not None]
     )
     logger.info("Marked %s documents as notified.", updated)
     return updated

@@ -5,6 +5,7 @@ from collections.abc import Sequence
 
 from app.models import RawDocument
 from app.reports.markdown_report import classify_display_section, classify_document_bucket
+from app.user_facing import user_facing_action_level, user_facing_title
 
 HOURLY_REQUIRES_ATTENTION_LIMIT = 10
 TELEGRAM_WATCHLIST_BUCKETS = {
@@ -73,10 +74,11 @@ def _partition_digest_documents(
         if document.page_type == "reference_page":
             continue
         bucket = classify_document_bucket(document)
-        if document.action_level == "requires_attention" and bucket == "requires_attention":
+        display_action_level = user_facing_action_level(document)
+        if display_action_level == "requires_attention" and bucket == "requires_attention":
             requires_attention.append(document)
             continue
-        if bucket in TELEGRAM_WATCHLIST_BUCKETS:
+        if display_action_level == "watchlist" and bucket in TELEGRAM_WATCHLIST_BUCKETS:
             watchlist.append(document)
     return requires_attention, watchlist
 
@@ -166,7 +168,7 @@ def _format_digest_item(
     *,
     include_summary: bool,
 ) -> list[str]:
-    lines = [f"- {document.title}"]
+    lines = [f"- {user_facing_title(document)}"]
     details: list[str] = []
     if document.support_status and document.support_status != "unknown":
         status_label = "активна" if document.support_status == "active" else document.support_status

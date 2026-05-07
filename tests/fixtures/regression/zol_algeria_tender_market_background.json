@@ -1,0 +1,15 @@
+{
+  "id": "zol_algeria_tender_market_background",
+  "source_name": "ZOL.ru - зерновые новости",
+  "source_role": "news_signals",
+  "expected_source_role": "news_signals",
+  "level": "news",
+  "region": "federal",
+  "title": "Алжир проводит тендер по закупке пшеницы",
+  "url": "https://www.zol.ru/n/market-algeria-tender",
+  "raw_text": "Алжир проводит тендер по закупке пшеницы. Участники рынка оценивают цены, объемы поставок и логистику.",
+  "expected_action_level": "background",
+  "expected_page_type": "unknown",
+  "expected_business_signal_contains": "Рыночный или отраслевой фон",
+  "expected_not_action_level": "requires_attention"
+}

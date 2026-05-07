@@ -1,0 +1,15 @@
+{
+  "id": "zol_pomorie_sowing_market_background",
+  "source_name": "ZOL.ru - зерновые новости",
+  "source_role": "news_signals",
+  "expected_source_role": "news_signals",
+  "level": "news",
+  "region": "federal",
+  "title": "В Поморье посевная кампания началась на три недели раньше обычного",
+  "url": "https://www.zol.ru/n/market-pomorie-sowing",
+  "raw_text": "В Поморье посевная кампания началась на три недели раньше обычного. Новость описывает ход сезонных полевых работ и погодные условия.",
+  "expected_action_level": "background",
+  "expected_page_type": "news_background",
+  "expected_business_signal_contains": "Рыночный или отраслевой фон",
+  "expected_not_action_level": "requires_attention"
+}

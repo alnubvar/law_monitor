@@ -660,6 +660,51 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertNotIn("Action level", markdown)
         self.assertNotIn("Тип страницы", markdown)
 
+    def test_report_uses_safe_ocr_title(self) -> None:
+        document = self._doc(
+            doc_id=1,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="document 'wgketjm9pqmq00n60yoyq8c0z2u13z38_cfa07cc203.pdf' requires OCR extraction",
+            url="https://admkrai.krasnodar.ru/upload/wgketjm9pqmq00n60yoyq8c0z2u13z38_cfa07cc203.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="OCR-текст регионального НПА.",
+        )
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-05",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn("НПА Краснодарского края: документ после OCR", markdown)
+        self.assertNotIn("requires OCR extraction", markdown)
+
+    def test_news_market_background_is_not_reported_as_requires_attention(self) -> None:
+        document = self._doc(
+            doc_id=1,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Алжир проводит тендер по закупке пшеницы",
+            url="https://www.zol.ru/n/market-algeria-tender",
+            action_level="requires_attention",
+            page_type="news_background",
+            summary="Рыночная новость.",
+        )
+        document.business_signal = "Рыночный или отраслевой фон без прямого регуляторного сигнала."
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-05",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn("Новых пунктов, требующих внимания, не найдено.", markdown)
+        self.assertNotIn("### Алжир проводит тендер", markdown)
+
 
 if __name__ == "__main__":
     unittest.main()

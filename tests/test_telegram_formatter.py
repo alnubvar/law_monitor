@@ -170,6 +170,38 @@ class TelegramFormatterTest(unittest.TestCase):
 
         send_message_mock.assert_not_called()
 
+    def test_hourly_alert_skips_news_market_background_false_attention(self) -> None:
+        document = self._doc(
+            doc_id=1,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Алжир проводит тендер по закупке пшеницы",
+            url="https://www.zol.ru/n/market-algeria-tender",
+            action_level="requires_attention",
+            page_type="news_background",
+        )
+        document.business_signal = "Рыночный или отраслевой фон без прямого регуляторного сигнала."
+
+        text = build_digest_message([document])
+
+        self.assertEqual(text, "Новых документов для уведомления не найдено.")
+
+    def test_formatter_uses_safe_ocr_title(self) -> None:
+        document = self._doc(
+            doc_id=1,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="document 'wgketjm9pqmq00n60yoyq8c0z2u13z38_cfa07cc203.pdf' requires OCR extraction",
+            url="https://admkrai.krasnodar.ru/upload/wgketjm9pqmq00n60yoyq8c0z2u13z38_cfa07cc203.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
+        )
+
+        text = build_digest_message([document])
+
+        self.assertIn("НПА Краснодарского края: документ после OCR", text)
+        self.assertNotIn("requires OCR extraction", text)
+
 
 if __name__ == "__main__":
     unittest.main()
