@@ -344,5 +344,156 @@ class VisibilityDecisionTest(unittest.TestCase):
         self.assertEqual(effective_user_action_level(document), "watchlist")
 
 
+class StrategyRelevanceGateTest(unittest.TestCase):
+    """Tests for _is_executive_strategy_relevant via should_show_document.
+
+    The strategy relevance gate must require agro/food context — trade or finance
+    terms alone (e.g. railway tariffs, regional budget credits) must not pass.
+    """
+
+    def _strategy_doc(
+        self,
+        *,
+        doc_id: int,
+        title: str,
+        summary: str = "",
+        raw_text: str = "",
+        page_type: str = "new_rule",
+        action_level: str = "watchlist",
+        source_name: str = "Правительство РФ - документы",
+        region: str = "federal",
+    ) -> RawDocument:
+        now = datetime.now(timezone.utc)
+        return RawDocument(
+            id=doc_id,
+            source_name=source_name,
+            source_url="https://government.ru/docs/",
+            level="federal",
+            region=region,
+            title=title,
+            url=f"https://government.ru/docs/{doc_id}/",
+            published_at=now,
+            collected_at=now,
+            content_hash=f"strategy-gate-{doc_id}",
+            raw_text=raw_text,
+            is_relevant=True,
+            relevance_reason="reason",
+            importance="medium",
+            action_level=action_level,
+            page_type=page_type,
+            summary=summary,
+            impact="impact",
+            topic="topic",
+        )
+
+    # --- items that must be HIDDEN (no agro context) ---
+
+    def test_passenger_rail_concept_with_tariff_in_raw_text_is_hidden(self) -> None:
+        document = self._strategy_doc(
+            doc_id=200,
+            title="Правительство утвердило Концепцию развития перевозок пассажиров железнодорожным транспортом",
+            summary="Концепция пассажирских железнодорожных перевозок в пригородном сообщении.",
+            raw_text=(
+                "Концепция предусматривает развитие тарифной политики на пригородные перевозки, "
+                "обновление подвижного состава и финансирование инфраструктуры."
+            ),
+        )
+        self.assertFalse(should_show_document(document, surface="report"))
+        self.assertFalse(should_show_document(document, surface="telegram_digest"))
+
+    def test_bridge_reconstruction_with_financing_in_raw_text_is_hidden(self) -> None:
+        document = self._strategy_doc(
+            doc_id=201,
+            title="Правительство направит опережающее финансирование на реконструкцию моста в Калининградской области",
+            summary="Реконструкция транспортной инфраструктуры, мостовой переход.",
+            raw_text=(
+                "Финансирование выделено на реконструкцию мостового перехода. "
+                "Экспортный потенциал порта учитывается при планировании тарифов."
+            ),
+        )
+        self.assertFalse(should_show_document(document, surface="report"))
+        self.assertFalse(should_show_document(document, surface="telegram_digest"))
+
+    def test_zemsky_teacher_program_is_hidden(self) -> None:
+        document = self._strategy_doc(
+            doc_id=202,
+            title="Для участия в программе «Земский учитель» подано более 8 тыс. заявок",
+            summary="Итоги заявочной кампании образовательной программы.",
+            raw_text="Программа поддержки учителей в сельской местности. Финансирование — 1 млн руб.",
+        )
+        self.assertFalse(should_show_document(document, surface="report"))
+        self.assertFalse(should_show_document(document, surface="telegram_digest"))
+
+    def test_budget_credit_writeoff_for_regions_is_hidden(self) -> None:
+        document = self._strategy_doc(
+            doc_id=203,
+            title="Правительство списало задолженность по бюджетным кредитам 21 региону",
+            summary="Решение по бюджетным кредитам регионов.",
+            raw_text="Решение принято в рамках реструктуризации бюджетной задолженности субъектов РФ.",
+        )
+        self.assertFalse(should_show_document(document, surface="report"))
+        self.assertFalse(should_show_document(document, surface="telegram_digest"))
+
+    def test_generic_economy_meeting_with_export_mention_is_hidden(self) -> None:
+        document = self._strategy_doc(
+            doc_id=204,
+            title="Александр Новак провёл совещание по ситуации в экономике",
+            summary="Совещание по макроэкономическим показателям.",
+            raw_text=(
+                "Обсуждались вопросы экспорта, импорта и тарифного регулирования в общеэкономическом контексте."
+            ),
+        )
+        self.assertFalse(should_show_document(document, surface="report"))
+        self.assertFalse(should_show_document(document, surface="telegram_digest"))
+
+    # --- items that must be VISIBLE (have agro context) ---
+
+    def test_apk_export_support_program_is_visible(self) -> None:
+        document = self._strategy_doc(
+            doc_id=210,
+            title="Правительство расширило программу господдержки экспортеров АПК",
+            summary="Поддержка экспорта АПК, субсидии и параметры программы.",
+            raw_text="Программа охватывает экспортёров сельхозпродукции, зерна и масличных культур.",
+        )
+        self.assertTrue(should_show_document(document, surface="report"))
+        self.assertTrue(should_show_document(document, surface="telegram_digest"))
+
+    def test_grain_export_quota_is_visible(self) -> None:
+        document = self._strategy_doc(
+            doc_id=211,
+            title="Правительство скорректировало экспортную квоту на зерно",
+            summary="Изменены параметры экспортной квоты для российских поставок зерна.",
+            raw_text="Квота на экспорт зерна изменена с учётом балансовых показателей урожая пшеницы.",
+        )
+        self.assertTrue(should_show_document(document, surface="report"))
+
+    def test_fertilizer_export_regulation_is_visible(self) -> None:
+        document = self._strategy_doc(
+            doc_id=212,
+            title="Правительство ввело новые правила экспорта удобрений",
+            summary="Регулирование экспорта азотных и фосфорных удобрений.",
+            raw_text="Правила устанавливают квоты и пошлины на экспорт удобрений для нужд АПК.",
+        )
+        self.assertTrue(should_show_document(document, surface="report"))
+
+    def test_selkhozproduct_subsidy_with_selhkhoz_term_is_visible(self) -> None:
+        document = self._strategy_doc(
+            doc_id=213,
+            title="Минсельхоз расширил перечень субсидируемых направлений",
+            summary="Расширение программы субсидирования сельхозпроизводителей.",
+            raw_text="Субсидии распространены на сельхозпроизводителей зерновых и масличных культур.",
+        )
+        self.assertTrue(should_show_document(document, surface="report"))
+
+    def test_dairy_support_measure_is_visible(self) -> None:
+        document = self._strategy_doc(
+            doc_id=214,
+            title="Утверждены условия господдержки молочного скотоводства",
+            summary="Субсидирование производителей молока.",
+            raw_text="Новые условия предоставления субсидий на производство молока и молочной продукции.",
+        )
+        self.assertTrue(should_show_document(document, surface="report"))
+
+
 if __name__ == "__main__":
     unittest.main()

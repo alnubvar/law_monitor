@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from app.models import RawDocument
+from app.models import ActionLevel, PageType, RawDocument
 from app.reports.markdown_report import (
     build_report_view,
     classify_document_bucket,
@@ -917,7 +917,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             doc_id=21,
             source_name="Правительство РФ - новости",
             region="federal",
-            title="Правительство РФ одобрило изменения в господдержке экспорта",
+            title="Правительство РФ одобрило изменения в господдержке экспорта АПК",
             url="http://government.ru/news/58669/",
             action_level="watchlist",
             page_type="news_background",
@@ -927,7 +927,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             doc_id=22,
             source_name="Правительство РФ - документы",
             region="federal",
-            title="Правительство РФ одобрило изменения в господдержке экспорта",
+            title="Правительство РФ одобрило изменения в господдержке экспорта АПК",
             url="http://government.ru/docs/58669/",
             action_level="watchlist",
             page_type="new_rule",
@@ -1432,6 +1432,106 @@ class ReportGenerationSmokeTest(unittest.TestCase):
 
         self.assertIn("### Изменены условия субсидирования", markdown)
         self.assertEqual(document.title, original_title)
+
+
+class StrategyNoiseMdRegressionTest(unittest.TestCase):
+    """Markdown-level regression: strategy items without agro context must not leak."""
+
+    def _strategy_doc(
+        self,
+        *,
+        doc_id: int,
+        title: str,
+        summary: str = "",
+        raw_text: str = "",
+        page_type: PageType = "new_rule",
+        action_level: ActionLevel = "watchlist",
+    ) -> RawDocument:
+        now = datetime.now(timezone.utc)
+        return RawDocument(
+            id=doc_id,
+            source_name="Правительство РФ - документы",
+            source_url="https://government.ru/docs/",
+            level="federal",
+            region="federal",
+            title=title,
+            url=f"https://government.ru/docs/{doc_id}/",
+            published_at=now,
+            collected_at=now,
+            content_hash=f"md-strategy-{doc_id}",
+            raw_text=raw_text,
+            is_relevant=True,
+            relevance_reason="reason",
+            importance="medium",
+            action_level=action_level,
+            page_type=page_type,
+            summary=summary,
+            impact="impact",
+            topic="topic",
+        )
+
+    def _generate(self, documents: list) -> str:
+        return generate_markdown_report(
+            documents,
+            report_date="2026-05-08",
+            period_days=7,
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+    def test_passenger_rail_with_tariff_in_raw_text_absent_from_strategy_section(self) -> None:
+        document = self._strategy_doc(
+            doc_id=500,
+            title="Правительство утвердило Концепцию развития перевозок пассажиров железнодорожным транспортом",
+            summary="Концепция пассажирских железнодорожных перевозок в пригородном сообщении.",
+            raw_text=(
+                "Концепция предусматривает развитие тарифной политики пригородных перевозок, "
+                "обновление подвижного состава и поэтапное финансирование инфраструктуры."
+            ),
+        )
+        markdown = self._generate([document])
+        self.assertIn("Новых стратегических сигналов не найдено.", markdown)
+        self.assertNotIn("пассажиров железнодорожным", markdown)
+
+    def test_regional_budget_credits_with_finance_in_raw_text_absent_from_strategy_section(self) -> None:
+        document = self._strategy_doc(
+            doc_id=501,
+            title="Правительство списало задолженность по бюджетным кредитам ещё 21 региону",
+            summary="Решение по бюджетным кредитам регионов.",
+            raw_text=(
+                "Решение принято в рамках реструктуризации бюджетной задолженности. "
+                "Финансирование направлено на погашение долговых обязательств субъектов."
+            ),
+        )
+        markdown = self._generate([document])
+        self.assertIn("Новых стратегических сигналов не найдено.", markdown)
+        self.assertNotIn("бюджетным кредитам", markdown)
+
+    def test_apk_export_support_with_selkhozprodukt_in_raw_text_visible_in_strategy_section(self) -> None:
+        document = self._strategy_doc(
+            doc_id=502,
+            title="Правительство расширило программу поддержки экспорта АПК",
+            summary="Параметры программы финансирования экспорта сельхозпродукции.",
+            raw_text=(
+                "Программа охватывает сельхозпроизводителей зерновых и масличных культур. "
+                "Субсидии на экспорт зерна и подсолнечника."
+            ),
+        )
+        markdown = self._generate([document])
+        self.assertIn("Правительство расширило программу поддержки экспорта АПК", markdown)
+        self.assertNotIn("Новых стратегических сигналов не найдено.", markdown)
+
+    def test_fertilizer_regulation_with_udobrenie_in_raw_text_visible_in_strategy_section(self) -> None:
+        document = self._strategy_doc(
+            doc_id=503,
+            title="Правительство ввело квоты на экспорт азотных удобрений",
+            summary="Квотирование экспорта удобрений.",
+            raw_text=(
+                "Введены квоты на вывоз азотных и сложных удобрений в целях насыщения внутреннего рынка АПК."
+            ),
+        )
+        markdown = self._generate([document])
+        self.assertIn("Правительство ввело квоты на экспорт азотных удобрений", markdown)
 
 
 if __name__ == "__main__":
