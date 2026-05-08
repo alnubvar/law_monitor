@@ -11,6 +11,8 @@ WATCHLIST_NOISE_PATTERNS = (
     "аналитик",
     "аналитика",
     "рейтинг",
+    "рэнкинг",
+    "индекс",
     "фрахт",
     "фрахтов",
     "отгруз",
@@ -29,6 +31,41 @@ WATCHLIST_NOISE_PATTERNS = (
     "зерновой рынок",
     "погодн",
 )
+WEAK_MEETING_PATTERNS = (
+    "совещан",
+    "встреч",
+    "заседан",
+    "форум",
+    "сесс",
+    "обсуд",
+    "переговор",
+)
+WEAK_INFRASTRUCTURE_PATTERNS = (
+    "мост",
+    "путепровод",
+    "дорог",
+    "развяз",
+    "железнодорож",
+    "пассажир",
+    "вокзал",
+    "аэропорт",
+    "инфраструктур",
+    "реконструкц",
+    "строительств",
+)
+GENERIC_EXPORT_PRICE_PATTERNS = (
+    "цены",
+    "стоимост",
+    "котиров",
+    "бирж",
+    "подорож",
+    "подешев",
+    "вырос",
+    "сниз",
+    "обзор",
+    "прогноз",
+    "статист",
+)
 WATCHLIST_GR_SIGNAL_PATTERNS = (
     "господдерж",
     "субсид",
@@ -42,9 +79,6 @@ WATCHLIST_GR_SIGNAL_PATTERNS = (
     "изменения правил",
     "изменение порядка",
     "изменения порядка",
-    "правительств",
-    "кабмин",
-    "минсельхоз",
     "поручени",
     "утверд",
     "запуст",
@@ -60,10 +94,52 @@ WATCHLIST_GR_SIGNAL_PATTERNS = (
     "срок подач",
     "дедлайн",
 )
+GOVERNMENT_ACTION_ENTITY_PATTERNS = (
+    "правительств",
+    "кабмин",
+    "минсельхоз",
+)
+GOVERNMENT_ACTION_VERB_PATTERNS = (
+    "утверд",
+    "поруч",
+    "измен",
+    "запуст",
+    "расшир",
+    "ввел",
+    "введ",
+    "скоррект",
+    "одобр",
+)
+WATCHLIST_VISIBLE_CONTEXT_PATTERNS = (
+    "апк",
+    "сельск",
+    "аграр",
+    "растениевод",
+    "животновод",
+    "продовольств",
+    "зерн",
+    "пшениц",
+)
+EXPORT_ACTION_PATTERNS = (
+    "пошлин",
+    "пошлина",
+    "квот",
+    "ограничен",
+    "запрет",
+    "тамож",
+    "вывоз",
+    "срок",
+    "дедлайн",
+    "поддержк",
+    "субсид",
+)
 NEGATED_GR_SIGNAL_PATTERNS = (
     r"без(?:\s+\w+){0,4}\s+решени\w*\s+правительств",
     r"без(?:\s+\w+){0,4}\s+господдерж",
     r"без(?:\s+\w+){0,4}\s+субсид",
+    r"без(?:\s+\w+){0,4}\s+пошлин",
+    r"без(?:\s+\w+){0,4}\s+квот",
+    r"без(?:\s+\w+){0,4}\s+ограничен",
     r"без(?:\s+\w+){0,4}\s+регулятор",
     r"без(?:\s+\w+){0,4}\s+регулир",
 )
@@ -192,6 +268,12 @@ def _should_downgrade_watchlist_noise(
         return False
     if any(re.search(pattern, signal_text) for pattern in NEGATED_GR_SIGNAL_PATTERNS):
         return any(pattern in noise_text for pattern in WATCHLIST_NOISE_PATTERNS)
+    if _has_explicit_visible_gr_signal(signal_text):
+        return False
+    if _looks_generic_export_or_price_story(signal_text):
+        return True
+    if _looks_weak_meeting_or_infrastructure_story(signal_text):
+        return True
     if any(pattern in signal_text for pattern in WATCHLIST_GR_SIGNAL_PATTERNS):
         return False
     return any(pattern in noise_text for pattern in WATCHLIST_NOISE_PATTERNS)
@@ -227,3 +309,39 @@ def _should_downgrade_foreign_trade_signal(
     if any(marker in combined_text for marker in RF_RELEVANCE_MARKERS):
         return False
     return True
+
+
+def _has_explicit_visible_gr_signal(text: str) -> bool:
+    if _has_strong_watchlist_gr_signal(text):
+        return True
+    has_visible_context = any(pattern in text for pattern in WATCHLIST_VISIBLE_CONTEXT_PATTERNS)
+    has_export_action = any(pattern in text for pattern in EXPORT_ACTION_PATTERNS)
+    return has_visible_context and has_export_action
+
+
+def _looks_generic_export_or_price_story(text: str) -> bool:
+    if "экспорт" not in text:
+        return False
+    if any(pattern in text for pattern in EXPORT_ACTION_PATTERNS):
+        return False
+    return any(pattern in text for pattern in GENERIC_EXPORT_PRICE_PATTERNS)
+
+
+def _looks_weak_meeting_or_infrastructure_story(text: str) -> bool:
+    has_weak_meeting = any(pattern in text for pattern in WEAK_MEETING_PATTERNS)
+    has_weak_infra = any(pattern in text for pattern in WEAK_INFRASTRUCTURE_PATTERNS)
+    if not has_weak_meeting and not has_weak_infra:
+        return False
+    if any(pattern in text for pattern in WATCHLIST_VISIBLE_CONTEXT_PATTERNS):
+        return False
+    if any(pattern in text for pattern in WATCHLIST_GR_SIGNAL_PATTERNS):
+        return False
+    return True
+
+
+def _has_strong_watchlist_gr_signal(text: str) -> bool:
+    if any(pattern in text for pattern in WATCHLIST_GR_SIGNAL_PATTERNS):
+        return True
+    has_entity = any(pattern in text for pattern in GOVERNMENT_ACTION_ENTITY_PATTERNS)
+    has_action_verb = any(pattern in text for pattern in GOVERNMENT_ACTION_VERB_PATTERNS)
+    return has_entity and has_action_verb

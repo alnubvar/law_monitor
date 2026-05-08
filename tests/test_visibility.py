@@ -180,6 +180,95 @@ class VisibilityDecisionTest(unittest.TestCase):
         self.assertTrue(should_show_document(document, surface="telegram_digest", relevant_only=False))
         self.assertTrue(should_show_document(document, surface="telegram_list", relevant_only=False))
 
+    def test_generic_export_price_news_is_downgraded_to_background(self) -> None:
+        document = self._doc(
+            doc_id=73,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Экспорт зерна вырос на фоне мировых цен",
+            url="https://www.zol.ru/n/export-prices",
+            action_level="watchlist",
+            page_type="news_background",
+            summary="Обзор экспортных цен и рыночной конъюнктуры.",
+        )
+        document.business_signal = "Новостной предвестник возможных изменений господдержки, экспорта или регулирования."
+        document.raw_text = "Аналитики обсуждают мировые цены, статистику поставок и динамику экспорта зерна."
+
+        self.assertEqual(effective_user_action_level(document), "background")
+        self.assertFalse(
+            should_show_document(
+                document,
+                surface="report",
+                relevant_only=False,
+                action_levels=["requires_attention", "watchlist"],
+            )
+        )
+
+    def test_generic_government_meeting_without_agro_signal_is_downgraded(self) -> None:
+        document = self._doc(
+            doc_id=74,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="В правительстве обсудили развитие транспортной инфраструктуры",
+            url="https://www.zol.ru/n/infra-meeting",
+            action_level="watchlist",
+            page_type="news_background",
+            summary="Совещание по дорогам, мостам и логистике.",
+        )
+        document.business_signal = "Новостной предвестник возможных изменений господдержки, экспорта или регулирования."
+        document.raw_text = "На совещании обсуждались дороги, мосты, пассажирские перевозки и реконструкция узлов."
+
+        self.assertEqual(effective_user_action_level(document), "background")
+        self.assertFalse(
+            should_show_document(
+                document,
+                surface="report",
+                relevant_only=False,
+                action_levels=["requires_attention", "watchlist"],
+            )
+        )
+
+    def test_infrastructure_news_for_target_region_without_agro_relevance_is_downgraded(self) -> None:
+        document = self._doc(
+            doc_id=75,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="В Краснодарском крае реконструируют пассажирский железнодорожный мост",
+            url="https://www.zol.ru/n/krasnodar-bridge",
+            action_level="watchlist",
+            page_type="news_background",
+            summary="Инфраструктурный проект по пассажирскому сообщению и мостовому переходу.",
+        )
+        document.business_signal = "Новостной предвестник возможных изменений господдержки, экспорта или регулирования."
+        document.raw_text = "Проект посвящен пассажирскому сообщению, мосту и реконструкции транспортной инфраструктуры."
+
+        self.assertEqual(effective_user_action_level(document), "background")
+        self.assertFalse(
+            should_show_document(
+                document,
+                surface="report",
+                relevant_only=False,
+                action_levels=["requires_attention", "watchlist"],
+            )
+        )
+
+    def test_target_region_agriculture_regulation_remains_visible_watchlist(self) -> None:
+        document = self._doc(
+            doc_id=76,
+            source_name="Правительство РФ - новости",
+            region="federal",
+            title="В Ростовской области обсудили новые меры господдержки АПК",
+            url="https://government.ru/news/rostov-apk-support",
+            action_level="watchlist",
+            page_type="news_background",
+            summary="Речь идет о мерах поддержки, субсидиях и условиях для сельского хозяйства региона.",
+        )
+        document.business_signal = "Новостной предвестник возможных изменений господдержки, экспорта или регулирования."
+        document.raw_text = "Правительство и Минсельхоз обсуждают субсидии, господдержку АПК и параметры региональной программы."
+
+        self.assertEqual(effective_user_action_level(document), "watchlist")
+        self.assertTrue(should_show_document(document, surface="report", relevant_only=False))
+
     def test_foreign_quota_news_is_not_user_facing_requires_attention(self) -> None:
         document = self._doc(
             doc_id=71,

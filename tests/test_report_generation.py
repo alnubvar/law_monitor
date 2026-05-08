@@ -483,7 +483,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             action_levels=["requires_attention", "watchlist"],
         )
 
-        self.assertIn("Проверить влияние на экспорт и меры поддержки.", markdown)
+        self.assertIn("Проверить влияние пошлины/торгового регулирования на рынок и контрагентов.", markdown)
         self.assertNotIn("Оставить как отраслевой фон.", markdown)
 
     def test_report_header_contains_key_counters(self) -> None:
@@ -630,6 +630,134 @@ class ReportGenerationSmokeTest(unittest.TestCase):
 
         self.assertIn("Изменения в господдержке экспорта продукции АПК", markdown)
         self.assertNotIn("пассажирского железнодорожного сообщения", markdown)
+
+    def test_markdown_strategy_section_hides_weak_strategy_items(self) -> None:
+        documents = [
+            self._doc(
+                doc_id=930,
+                source_name="Правительство РФ - новости",
+                region="federal",
+                title="Правительство направит опережающее финансирование на реконструкцию моста в Калининградской области",
+                url="https://example.test/bridge",
+                action_level="watchlist",
+                page_type="new_rule",
+                summary="Реконструкция моста и транспортной инфраструктуры региона.",
+            ),
+            self._doc(
+                doc_id=931,
+                source_name="Правительство РФ - документы",
+                region="federal",
+                title="Правительство утвердило Концепцию развития перевозок пассажиров железнодорожным транспортом",
+                url="https://example.test/passenger-rail",
+                action_level="watchlist",
+                page_type="new_rule",
+                summary="Концепция пассажирских железнодорожных перевозок.",
+            ),
+            self._doc(
+                doc_id=932,
+                source_name="Правительство РФ - новости",
+                region="federal",
+                title="Александр Новак провёл совещание по ситуации в экономике",
+                url="https://example.test/economy-meeting",
+                action_level="watchlist",
+                page_type="news_background",
+                summary="Совещание по макроэкономическим показателям.",
+            ),
+            self._doc(
+                doc_id=933,
+                source_name="Правительство РФ - новости",
+                region="federal",
+                title="Дмитрий Чернышенко: Для участия в программе «Земский учитель» подано уже более 8 тыс. заявок",
+                url="https://example.test/teacher",
+                action_level="watchlist",
+                page_type="news_background",
+                summary="Итоги заявочной кампании образовательной программы.",
+            ),
+        ]
+        documents[0].business_signal = "Стратегический федеральный сигнал по господдержке или порядку регулирования."
+        documents[0].impact = "Документ стоит держать на наблюдении: тема может затронуть АПК."
+        documents[1].business_signal = "Стратегический федеральный сигнал по господдержке или порядку регулирования."
+        documents[1].impact = "Документ стоит держать на наблюдении: тема может затронуть АПК."
+        documents[2].business_signal = "Стратегический федеральный сигнал по господдержке или порядку регулирования."
+        documents[2].impact = "Документ стоит держать на наблюдении: тема может затронуть АПК."
+        documents[3].business_signal = "Стратегический федеральный сигнал по господдержке или порядку регулирования."
+        documents[3].impact = "Документ стоит держать на наблюдении: тема может затронуть АПК."
+
+        markdown = generate_markdown_report(
+            documents,
+            report_date="2026-05-08",
+            period_days=7,
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn("## 🏛 Стратегические сигналы", markdown)
+        self.assertIn("Новых стратегических сигналов не найдено.", markdown)
+        self.assertNotIn("реконструкцию моста", markdown)
+        self.assertNotIn("пассажиров железнодорожным транспортом", markdown)
+        self.assertNotIn("ситуации в экономике", markdown)
+        self.assertNotIn("Земский учитель", markdown)
+
+    def test_markdown_strategy_section_hides_budget_credit_and_naukograd_noise(self) -> None:
+        documents = [
+            self._doc(
+                doc_id=935,
+                source_name="Правительство РФ - новости",
+                region="federal",
+                title="Правительство списало часть задолженности по бюджетным кредитам ещё 21 региону",
+                url="https://example.test/budget-credit-regions",
+                action_level="watchlist",
+                page_type="new_rule",
+                summary="Решение по бюджетным кредитам регионов без профильного отраслевого контекста.",
+            ),
+            self._doc(
+                doc_id=936,
+                source_name="Правительство РФ - новости",
+                region="federal",
+                title="Правительство направит финансирование на комплексное развитие наукоградов",
+                url="https://example.test/naukograds",
+                action_level="watchlist",
+                page_type="new_rule",
+                summary="Финансирование наукоградов и городской инфраструктуры.",
+            ),
+        ]
+        documents[0].business_signal = "Стратегический федеральный сигнал по господдержке или порядку регулирования."
+        documents[1].business_signal = "Стратегический федеральный сигнал по господдержке или порядку регулирования."
+
+        markdown = generate_markdown_report(
+            documents,
+            report_date="2026-05-08",
+            period_days=7,
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn("Новых стратегических сигналов не найдено.", markdown)
+        self.assertNotIn("бюджетным кредитам", markdown)
+        self.assertNotIn("развитие наукоградов", markdown)
+
+    def test_markdown_strategy_section_keeps_relevant_apk_strategy_item(self) -> None:
+        document = self._doc(
+            doc_id=934,
+            source_name="Правительство РФ - документы",
+            region="federal",
+            title="Правительство расширило программу господдержки экспортеров АПК",
+            url="https://example.test/apk-export-support",
+            action_level="watchlist",
+            page_type="new_rule",
+            summary="Поддержка экспорта АПК, субсидии и параметры программы финансирования.",
+        )
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-08",
+            period_days=7,
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn("## 🏛 Стратегические сигналы", markdown)
+        self.assertIn("Правительство расширило программу господдержки экспортеров АПК", markdown)
 
     def test_report_header_uses_explicit_period_label_for_seven_days(self) -> None:
         document = self._doc(

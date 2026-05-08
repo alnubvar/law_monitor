@@ -245,6 +245,29 @@ class TelegramFormatterTest(unittest.TestCase):
         )
         self.assertNotIn("Что проверить: Оставить как отраслевой фон.", text)
         self.assertNotIn("Подготовлены экспортные ограничения", text)
+        self.assertNotIn("Проверить влияние на экспорт и меры поддержки.", text)
+
+    def test_fertilizer_duty_item_uses_trade_action_not_credit_wording(self) -> None:
+        document = self._doc(
+            doc_id=32,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="США снизили импортную пошлину на фосфорные удобрения для «ФосАгро»",
+            url="https://www.zol.ru/n/fertilizer-duty",
+            action_level="requires_attention",
+            page_type="news_background",
+            summary="Изменение импортной пошлины на фосфорные удобрения.",
+        )
+        document.business_signal = "Есть признаки изменения торгового регулирования на рынке удобрений."
+        document.raw_text = "США снизили импортную пошлину для российской компании «ФосАгро» на фосфорные удобрения."
+
+        text = build_digest_message([document])
+
+        self.assertIn(
+            "Что проверить: Проверить влияние пошлины/торгового регулирования на рынок и контрагентов.",
+            text,
+        )
+        self.assertNotIn("Проверить условия кредитования, сроки и применимость для АПК.", text)
 
     def test_formatter_uses_specific_regional_npa_hint(self) -> None:
         document = self._doc(

@@ -21,7 +21,7 @@ SUBSIDY_RE = re.compile(r"субсид|грант|финансир|кредит|
 SELECTION_RE = re.compile(r"отбор|заяв|конкурс|прием", re.IGNORECASE)
 SUPPORT_RE = re.compile(r"поддержк|мер(а|ы)", re.IGNORECASE)
 EXPORT_RESTRICTION_RE = re.compile(
-    r"экспорт|квот|пошлин|пошлина|ограничен|запрет|тамож|вывоз",
+    r"экспорт|импорт|квот|пошлин|пошлина|тариф|ограничен|запрет|тамож|вывоз",
     re.IGNORECASE,
 )
 
@@ -210,8 +210,8 @@ def _deterministic_action(
     if source_role == "news_signals" and (_action_level(document) == "watchlist" or section == "news_signals"):
         return "Оставить как отраслевой фон."
     if source_role == "news_signals" and _looks_like_export_restriction(combined):
-        return "Проверить влияние на экспорт и меры поддержки."
-    if source_role == "news_signals" and _looks_like_subsidy(combined):
+        return "Проверить влияние пошлины/торгового регулирования на рынок и контрагентов."
+    if source_role == "news_signals" and _looks_like_credit_support_context(combined):
         return "Проверить условия кредитования, сроки и применимость для АПК."
     if source_role == "news_signals" and _is_support_context(combined):
         return "Проверить влияние на условия поддержки."
@@ -220,7 +220,7 @@ def _deterministic_action(
             return "Проверить изменения порядка субсидирования и сроки вступления."
         return "Проверить новые правила и сроки вступления."
     if _looks_like_export_restriction(combined):
-        return "Проверить влияние на экспорт и меры поддержки."
+        return "Проверить влияние пошлины/торгового регулирования на рынок и контрагентов."
     if _looks_like_selection(combined):
         return "Проверить условия и сроки отбора."
     if section == "strategy_signals" or source_role == "strategy":
@@ -260,8 +260,8 @@ def _compress_freeform_action(text: str, *, document: PresentationDocument) -> s
     if _source_role(document) == "news_signals" and _action_level(document) != "requires_attention":
         return "Оставить как отраслевой фон."
     if _source_role(document) == "news_signals" and _looks_like_export_restriction(combined):
-        return "Проверить влияние на экспорт и меры поддержки."
-    if _source_role(document) == "news_signals" and _looks_like_subsidy(combined):
+        return "Проверить влияние пошлины/торгового регулирования на рынок и контрагентов."
+    if _source_role(document) == "news_signals" and _looks_like_credit_support_context(combined):
         return "Проверить условия кредитования, сроки и применимость для АПК."
     if _source_role(document) == "news_signals" and _is_support_context(combined):
         return "Проверить влияние на условия поддержки."
@@ -324,6 +324,10 @@ def _is_support_measure_context(document: PresentationDocument, text: str) -> bo
 
 def _looks_like_export_restriction(text: str) -> bool:
     return bool(EXPORT_RESTRICTION_RE.search(text))
+
+
+def _looks_like_credit_support_context(text: str) -> bool:
+    return bool(re.search(r"льготн\w*\s+кредит|кредитован|заем|займ", text, re.IGNORECASE))
 
 
 def _contains_change_signal(text: str) -> bool:

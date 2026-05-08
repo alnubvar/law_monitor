@@ -74,9 +74,16 @@ GOVERNMENT_DUPLICATE_RE = re.compile(
     r"^https?://government\.ru/(?:news|docs)/(?P<doc_id>\d+)/?$",
     re.IGNORECASE,
 )
-STRATEGY_RELEVANCE_RE = re.compile(
-    r"апк|сельск(ое|ого)\s+хозяй|аграр|растениевод|животновод|продовольств|зерн|пшениц|"
-    r"экспорт|пошлин|пошлина|квот|субсид|господдерж|льготн|кредит|краснодар|ростов|ставропол",
+AGRO_STRATEGY_RE = re.compile(
+    r"апк|сельск(ое|ого)\s+хозяй|аграр|растениевод|животновод|продовольств|зерн|пшениц",
+    re.IGNORECASE,
+)
+TRADE_STRATEGY_RE = re.compile(
+    r"экспорт|импорт|пошлин|пошлина|квот|ограничен|запрет|тамож|тариф",
+    re.IGNORECASE,
+)
+SUPPORT_STRATEGY_RE = re.compile(
+    r"субсид|господдерж|льготн|кредит|финансирован|поддержк",
     re.IGNORECASE,
 )
 
@@ -216,15 +223,15 @@ def _is_executive_strategy_relevant(document: RawDocument) -> bool:
         for part in (
             document.title,
             document.summary,
-            document.business_signal,
-            document.impact,
-            document.relevance_reason,
             document.raw_text[:1200] if document.raw_text else "",
             document.source_name,
         )
         if part
     )
-    return bool(STRATEGY_RELEVANCE_RE.search(text))
+    has_agro_context = bool(AGRO_STRATEGY_RE.search(text))
+    has_trade_context = bool(TRADE_STRATEGY_RE.search(text))
+    has_support_context = bool(SUPPORT_STRATEGY_RE.search(text))
+    return has_agro_context or has_trade_context or (has_support_context and has_agro_context)
 
 
 def _should_show_watchlist_document(
