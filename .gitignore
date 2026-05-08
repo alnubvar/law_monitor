@@ -19,6 +19,8 @@ venv/
 .idea/
 .vscode/settings.json
 
+.claude
+
 node_modules/
 law_monitor_mvp.egg-info/
 
