@@ -4,7 +4,12 @@ import unittest
 from datetime import datetime, timezone
 
 from app.models import RawDocument
-from app.user_facing import build_executive_action, build_executive_reason, select_executive_summary
+from app.user_facing import (
+    build_executive_action,
+    build_executive_reason,
+    is_meaningful_executive_highlight,
+    select_executive_summary,
+)
 
 
 class UserFacingIntentCoherenceTest(unittest.TestCase):
@@ -223,6 +228,36 @@ class UserFacingIntentCoherenceTest(unittest.TestCase):
         summary = select_executive_summary(document, fallback_text=document.summary)
 
         self.assertLessEqual(len(summary), 120)
+
+    def test_weak_ocr_placeholder_is_not_meaningful_executive_highlight(self) -> None:
+        document = self._doc(
+            doc_id=11,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="document 'placeholder.pdf' requires OCR extraction",
+            url="https://admkrai.krasnodar.ru/upload/iblock/d69/placeholder.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="Документ содержит изменения в порядке предоставления поддержки; требуется проверка условий и сроков.",
+            raw_text="Распознанный текст отсутствует.",
+        )
+
+        self.assertFalse(is_meaningful_executive_highlight(document))
+
+    def test_real_credit_signal_is_meaningful_executive_highlight(self) -> None:
+        document = self._doc(
+            doc_id=12,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Минсельхоз предложил новые условия льготного кредитования АПК",
+            url="https://www.zol.ru/n/41378",
+            action_level="requires_attention",
+            page_type="news_background",
+            summary="Документ содержит изменения в порядке предоставления поддержки; требуется проверка условий и сроков.",
+            raw_text="Минсельхоз предложил обновить условия льготного кредитования АПК.",
+        )
+
+        self.assertTrue(is_meaningful_executive_highlight(document))
 
 
 if __name__ == "__main__":

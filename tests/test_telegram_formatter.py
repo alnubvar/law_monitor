@@ -317,6 +317,41 @@ class TelegramFormatterTest(unittest.TestCase):
             text,
         )
 
+    def test_daily_digest_keeps_weak_ocr_placeholder_out_of_urgent_section(self) -> None:
+        urgent = self._doc(
+            doc_id=312,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Минсельхоз предложил новые условия льготного кредитования АПК",
+            url="https://www.zol.ru/n/41378",
+            action_level="requires_attention",
+            page_type="news_background",
+            summary="Новость о правилах господдержки.",
+        )
+        urgent.business_signal = "Есть признаки изменения условий льготного кредитования для АПК."
+        urgent.notified = True
+
+        weak_ocr = self._doc(
+            doc_id=313,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="document 'weak-ocr.pdf' requires OCR extraction",
+            url="https://admkrai.krasnodar.ru/upload/iblock/d69/weak-ocr.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="OCR placeholder документ.",
+        )
+        weak_ocr.raw_text = "Распознанный текст отсутствует."
+        weak_ocr.notified = True
+
+        text = build_digest_message([urgent, weak_ocr])
+
+        urgent_block = text.split("🚨 Требует внимания (", 1)[1].split("⚖️ Региональные НПА", 1)[0]
+        self.assertIn("Минсельхоз предложил новые условия льготного кредитования АПК", urgent_block)
+        self.assertNotIn("НПА Краснодарского края: документ после OCR", urgent_block)
+        self.assertIn("⚖️ Региональные НПА (1)", text)
+        self.assertIn("НПА Краснодарского края: документ после OCR", text)
+
     def test_fertilizer_duty_item_uses_trade_action_not_credit_wording(self) -> None:
         document = self._doc(
             doc_id=32,

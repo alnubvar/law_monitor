@@ -19,6 +19,7 @@ from app.user_facing import (
     build_executive_action,
     build_executive_reason,
     disambiguate_visible_titles,
+    is_meaningful_executive_highlight,
     select_executive_summary,
     user_facing_action_level,
     user_facing_title,
@@ -726,9 +727,16 @@ def _build_reaction_summary(report_view: ReportView) -> str:
     requires_attention_documents = report_view.shown_buckets.get("requires_attention", [])
     if not requires_attention_documents:
         return "Срочных поводов для GR-реакции не выявлено."
+    meaningful_documents = [
+        document
+        for document in requires_attention_documents
+        if is_meaningful_executive_highlight(document)
+    ]
+    if not meaningful_documents:
+        return "Срочных поводов для GR-реакции не выявлено."
     titles: list[str] = []
     seen_titles: set[str] = set()
-    for document in requires_attention_documents:
+    for document in meaningful_documents:
         title = _report_title(document, max_chars=REPORT_REACTION_TITLE_MAX_CHARS)
         if title in seen_titles:
             continue
@@ -736,7 +744,7 @@ def _build_reaction_summary(report_view: ReportView) -> str:
         titles.append(title)
         if len(titles) >= 3:
             break
-    extra_count = max(len(seen_titles_from_documents(requires_attention_documents)) - len(titles), 0)
+    extra_count = max(len(seen_titles_from_documents(meaningful_documents)) - len(titles), 0)
     if extra_count > 0:
         return f"{'; '.join(titles)}; и еще {extra_count}."
     return "; ".join(titles)

@@ -668,6 +668,81 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             markdown,
         )
 
+    def test_main_focus_excludes_weak_ocr_placeholder_and_keeps_meaningful_items(self) -> None:
+        strong_regional = self._doc(
+            doc_id=913,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="О внесении изменений в порядок предоставления субсидий",
+            url="https://admkrai.krasnodar.ru/upload/iblock/f90/a.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="Документ содержит изменения в порядке предоставления поддержки; требуется проверка условий и сроков.",
+        )
+        weak_ocr = self._doc(
+            doc_id=914,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="document 'weak-ocr.pdf' requires OCR extraction",
+            url="https://admkrai.krasnodar.ru/upload/iblock/d69/weak-ocr.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="OCR placeholder документ.",
+        )
+        weak_ocr.raw_text = "Распознанный текст отсутствует."
+        credit_news = self._doc(
+            doc_id=915,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Минсельхоз предложил новые условия льготного кредитования АПК",
+            url="https://www.zol.ru/n/41378",
+            action_level="requires_attention",
+            page_type="news_background",
+            summary="Документ содержит изменения в порядке предоставления поддержки; требуется проверка условий и сроков.",
+        )
+
+        markdown = generate_markdown_report(
+            [strong_regional, weak_ocr, credit_news],
+            report_date="2026-05-08",
+            period_days=7,
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn(
+            "Главный акцент: Изменены условия субсидирования; Минсельхоз предложил новые условия льготного кредитования АПК",
+            markdown,
+        )
+        self.assertNotIn("Главный акцент: НПА Краснодарского края: документ после OCR", markdown)
+        self.assertNotIn("документ после OCR; Минсельхоз", markdown)
+
+    def test_main_focus_falls_back_to_no_urgent_when_only_weak_placeholder_exists(self) -> None:
+        weak_ocr = self._doc(
+            doc_id=916,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="НПА Краснодарского края: документ после OCR",
+            url="https://admkrai.krasnodar.ru/upload/iblock/d69/fallback-ocr.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="OCR placeholder документ.",
+        )
+        weak_ocr.raw_text = (
+            "Документ после OCR требует ручной проверки. Распознанный текст частично отсутствует, "
+            "структура фрагментарна и не позволяет уверенно выделить условия меры."
+        )
+
+        markdown = generate_markdown_report(
+            [weak_ocr],
+            report_date="2026-05-08",
+            period_days=7,
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn("Главный акцент: Срочных поводов для GR-реакции не выявлено.", markdown)
+        self.assertNotIn("Главный акцент: НПА Краснодарского края: документ после OCR", markdown)
+
     def test_weak_strategy_items_are_hidden_from_executive_report(self) -> None:
         weak_strategy = self._doc(
             doc_id=920,
