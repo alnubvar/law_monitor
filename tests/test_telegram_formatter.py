@@ -529,6 +529,53 @@ class TelegramFormatterTest(unittest.TestCase):
         self.assertEqual(compressed, "Изменены условия субсидирования")
         self.assertEqual(document.title, original_title)
 
+    def test_daily_digest_disambiguates_two_documents_with_same_compressed_title(self) -> None:
+        doc1 = self._doc(
+            doc_id=801,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="Об утверждении порядка предоставления субсидий на молочное скотоводство",
+            url="https://admkrai.krasnodar.ru/upload/iblock/9a3/d1.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="Изменены условия субсидирования молочного направления.",
+        )
+        doc2 = self._doc(
+            doc_id=802,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="Об утверждении порядка предоставления субсидий на развитие растениеводства",
+            url="https://admkrai.krasnodar.ru/upload/iblock/c24/d2.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="Изменены условия субсидирования растениеводства.",
+        )
+        text = build_digest_message([doc1, doc2])
+        # Both items must be present
+        self.assertIn("iblock/9a3", text)
+        self.assertIn("iblock/c24", text)
+        # The base title appears (as a prefix of the disambiguated titles)
+        self.assertIn("Утверждены условия субсидирования", text)
+        # The two items must NOT share the exact same title line
+        title_lines = [ln for ln in text.splitlines() if ln.startswith("- Утверждены условия субсидирования")]
+        self.assertEqual(len(title_lines), 2)
+        self.assertNotEqual(title_lines[0], title_lines[1])
+
+    def test_daily_digest_no_suffix_when_only_one_document(self) -> None:
+        doc = self._doc(
+            doc_id=803,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="Об утверждении порядка предоставления субсидий на молочное скотоводство",
+            url="https://admkrai.krasnodar.ru/upload/iblock/9a3/only.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
+        )
+        text = build_digest_message([doc])
+        self.assertIn("Утверждены условия субсидирования", text)
+        self.assertNotIn("(документ", text)
+        self.assertNotIn("(№", text)
+
 
 if __name__ == "__main__":
     unittest.main()

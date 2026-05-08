@@ -10,6 +10,7 @@ from app.storage import list_document_enrichments
 from app.user_facing import (
     build_executive_action,
     build_executive_reason,
+    disambiguate_visible_titles,
     select_executive_summary,
     user_facing_title,
 )
@@ -103,6 +104,7 @@ def _build_hourly_alert(
     enrichment_by_url: dict[str, dict[str, object]],
 ) -> str:
     visible = list(documents[:HOURLY_REQUIRES_ATTENTION_LIMIT])
+    title_by_id = disambiguate_visible_titles(visible, max_chars=100)
     lines = [f"🚨 Новые документы, требующие внимания: {len(documents)}"]
     for document in visible:
         lines.extend(
@@ -110,6 +112,7 @@ def _build_hourly_alert(
                 document,
                 include_summary=True,
                 enrichment=get_display_enrichment(enrichment_by_url.get(document.url)),
+                title_override=title_by_id.get(document.id),
             )
         )
     hidden_count = len(documents) - len(visible)
@@ -133,6 +136,13 @@ def _build_daily_digest(
         section = classify_display_section(document)
         if section in sections:
             sections[section].append(document)
+
+    all_visible = [
+        doc
+        for sec in DAILY_SECTION_ORDER
+        for doc in sections[sec][: DAILY_SECTION_LIMITS[sec]]
+    ]
+    title_by_id = disambiguate_visible_titles(all_visible, max_chars=100)
 
     lines = [
         "🧾 Ежедневная GR-сводка",
@@ -158,6 +168,7 @@ def _build_daily_digest(
                     document,
                     include_summary=include_summary,
                     enrichment=get_display_enrichment(enrichment_by_url.get(document.url)),
+                    title_override=title_by_id.get(document.id),
                 )
             )
         hidden_count = len(section_documents) - len(visible)
@@ -194,8 +205,9 @@ def _format_digest_item(
     *,
     include_summary: bool,
     enrichment: dict[str, str] | None = None,
+    title_override: str | None = None,
 ) -> list[str]:
-    lines = [f"- {user_facing_title(document, max_chars=100)}"]
+    lines = [f"- {title_override or user_facing_title(document, max_chars=100)}"]
     details: list[str] = []
     if document.support_status and document.support_status != "unknown":
         status_label = "активна" if document.support_status == "active" else document.support_status

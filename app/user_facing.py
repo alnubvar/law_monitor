@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from typing import Any
+from urllib.parse import urlsplit
 
 from app.config import get_source_role
 from app.llm.enrichment import is_generic_enrichment_text
@@ -16,6 +18,10 @@ TITLE_MAX_CHARS = 120
 EXECUTIVE_REASON_MAX_CHARS = 90
 EXECUTIVE_ACTION_MAX_CHARS = 85
 EXECUTIVE_SUMMARY_MAX_CHARS = 120
+
+_NPA_IN_TITLE_RE = re.compile(r"[№#]\s*(\d[\d/.\-]*\d|\d{1,6})")
+_DATE_IN_TITLE_RE = re.compile(r"\b(\d{1,2})\.(\d{2})(?:\.\d{2,4})?\b")
+_IBLOCK_URL_RE = re.compile(r"/iblock/([a-zA-Z0-9]{2,8})/")
 
 SUBSIDY_RE = re.compile(r"субсид|грант|финансир|кредит|лизинг|возмещ|льготн", re.IGNORECASE)
 SELECTION_RE = re.compile(r"отбор|заяв|конкурс|прием", re.IGNORECASE)
@@ -49,6 +55,116 @@ def compress_visible_title(
         title = "Документ требует проверки"
     compressed = _compress_bureaucratic_title(document, title)
     return _clip_text(compressed, max_chars or TITLE_MAX_CHARS) if max_chars is not None else compressed
+
+
+def disambiguate_visible_titles(
+    documents: Sequence[RawDocument],
+    *,
+    max_chars: int = TITLE_MAX_CHARS,
+) -> dict[int, str]:
+    """Return {doc.id: display_title} with disambiguation suffixes for collision groups.
+
+    Documents with the same compressed title get a short distinguishing suffix so
+    they remain separable in the rendered report or Telegram digest.  Documents
+    whose compressed title is already unique are returned unchanged (no suffix).
+    Docs without an id are not included.
+    """
+    id_title_doc: list[tuple[int, str, RawDocument]] = []
+    for doc in documents:
+        if doc.id is None:
+            continue
+        id_title_doc.append((doc.id, compress_visible_title(doc), doc))
+
+    by_title: dict[str, list[tuple[int, RawDocument]]] = {}
+    for doc_id, title, doc in id_title_doc:
+        by_title.setdefault(title, []).append((doc_id, doc))
+
+    result: dict[int, str] = {}
+    for title, group_items in by_title.items():
+        if len(group_items) == 1:
+            result[group_items[0][0]] = _clip_text(title, max_chars)
+        else:
+            group_docs = [doc for _, doc in group_items]
+            suffixes = _choose_group_suffixes(group_docs)
+            for (doc_id, _), suffix in zip(group_items, suffixes):
+                combined = f"{title} ({suffix})" if suffix else title
+                result[doc_id] = _clip_text(combined, max_chars)
+    return result
+
+
+def _choose_group_suffixes(group: Sequence[RawDocument]) -> list[str]:
+    for extractor in (
+        _suffix_npa_field,
+        _suffix_title_npa,
+        _suffix_title_date,
+        _suffix_title_keyword,
+        _suffix_url,
+    ):
+        suffixes = [extractor(doc) for doc in group]
+        if all(suffixes) and len(set(suffixes)) == len(suffixes):
+            return suffixes
+    return [str(i + 1) for i in range(len(group))]
+
+
+def _suffix_npa_field(doc: RawDocument) -> str:
+    npa = _normalize_text(_get_value(doc, "npa_number"))
+    return f"№{npa}" if npa else ""
+
+
+def _suffix_title_npa(doc: RawDocument) -> str:
+    title = _normalize_text(_get_value(doc, "title"))
+    if not title or _is_technical_ocr_placeholder(title):
+        return ""
+    m = _NPA_IN_TITLE_RE.search(title)
+    return f"№{m.group(1)}" if m else ""
+
+
+def _suffix_title_date(doc: RawDocument) -> str:
+    title = _normalize_text(_get_value(doc, "title"))
+    if not title or _is_technical_ocr_placeholder(title):
+        return ""
+    m = _DATE_IN_TITLE_RE.search(title)
+    return f"от {m.group(1)}.{m.group(2)}" if m else ""
+
+
+def _suffix_title_keyword(doc: RawDocument) -> str:
+    original = _normalize_text(_get_value(doc, "title"))
+    if not original or _is_technical_ocr_placeholder(original):
+        return ""
+    compressed = compress_visible_title(doc)
+    if not compressed or original.lower() == compressed.lower():
+        return ""
+    compressed_words = set(re.sub(r"[^\w]", " ", compressed.lower()).split())
+    candidates = [
+        w for w in re.sub(r"[^\w]", " ", original.lower()).split()
+        if len(w) >= 5 and w not in compressed_words
+    ]
+    for word in reversed(candidates):
+        if len(word) <= 20:
+            return word[:20]
+    return ""
+
+
+def _suffix_url(doc: RawDocument) -> str:
+    url = _normalize_text(_get_value(doc, "url"))
+    if not url:
+        return ""
+    m = _IBLOCK_URL_RE.search(url)
+    if m:
+        return f"документ {m.group(1)}"
+    try:
+        path = urlsplit(url).path.rstrip("/")
+        parts = [p for p in path.split("/") if p]
+        if not parts:
+            return ""
+        stem = parts[-1].split(".")[0]
+        if stem.isdigit() and 1 <= len(stem) <= 8:
+            return f"#{stem}"
+        if 3 <= len(stem) <= 12:
+            return f"документ {stem[:8]}"
+    except Exception:
+        pass
+    return ""
 
 
 def build_executive_reason(

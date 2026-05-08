@@ -1534,5 +1534,162 @@ class StrategyNoiseMdRegressionTest(unittest.TestCase):
         self.assertIn("Правительство ввело квоты на экспорт азотных удобрений", markdown)
 
 
+class TitleDisambiguationReportTest(unittest.TestCase):
+    """Regression tests: title collision in markdown report must produce distinct headings."""
+
+    def _doc(
+        self,
+        *,
+        doc_id: int,
+        title: str,
+        summary: str = "",
+        url: str = "https://example.com/doc",
+        source_name: str = "Нормативные акты Краснодарского края",
+        region: str = "krasnodar",
+        action_level: ActionLevel = "requires_attention",
+        page_type: PageType = "new_rule",
+        npa_number: str | None = None,
+    ) -> RawDocument:
+        now = datetime.now(timezone.utc)
+        doc = RawDocument(
+            id=doc_id,
+            source_name=source_name,
+            source_url=url,
+            level="regional",
+            region=region,
+            title=title,
+            url=url,
+            published_at=now,
+            collected_at=now,
+            content_hash=f"dedup-{doc_id}",
+            raw_text="",
+            is_relevant=True,
+            relevance_reason="reason",
+            importance="high" if action_level == "requires_attention" else "medium",
+            action_level=action_level,
+            page_type=page_type,
+            summary=summary or "Изменены условия субсидирования.",
+            impact="impact",
+            topic="topic",
+        )
+        if npa_number is not None:
+            doc.npa_number = npa_number
+        return doc
+
+    def _generate(self, docs: list[RawDocument]) -> str:
+        return generate_markdown_report(
+            docs,
+            report_date="2026-05-08",
+            period_days=7,
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+    def test_two_documents_colliding_on_compressed_title_render_with_distinct_headings(self) -> None:
+        doc1 = self._doc(
+            doc_id=601,
+            title="Об утверждении порядка предоставления субсидий на молочное скотоводство",
+            url="https://admkrai.krasnodar.ru/upload/iblock/9a3/doc1.pdf",
+        )
+        doc2 = self._doc(
+            doc_id=602,
+            title="Об утверждении порядка предоставления субсидий на развитие растениеводства",
+            url="https://admkrai.krasnodar.ru/upload/iblock/c24/doc2.pdf",
+        )
+        markdown = self._generate([doc1, doc2])
+        self.assertIn("Утверждены условия субсидирования", markdown)
+        # Both items must be present, but the heading must NOT appear twice identically
+        self.assertNotEqual(markdown.count("### Утверждены условия субсидирования\n"), 2)
+        # Both URLs must be present (both items rendered)
+        self.assertIn("iblock/9a3", markdown)
+        self.assertIn("iblock/c24", markdown)
+
+    def test_npa_number_field_produces_npa_suffix(self) -> None:
+        # Embed NPA numbers in titles so _numeric_tokens differ → not grouped by select_best_report_documents.
+        # Both still compress to "Утверждены условия субсидирования" via _approval_headline.
+        doc1 = self._doc(
+            doc_id=610,
+            title="Постановление №214 об утверждении порядка предоставления субсидий на молочное скотоводство",
+            url="https://admkrai.krasnodar.ru/upload/iblock/9a3/d1.pdf",
+            npa_number="214",
+        )
+        doc2 = self._doc(
+            doc_id=611,
+            title="Постановление №318 об утверждении порядка предоставления субсидий на молочное скотоводство",
+            url="https://admkrai.krasnodar.ru/upload/iblock/c24/d2.pdf",
+            npa_number="318",
+        )
+        markdown = self._generate([doc1, doc2])
+        self.assertIn("(№214)", markdown)
+        self.assertIn("(№318)", markdown)
+
+    def test_iblock_url_fragment_used_when_no_npa_and_no_date_in_title(self) -> None:
+        # Test disambiguate_visible_titles directly: identical OCR placeholder titles get
+        # grouped/merged by select_best_report_documents, so we bypass the pipeline here.
+        from app.user_facing import disambiguate_visible_titles
+
+        ocr_title = "Document 'abc.pdf' requires ocr extraction"
+        doc1 = self._doc(
+            doc_id=620,
+            title=ocr_title,
+            url="https://admkrai.krasnodar.ru/upload/iblock/9a3/abc.pdf",
+        )
+        doc2 = self._doc(
+            doc_id=621,
+            title=ocr_title,
+            url="https://admkrai.krasnodar.ru/upload/iblock/c24/xyz.pdf",
+        )
+        title_map = disambiguate_visible_titles([doc1, doc2], max_chars=90)
+        self.assertIsNotNone(doc1.id)
+        self.assertIsNotNone(doc2.id)
+        self.assertIn("документ 9a3", title_map[doc1.id])  # type: ignore[index]
+        self.assertIn("документ c24", title_map[doc2.id])  # type: ignore[index]
+
+    def test_unique_title_has_no_suffix_appended(self) -> None:
+        doc = self._doc(
+            doc_id=630,
+            title="Об утверждении порядка предоставления субсидий на молочное скотоводство",
+            url="https://admkrai.krasnodar.ru/upload/iblock/9a3/only.pdf",
+        )
+        markdown = self._generate([doc])
+        self.assertIn("Утверждены условия субсидирования", markdown)
+        self.assertNotIn("(документ", markdown)
+        self.assertNotIn("(№", markdown)
+
+    def test_original_document_title_is_not_mutated(self) -> None:
+        original_title = "Об утверждении порядка предоставления субсидий на молочное скотоводство"
+        doc1 = self._doc(
+            doc_id=640,
+            title=original_title,
+            url="https://admkrai.krasnodar.ru/upload/iblock/9a3/d1.pdf",
+        )
+        doc2 = self._doc(
+            doc_id=641,
+            title=original_title,
+            url="https://admkrai.krasnodar.ru/upload/iblock/c24/d2.pdf",
+        )
+        self._generate([doc1, doc2])
+        self.assertEqual(doc1.title, original_title)
+        self.assertEqual(doc2.title, original_title)
+
+    def test_title_suffix_stays_within_reasonable_length(self) -> None:
+        doc1 = self._doc(
+            doc_id=650,
+            title="Об утверждении порядка предоставления субсидий",
+            url="https://admkrai.krasnodar.ru/upload/iblock/9a3/d1.pdf",
+            npa_number="214",
+        )
+        doc2 = self._doc(
+            doc_id=651,
+            title="Об утверждении порядка предоставления субсидий",
+            url="https://admkrai.krasnodar.ru/upload/iblock/c24/d2.pdf",
+            npa_number="318",
+        )
+        markdown = self._generate([doc1, doc2])
+        for line in markdown.splitlines():
+            if line.startswith("### "):
+                self.assertLessEqual(len(line) - 4, 95)  # heading text ≤ 95 chars
+
+
 if __name__ == "__main__":
     unittest.main()

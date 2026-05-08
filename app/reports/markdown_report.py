@@ -17,6 +17,7 @@ from app.storage import list_document_enrichments
 from app.user_facing import (
     build_executive_action,
     build_executive_reason,
+    disambiguate_visible_titles,
     select_executive_summary,
     user_facing_action_level,
     user_facing_title,
@@ -101,9 +102,9 @@ class ReportView:
         return visible
 
 
-def _to_digest_item(document: RawDocument) -> DigestItem:
+def _to_digest_item(document: RawDocument, *, title: str | None = None) -> DigestItem:
     return DigestItem(
-        title=_report_title(document),
+        title=title or _report_title(document),
         region=document.region,
         source_name=document.source_name,
         url=document.url,
@@ -183,12 +184,15 @@ def generate_markdown_report(
         )
     )
     lines.extend(format_operational_notices_markdown(notices))
+    title_by_id = disambiguate_visible_titles(
+        report_view.flatten(), max_chars=REPORT_TITLE_MAX_CHARS
+    )
     for section in DISPLAY_SECTION_ORDER:
         lines.append(DISPLAY_SECTION_TITLES[section])
         documents_for_bucket = display_sections.get(section, [])
         if documents_for_bucket:
             for document in documents_for_bucket:
-                digest_item = _to_digest_item(document)
+                digest_item = _to_digest_item(document, title=title_by_id.get(document.id))
                 lines.extend(
                     _format_human_item(
                         digest_item,
