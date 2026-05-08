@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
+from collections import Counter
 import re
 from typing import Iterable
 from urllib.parse import urlsplit, urlunsplit
@@ -667,6 +668,7 @@ def _format_header_summary(
         else f"дата отчета, {datetime.strptime(report_date, '%Y-%m-%d').strftime('%d.%m.%Y')}"
     )
     reaction_text = _build_reaction_summary(report_view)
+    source_heat_line = _build_source_heat_line(report_view.flatten())
     lines = [
         "## Сводка",
         f"- Подготовлено: {generated_at.strftime('%Y-%m-%d %H:%M')}",
@@ -677,9 +679,32 @@ def _format_header_summary(
         f"- На наблюдении: {watchlist_count}",
         f"- Главный акцент: {reaction_text}",
     ]
+    if source_heat_line:
+        lines.append(f"- По источникам: {source_heat_line}")
     lines.extend([f"- {line}" for line in period_context_lines])
     lines.append("")
     return lines
+
+
+def _build_source_heat_line(documents: list[RawDocument], *, max_sources: int = 4) -> str:
+    counts: Counter[str] = Counter()
+    for document in documents:
+        label = _source_heat_label(document)
+        if label:
+            counts[label] += 1
+    if not counts:
+        return ""
+    return "; ".join(f"{name}: {count}" for name, count in counts.most_common(max_sources))
+
+
+def _source_heat_label(document: RawDocument) -> str:
+    parsed = urlsplit((document.url or "").strip())
+    host = (parsed.netloc or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if host:
+        return host
+    return (document.source_name or "").strip()
 
 
 def _format_human_outro(display_sections: dict[str, list[RawDocument]]) -> list[str]:

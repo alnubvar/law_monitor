@@ -574,7 +574,50 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertIn("На наблюдении: 1", markdown)
         self.assertIn("Включено в сводку: 2", markdown)
         self.assertIn("Главный акцент: Льготное кредитование АПК", markdown)
+        self.assertIn("По источникам:", markdown)
         self.assertIn("## 📢 Меры и отборы", markdown)
+
+    def test_report_summary_includes_source_heat_line_for_visible_documents_only(self) -> None:
+        visible_one = self._doc(
+            doc_id=801,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="Изменения по субсидиям",
+            url="https://admkrai.krasnodar.ru/upload/a.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="Изменения порядка предоставления субсидий.",
+        )
+        visible_two = self._doc(
+            doc_id=802,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Льготное кредитование АПК",
+            url="https://www.zol.ru/n/41378",
+            action_level="requires_attention",
+            page_type="news_background",
+            summary="Обновление условий льготного кредитования для АПК.",
+        )
+        hidden_background = self._doc(
+            doc_id=803,
+            source_name="Правительство РФ - новости",
+            region="federal",
+            title="Глобальный рыночный фон",
+            url="http://government.ru/news/hidden/",
+            action_level="background",
+            page_type="news_background",
+            summary="Фоновая новость без срочной реакции.",
+        )
+
+        markdown = generate_markdown_report(
+            [visible_one, visible_two, hidden_background],
+            report_date="2026-05-08",
+            relevant_only=False,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn("По источникам: admkrai.krasnodar.ru: 1; zol.ru: 1", markdown)
+        self.assertNotIn("government.ru", markdown)
 
     def test_report_deduplicates_main_focus_headlines(self) -> None:
         documents = [

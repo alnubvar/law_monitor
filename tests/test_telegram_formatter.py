@@ -79,7 +79,46 @@ class TelegramFormatterTest(unittest.TestCase):
         self.assertIn("🧾 Ежедневная GR-сводка", text)
         self.assertIn("🚨 Требует внимания (1)", text)
         self.assertIn("Требует реакции: 1", text)
+        self.assertIn("источники:", text)
         self.assertIn("Льготное кредитование АПК", text)
+
+    def test_daily_digest_source_heat_counts_only_visible_documents(self) -> None:
+        urgent = self._doc(
+            doc_id=11,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="Изменения по субсидиям",
+            url="https://admkrai.krasnodar.ru/upload/a.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="Изменения порядка предоставления субсидий.",
+        )
+        news = self._doc(
+            doc_id=12,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Льготное кредитование АПК",
+            url="https://www.zol.ru/n/41378",
+            action_level="watchlist",
+            page_type="news_background",
+            summary="Новостной сигнал.",
+        )
+        news.business_signal = "Новостной предвестник возможных изменений господдержки."
+        hidden = self._doc(
+            doc_id=13,
+            source_name="Правительство РФ - новости",
+            region="federal",
+            title="Скрытый рыночный фон",
+            url="http://government.ru/news/hidden/",
+            action_level="background",
+            page_type="news_background",
+            summary="Фоновая новость.",
+        )
+
+        text = build_digest_message([urgent, news, hidden])
+
+        self.assertIn("источники: admkrai.krasnodar.ru: 1; zol.ru: 1", text)
+        self.assertNotIn("government.ru", text)
 
     def test_inactive_measures_are_not_shown_as_urgent(self) -> None:
         urgent = self._doc(

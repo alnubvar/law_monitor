@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from collections.abc import Sequence
+from urllib.parse import urlsplit
 
 from app.llm.enrichment import get_display_enrichment
 from app.models import RawDocument
@@ -197,7 +199,38 @@ def _build_daily_summary_line(sections: dict[str, list[RawDocument]]) -> str:
         count = len(sections.get(section, []))
         if count:
             summary_parts.append(f"{label_map[section]}: {count}")
+    source_heat = _build_source_heat_line(
+        [
+            document
+            for section in DAILY_SECTION_ORDER
+            for document in sections.get(section, [])[: DAILY_SECTION_LIMITS[section]]
+        ],
+        max_sources=3,
+    )
+    if source_heat:
+        summary_parts.append(f"источники: {source_heat}")
     return " | ".join(summary_parts) if summary_parts else "Новых документов не найдено."
+
+
+def _build_source_heat_line(documents: list[RawDocument], *, max_sources: int) -> str:
+    counts: Counter[str] = Counter()
+    for document in documents:
+        label = _source_heat_label(document)
+        if label:
+            counts[label] += 1
+    if not counts:
+        return ""
+    return "; ".join(f"{name}: {count}" for name, count in counts.most_common(max_sources))
+
+
+def _source_heat_label(document: RawDocument) -> str:
+    parsed = urlsplit((document.url or "").strip())
+    host = (parsed.netloc or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if host:
+        return host
+    return (document.source_name or "").strip()
 
 
 def _format_digest_item(
