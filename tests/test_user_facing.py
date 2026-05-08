@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime, timezone
 
 from app.models import RawDocument
-from app.user_facing import build_executive_action, build_executive_reason
+from app.user_facing import build_executive_action, build_executive_reason, select_executive_summary
 
 
 class UserFacingIntentCoherenceTest(unittest.TestCase):
@@ -158,6 +158,71 @@ class UserFacingIntentCoherenceTest(unittest.TestCase):
 
         self.assertEqual(reason, "Документ после OCR требует ручной проверки")
         self.assertEqual(action, "Дождаться повторной проверки OCR или сверить текст вручную.")
+
+    def test_regional_subsidy_summary_prefers_title_aware_specific_text(self) -> None:
+        document = self._doc(
+            doc_id=7,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="О внесении изменений в порядок предоставления субсидий",
+            url="https://admkrai.krasnodar.ru/upload/a.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="Документ содержит изменения в порядке предоставления поддержки; требуется проверка условий и сроков.",
+        )
+
+        summary = select_executive_summary(document, fallback_text=document.summary)
+
+        self.assertEqual(summary, "Изменён порядок предоставления субсидий в Краснодарском крае.")
+
+    def test_credit_news_summary_prefers_specific_title(self) -> None:
+        document = self._doc(
+            doc_id=8,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Минсельхоз предложил новые условия льготного кредитования АПК",
+            url="https://www.zol.ru/n/41378",
+            action_level="requires_attention",
+            page_type="news_background",
+            summary="Документ содержит изменения в порядке предоставления поддержки; требуется проверка условий и сроков.",
+        )
+
+        summary = select_executive_summary(document, fallback_text=document.summary)
+
+        self.assertEqual(summary, "Минсельхоз предложил обновить условия льготного кредитования АПК.")
+
+    def test_ocr_placeholder_summary_keeps_safe_fallback_behavior(self) -> None:
+        document = self._doc(
+            doc_id=9,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="document 'placeholder.pdf' requires OCR extraction",
+            url="https://admkrai.krasnodar.ru/upload/iblock/d69/placeholder.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="Документ содержит изменения в порядке предоставления поддержки; требуется проверка условий и сроков.",
+            raw_text="Распознанный текст отсутствует.",
+        )
+
+        summary = select_executive_summary(document, fallback_text=document.summary)
+
+        self.assertEqual(summary, "Текст после OCR недостаточен для уверенного выделения условий документа.")
+
+    def test_summary_length_stays_concise(self) -> None:
+        document = self._doc(
+            doc_id=10,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Минсельхоз предложил новые условия льготного кредитования АПК",
+            url="https://www.zol.ru/n/41378",
+            action_level="requires_attention",
+            page_type="news_background",
+            summary="Документ содержит изменения в порядке предоставления поддержки; требуется проверка условий и сроков.",
+        )
+
+        summary = select_executive_summary(document, fallback_text=document.summary)
+
+        self.assertLessEqual(len(summary), 120)
 
 
 if __name__ == "__main__":

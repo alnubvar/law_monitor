@@ -431,7 +431,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             db_path=db_path,
         )
 
-        self.assertIn("Кратко: Документ содержит изменения в порядке предоставления поддержки", markdown)
+        self.assertIn("Кратко: Изменён порядок предоставления субсидий в Ставропольском крае.", markdown)
         self.assertIn("### Изменены условия субсидирования", markdown)
         self.assertIn("Почему важно: Изменены условия субсидирования", markdown)
         self.assertIn("Проверить изменения порядка субсидирования и сроки вступления.", markdown)

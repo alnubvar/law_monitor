@@ -17,6 +17,11 @@ TITLE_MAX_CHARS = 120
 EXECUTIVE_REASON_MAX_CHARS = 90
 EXECUTIVE_ACTION_MAX_CHARS = 85
 EXECUTIVE_SUMMARY_MAX_CHARS = 120
+GENERIC_EXECUTIVE_SUMMARY_MARKERS = (
+    "документ содержит изменения в порядке предоставления поддержки",
+    "требуется проверка условий и сроков",
+    "документ содержит изменения в порядке предоставления",
+)
 
 _NPA_IN_TITLE_RE = re.compile(r"[№#]\s*(\d[\d/.\-]*\d|\d{1,6})")
 _DATE_IN_TITLE_RE = re.compile(r"\b(\d{1,2})\.(\d{2})(?:\.\d{2,4})?\b")
@@ -249,8 +254,18 @@ def select_executive_summary(
     fallback_text: str | None = None,
     max_chars: int = EXECUTIVE_SUMMARY_MAX_CHARS,
 ) -> str:
+    deterministic = _deterministic_summary(document)
+    if deterministic and (_is_generic_executive_summary(enrichment_text) or _is_generic_executive_summary(fallback_text)):
+        return _clip_text(deterministic, max_chars)
     if enrichment_text and is_useful_executive_summary(enrichment_text):
-        return _clip_text(_normalize_text(enrichment_text), max_chars)
+        normalized_enrichment = _normalize_text(enrichment_text)
+        if deterministic and _is_generic_executive_summary(normalized_enrichment):
+            return _clip_text(deterministic, max_chars)
+        return _clip_text(normalized_enrichment, max_chars)
+    if fallback_text and not _is_generic_executive_summary(fallback_text):
+        return _clip_text(_normalize_text(fallback_text), max_chars)
+    if deterministic:
+        return _clip_text(deterministic, max_chars)
     if fallback_text:
         return _clip_text(_normalize_text(fallback_text), max_chars)
     return ""
@@ -268,6 +283,13 @@ def is_useful_executive_summary(text: str | None) -> bool:
         "требует наблюдения со стороны gr",
     )
     return not any(marker in lowered for marker in generic_markers)
+
+
+def _is_generic_executive_summary(text: str | None) -> bool:
+    normalized = _normalize_text(text).lower()
+    if not normalized:
+        return False
+    return any(marker in normalized for marker in GENERIC_EXECUTIVE_SUMMARY_MARKERS)
 
 
 def has_meaningful_extracted_ocr_text(document: PresentationDocument) -> bool:
@@ -373,6 +395,31 @@ def _deterministic_action(
     return _action_for_intent(intent, document=document)
 
 
+def _deterministic_summary(document: PresentationDocument) -> str:
+    if is_weak_ocr_placeholder_document(document):
+        return "Текст после OCR недостаточен для уверенного выделения условий документа."
+
+    title_summary = _summary_from_title(document)
+    if title_summary:
+        return title_summary
+
+    intent = _detect_deterministic_intent(document)
+    if intent == INTENT_REGIONAL_SUBSIDY:
+        region_label = _region_label(document)
+        if region_label:
+            return f"Изменён порядок предоставления субсидий в {region_label}."
+        return "Изменён порядок предоставления субсидий."
+    if intent == INTENT_CREDIT_SUPPORT:
+        return "Обновляются условия льготного кредитования АПК."
+    if intent == INTENT_SELECTION_OPEN:
+        if _looks_like_subsidy(_combined_text(document)):
+            return "Открыт приём заявок на субсидии для АПК."
+        return "Открыт приём заявок по профильной мере поддержки."
+    if intent == INTENT_SUPPORT_CHANGE:
+        return "Изменены условия предоставления меры поддержки."
+    return ""
+
+
 def _compress_freeform_reason(text: str, *, document: PresentationDocument) -> str:
     normalized = _normalize_text(text)
     if not normalized:
@@ -437,6 +484,36 @@ def _detect_deterministic_intent(
         return INTENT_SUPPORT_MEASURE
     if _is_support_context(combined) and action_level == "requires_attention":
         return INTENT_SUPPORT_ATTENTION
+    return ""
+
+
+def _summary_from_title(document: PresentationDocument) -> str:
+    title = _normalize_text(_get_value(document, "title"))
+    if not title or _is_technical_ocr_placeholder(title):
+        return ""
+    lowered = title.lower()
+    region_label = _region_label(document)
+
+    if "льготн" in lowered and "кредит" in lowered:
+        if "минсельхоз" in lowered and any(marker in lowered for marker in ("предлож", "обнов", "новые условия")):
+            return "Минсельхоз предложил обновить условия льготного кредитования АПК."
+        return "Обновляются условия льготного кредитования АПК."
+    if "субсид" in lowered and any(marker in lowered for marker in ("внесении изменений", "о внесении изменений", "изменени")):
+        if region_label:
+            return f"Изменён порядок предоставления субсидий в {region_label}."
+        return "Изменён порядок предоставления субсидий."
+    if "субсид" in lowered and any(marker in lowered for marker in ("утвержден", "утверждён", "утверждены")):
+        if region_label:
+            return f"Утверждены условия субсидирования в {region_label}."
+        return "Утверждены условия субсидирования."
+    if any(marker in lowered for marker in ("прием заявок", "приём заявок", "отбор заявок", "конкурсный отбор", "объявлен отбор")):
+        if "субсид" in lowered:
+            return "Открыт приём заявок на субсидии для АПК."
+        return "Открыт приём заявок по профильной мере поддержки."
+    if _source_role(document) == "news_signals" and title:
+        normalized = _normalize_title_sentence(title)
+        if normalized:
+            return normalized
     return ""
 
 
@@ -582,6 +659,26 @@ def _ocr_fallback_title(document: PresentationDocument) -> str:
     ):
         return OCR_FALLBACK_KRASNODAR_TITLE
     return OCR_FALLBACK_GENERIC_TITLE
+
+
+def _normalize_title_sentence(title: str) -> str:
+    normalized = _normalize_text(re.sub(r"\([^)]*\)$", "", title))
+    if not normalized:
+        return ""
+    if normalized.endswith((".", "!", "?")):
+        return normalized
+    return f"{normalized}."
+
+
+def _region_label(document: PresentationDocument) -> str:
+    region = _get_value(document, "region").lower()
+    if region == "krasnodar":
+        return "Краснодарском крае"
+    if region == "stavropol":
+        return "Ставропольском крае"
+    if region == "rostov":
+        return "Ростовской области"
+    return ""
 
 
 def _source_role(document: PresentationDocument) -> str:

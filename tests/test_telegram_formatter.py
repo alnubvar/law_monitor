@@ -576,7 +576,7 @@ class TelegramFormatterTest(unittest.TestCase):
             text = build_digest_message([document])
 
         self.assertIn("- Изменены условия субсидирования", text)
-        self.assertIn("Кратко: Документ содержит изменения в порядке предоставления поддержки", text)
+        self.assertIn("Кратко: Изменён порядок предоставления субсидий в Ставропольском крае.", text)
         self.assertIn("Что проверить: Проверить изменения порядка субсидирования и сроки вступления.", text)
         self.assertNotIn("Сигнал может повлиять на контекст господдержки", text)
         self.assertNotIn("Оценить срочность сигнала", text)
