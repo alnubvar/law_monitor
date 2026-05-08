@@ -11,8 +11,8 @@ from urllib.parse import urlparse
 import requests
 
 from app import config
-from app.config import get_source_role, load_sources
-from app.llm.enrichment import get_display_enrichment, is_generic_enrichment_text
+from app.config import load_sources
+from app.llm.enrichment import get_display_enrichment
 from app.models import RawDocument
 from app.notify.telegram_formatter import build_digest_message
 from app.operational_health import (
@@ -29,7 +29,13 @@ from app.periods import (
     format_period_label,
     parse_period_spec,
 )
-from app.user_facing import user_facing_action_level, user_facing_title
+from app.user_facing import (
+    build_executive_action,
+    build_executive_reason,
+    select_executive_summary,
+    user_facing_action_level,
+    user_facing_title,
+)
 from app.pipeline.diagnostics import build_diagnostics_snapshot
 from app.reports.markdown_report import select_visible_report_documents
 from app.storage import (
@@ -351,6 +357,12 @@ def _build_status_message(db_path: Path | str) -> str:
 def _build_today_message(db_path: Path | str) -> str:
     today_documents = _select_today_visible_documents(db_path)
     active_urgent_last_14_days = get_interface_summary(db_path=db_path, days=14)["requires_attention"]
+    today_period = build_today_period()
+    today_label = (
+        today_period.target_date.strftime("%d.%m.%Y")
+        if today_period.target_date is not None
+        else datetime.now(timezone.utc).strftime("%d.%m.%Y")
+    )
     if not today_documents:
         lines = ["📅 Сегодня новых срочных документов нет."]
         if active_urgent_last_14_days > 0:
@@ -363,7 +375,7 @@ def _build_today_message(db_path: Path | str) -> str:
     watchlist_documents = [document for document in today_documents if user_facing_action_level(document) == "watchlist"]
     urgent_documents = [document for document in today_documents if user_facing_action_level(document) == "requires_attention"]
     lines = [
-        f"📅 Сегодня ({build_today_period().target_date.strftime('%d.%m.%Y')})",
+        f"📅 Сегодня ({today_label})",
     ]
     if urgent_count == 0:
         lines.append("Сегодня новых срочных документов нет.")
@@ -574,13 +586,19 @@ def _build_short_report_text(
         for document in section_documents[:2]:
             enrichment = get_display_enrichment(enrichment_by_url.get(document.url))
             reason = _build_user_facing_reason(document, enrichment=enrichment)
-            lines.append(f"- {user_facing_title(document, max_chars=150)}")
+            lines.append(f"- {user_facing_title(document, max_chars=95)}")
             if reason:
-                lines.append(f"  Почему важно: {reason[:120]}")
-            if enrichment and enrichment.get("executive_summary"):
-                lines.append(f"  Кратко: {enrichment['executive_summary'][:120]}")
+                lines.append(f"  Почему важно: {reason[:90]}")
+            summary_text = select_executive_summary(
+                document,
+                enrichment_text=enrichment.get("executive_summary") if enrichment else None,
+                fallback_text=document.summary,
+                max_chars=95,
+            )
+            if summary_text:
+                lines.append(f"  Кратко: {summary_text}")
             if enrichment and enrichment.get("deadline_hint"):
-                lines.append(f"  Срок: {enrichment['deadline_hint'][:120]}")
+                lines.append(f"  Срок: {enrichment['deadline_hint'][:90]}")
             hint = _build_report_summary_action_hint(document, section=section, enrichment=enrichment)
             if hint:
                 lines.append(f"  Что проверить: {hint}")
@@ -655,26 +673,15 @@ def _build_report_summary_action_hint(
     section: str,
     enrichment: dict[str, str] | None = None,
 ) -> str:
-    if (
-        enrichment
-        and enrichment.get("recommended_action")
-        and not is_generic_enrichment_text(enrichment.get("recommended_action"))
-    ):
-        return enrichment["recommended_action"][:120]
+    action_text = build_executive_action(
+        document,
+        enrichment_text=enrichment.get("recommended_action") if enrichment else None,
+        section=section,
+    )
+    if action_text:
+        return action_text[:90]
     if document.application_status == "open" and document.deadline_text:
-        return document.deadline_text[:120]
-    if get_source_role(document.source_name) == "regional_npa" and document.page_type == "new_rule":
-        return "Проверить изменения порядка субсидирования, сроки вступления в силу и затронутые регионы/организации."
-    if section == "requires_attention" and get_source_role(document.source_name) == "news_signals":
-        return "Проверить влияние на меры поддержки, экспортные условия и необходимость GR-реакции."
-    if section == "requires_attention":
-        return "Проверить применимость меры, сроки и ответственного."
-    if section == "measures_and_selections":
-        return "Проверить условия участия и окно подачи."
-    if section == "strategy_signals":
-        return "Оценить влияние на меры господдержки и регулирование."
-    if section == "news_signals":
-        return "Оставить как отраслевой фон, без срочной реакции."
+        return document.deadline_text[:90]
     return ""
 
 
@@ -876,7 +883,7 @@ def _format_document_lines(
             (enrichment_by_url or {}).get(document.url)
         )
         published_label = _fmt_dt(document.published_at)
-        lines.append(f"- {user_facing_title(document, max_chars=160)}")
+        lines.append(f"- {user_facing_title(document, max_chars=100)}")
         meta_parts = [f"Источник: {document.source_name}"]
         if published_label:
             meta_parts.append(f"Дата: {published_label}")
@@ -884,16 +891,17 @@ def _format_document_lines(
         lines.append(f"  {' | '.join(meta_parts)}")
         reason = _build_user_facing_reason(document, enrichment=enrichment)
         if reason:
-            lines.append(f"  Почему важно: {reason[:140]}")
-        summary_text = (
-            enrichment.get("executive_summary")
-            if enrichment and enrichment.get("executive_summary")
-            else document.summary
+            lines.append(f"  Почему важно: {reason[:95]}")
+        summary_text = select_executive_summary(
+            document,
+            enrichment_text=enrichment.get("executive_summary") if enrichment else None,
+            fallback_text=document.summary,
+            max_chars=95,
         )
         if include_summary and summary_text:
-            lines.append(f"  Кратко: {summary_text[:120]}")
+            lines.append(f"  Кратко: {summary_text}")
         if enrichment and enrichment.get("deadline_hint"):
-            lines.append(f"  Срок: {enrichment['deadline_hint'][:120]}")
+            lines.append(f"  Срок: {enrichment['deadline_hint'][:90]}")
         lines.append(f"  {document.url}")
     hidden_count = len(documents) - min(len(documents), max_items)
     if include_hidden_hint and hidden_count > 0:
@@ -906,18 +914,13 @@ def _build_user_facing_reason(
     *,
     enrichment: dict[str, str] | None = None,
 ) -> str:
-    if (
-        enrichment
-        and enrichment.get("business_impact")
-        and not is_generic_enrichment_text(enrichment.get("business_impact"))
-    ):
-        return enrichment["business_impact"]
-    if (
-        classify_display_section(document) == "requires_attention"
-        and get_source_role(document.source_name) == "regional_npa"
-    ):
-        return "Региональный НПА меняет порядок/условия поддержки: требуется проверка GR."
-    return (document.business_signal or document.impact or document.summary or "").strip()
+    return build_executive_reason(
+        document,
+        enrichment_text=enrichment.get("business_impact") if enrichment else None,
+        fallback_text=document.business_signal or document.impact or document.summary,
+        section=classify_display_section(document),
+        max_chars=95,
+    )
 
 
 def _fmt_dt(value: datetime | None) -> str | None:

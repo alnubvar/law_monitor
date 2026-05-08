@@ -74,6 +74,11 @@ GOVERNMENT_DUPLICATE_RE = re.compile(
     r"^https?://government\.ru/(?:news|docs)/(?P<doc_id>\d+)/?$",
     re.IGNORECASE,
 )
+STRATEGY_RELEVANCE_RE = re.compile(
+    r"апк|сельск(ое|ого)\s+хозяй|аграр|растениевод|животновод|продовольств|зерн|пшениц|"
+    r"экспорт|пошлин|пошлина|квот|субсид|господдерж|льготн|кредит|краснодар|ростов|ставропол",
+    re.IGNORECASE,
+)
 
 VisibilitySurface = Literal["report", "telegram_digest", "telegram_list"]
 
@@ -165,6 +170,8 @@ def should_show_document(
         return False
     if action_levels is not None and display_action_level not in action_levels:
         return False
+    if get_source_role(document.source_name) == "strategy" and not _is_executive_strategy_relevant(document):
+        return False
 
     if surface == "report":
         if display_action_level == "requires_attention":
@@ -201,6 +208,23 @@ def should_show_document(
     ):
         return False
     return visibility_bucket(document) != "market_background" or include_market_background
+
+
+def _is_executive_strategy_relevant(document: RawDocument) -> bool:
+    text = " ".join(
+        part
+        for part in (
+            document.title,
+            document.summary,
+            document.business_signal,
+            document.impact,
+            document.relevance_reason,
+            document.raw_text[:1200] if document.raw_text else "",
+            document.source_name,
+        )
+        if part
+    )
+    return bool(STRATEGY_RELEVANCE_RE.search(text))
 
 
 def _should_show_watchlist_document(

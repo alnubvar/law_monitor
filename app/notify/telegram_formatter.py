@@ -3,12 +3,16 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 
-from app.config import get_source_role
-from app.llm.enrichment import get_display_enrichment, is_generic_enrichment_text
+from app.llm.enrichment import get_display_enrichment
 from app.models import RawDocument
 from app.operational_health import OperationalNotice, format_operational_notices_telegram
 from app.storage import list_document_enrichments
-from app.user_facing import user_facing_title
+from app.user_facing import (
+    build_executive_action,
+    build_executive_reason,
+    select_executive_summary,
+    user_facing_title,
+)
 from app.visibility import (
     classify_display_section,
     deduplicate_user_facing_documents,
@@ -37,8 +41,8 @@ DAILY_SECTION_LIMITS = {
     "strategy_signals": 3,
     "news_signals": 5,
 }
-SUMMARY_MAX_CHARS = 140
-DETAIL_MAX_CHARS = 180
+SUMMARY_MAX_CHARS = 110
+DETAIL_MAX_CHARS = 110
 
 
 def build_digest_message(
@@ -182,7 +186,7 @@ def _build_daily_summary_line(sections: dict[str, list[RawDocument]]) -> str:
         count = len(sections.get(section, []))
         if count:
             summary_parts.append(f"{label_map[section]}: {count}")
-    return " | ".join(summary_parts) if summary_parts else "Новых visible-документов не найдено."
+    return " | ".join(summary_parts) if summary_parts else "Новых документов не найдено."
 
 
 def _format_digest_item(
@@ -191,7 +195,7 @@ def _format_digest_item(
     include_summary: bool,
     enrichment: dict[str, str] | None = None,
 ) -> list[str]:
-    lines = [f"- {user_facing_title(document)}"]
+    lines = [f"- {user_facing_title(document, max_chars=100)}"]
     details: list[str] = []
     if document.support_status and document.support_status != "unknown":
         status_label = "активна" if document.support_status == "active" else document.support_status
@@ -213,26 +217,25 @@ def _format_digest_item(
     if deadline_text and not _is_inactive_or_closed(document):
         lines.append(f"  Срок: {_truncate_text(deadline_text, DETAIL_MAX_CHARS)}")
     signal_text = (
-        enrichment.get("business_impact")
-        if (
-            enrichment
-            and enrichment.get("business_impact")
-            and not is_generic_enrichment_text(enrichment.get("business_impact"))
+        build_executive_reason(
+            document,
+            enrichment_text=enrichment.get("business_impact") if enrichment else None,
+            fallback_text=document.business_signal or document.impact or document.summary,
         )
-        else document.business_signal
     )
     if signal_text:
         lines.append(f"  Сигнал: {_truncate_text(signal_text, DETAIL_MAX_CHARS)}")
     hint = _build_digest_action_hint(document, enrichment=enrichment)
     if hint:
         lines.append(f"  Что проверить: {hint}")
-    summary_text = (
-        enrichment.get("executive_summary")
-        if enrichment and enrichment.get("executive_summary")
-        else document.summary
+    summary_text = select_executive_summary(
+        document,
+        enrichment_text=enrichment.get("executive_summary") if enrichment else None,
+        fallback_text=document.summary,
+        max_chars=SUMMARY_MAX_CHARS,
     )
     if include_summary and summary_text:
-        lines.append(f"  Кратко: {_truncate_text(summary_text, SUMMARY_MAX_CHARS)}")
+        lines.append(f"  Кратко: {summary_text}")
     lines.append(f"  {document.url}")
     return lines
 
@@ -256,27 +259,13 @@ def _build_digest_action_hint(
     *,
     enrichment: dict[str, str] | None = None,
 ) -> str:
-    if (
-        enrichment
-        and enrichment.get("recommended_action")
-        and not is_generic_enrichment_text(enrichment.get("recommended_action"))
-    ):
-        return _truncate_text(enrichment["recommended_action"], DETAIL_MAX_CHARS)
+    action_text = build_executive_action(
+        document,
+        enrichment_text=enrichment.get("recommended_action") if enrichment else None,
+        section=classify_display_section(document),
+    )
+    if action_text:
+        return _truncate_text(action_text, DETAIL_MAX_CHARS)
     if document.application_status == "open" and document.deadline_text:
         return _truncate_text(document.deadline_text, DETAIL_MAX_CHARS)
-    if document.application_status == "open":
-        return "Проверить условия участия и окно подачи."
-    if get_source_role(document.source_name) == "regional_npa" and document.page_type == "new_rule":
-        return "Проверить изменения порядка субсидирования, сроки вступления в силу и затронутые регионы/организации."
-    section = classify_display_section(document)
-    if section == "requires_attention" and get_source_role(document.source_name) == "news_signals":
-        return "Проверить влияние на меры поддержки, экспортные условия и необходимость GR-реакции."
-    if section == "requires_attention":
-        return "Проверить применимость меры, сроки и ответственного."
-    if section == "measures_and_selections":
-        return "Проверить условия участия и окно подачи."
-    if section == "strategy_signals":
-        return "Оценить влияние на меры господдержки и регулирование."
-    if section == "news_signals":
-        return "Оставить как отраслевой фон, без срочной реакции."
     return ""

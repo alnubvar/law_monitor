@@ -9,22 +9,27 @@ from typing import Iterable
 from urllib.parse import urlsplit, urlunsplit
 
 from app import config
-from app.config import get_source_role
-from app.llm.enrichment import get_display_enrichment, is_generic_enrichment_text
+from app.llm.enrichment import get_display_enrichment
 from app.models import DigestItem, RawDocument, SourceErrorRecord
 from app.operational_health import OperationalNotice, format_operational_notices_markdown
-from app.periods import format_period_label
+from app.periods import PeriodSpec, build_rolling_period, format_period_label
 from app.storage import list_document_enrichments
-from app.user_facing import user_facing_action_level, user_facing_title
+from app.user_facing import (
+    build_executive_action,
+    build_executive_reason,
+    select_executive_summary,
+    user_facing_action_level,
+    user_facing_title,
+)
 from app.visibility import (
     classify_display_section as visibility_display_section,
     deduplicate_user_facing_documents,
     should_show_document,
     visibility_bucket,
 )
-SHORT_SUMMARY_MAX_CHARS = 180
-REPORT_TITLE_MAX_CHARS = 120
-REPORT_REACTION_TITLE_MAX_CHARS = 90
+SHORT_SUMMARY_MAX_CHARS = 140
+REPORT_TITLE_MAX_CHARS = 90
+REPORT_REACTION_TITLE_MAX_CHARS = 70
 BACKGROUND_DEFAULT_LIMIT = 5
 MARKET_BACKGROUND_LIMIT = 5
 REPORT_BUCKET_ORDER = (
@@ -497,12 +502,18 @@ def _format_human_item(
     require_action: bool,
     enrichment: dict[str, str] | None = None,
 ) -> list[str]:
+    summary_text = select_executive_summary(
+        item,
+        enrichment_text=enrichment.get("executive_summary") if enrichment else None,
+        fallback_text=item.summary,
+        max_chars=SHORT_SUMMARY_MAX_CHARS,
+    )
     lines = [
         f"### {item.title}",
         f"- Почему важно: {_build_human_importance_text(item, enrichment=enrichment)}",
     ]
-    if enrichment and enrichment.get("executive_summary"):
-        lines.append(f"- Кратко: {_shorten_summary(enrichment['executive_summary'])}")
+    if summary_text:
+        lines.append(f"- Кратко: {summary_text}")
     if enrichment and enrichment.get("deadline_hint"):
         lines.append(f"- Срок: {_shorten_summary(enrichment['deadline_hint'])}")
     action_text = _build_human_action_text(item, enrichment=enrichment)
@@ -522,24 +533,15 @@ def _build_human_importance_text(
     *,
     enrichment: dict[str, str] | None = None,
 ) -> str:
-    if (
-        enrichment
-        and enrichment.get("business_impact")
-        and not is_generic_enrichment_text(enrichment.get("business_impact"))
-    ):
-        return _shorten_summary(enrichment["business_impact"])
-    if (
-        item.action_level == "requires_attention"
-        and get_source_role(item.source_name) == "regional_npa"
-    ):
-        return "Региональный НПА меняет порядок/условия поддержки: требуется проверка GR."
-    if item.business_signal:
-        return _shorten_summary(item.business_signal)
-    if item.impact:
-        return _shorten_summary(item.impact)
-    if item.summary:
-        return _shorten_summary(item.summary)
-    return "Сигнал требует короткой оценки со стороны GR."
+    return _shorten_summary(
+        build_executive_reason(
+            item,
+            enrichment_text=enrichment.get("business_impact") if enrichment else None,
+            fallback_text=item.business_signal or item.impact or item.summary,
+            max_chars=SHORT_SUMMARY_MAX_CHARS,
+        )
+        or "Сигнал требует короткой оценки."
+    )
 
 
 def _build_human_action_text(
@@ -547,33 +549,16 @@ def _build_human_action_text(
     *,
     enrichment: dict[str, str] | None = None,
 ) -> str:
-    if (
-        enrichment
-        and enrichment.get("recommended_action")
-        and not is_generic_enrichment_text(enrichment.get("recommended_action"))
-    ):
-        return _shorten_summary(enrichment["recommended_action"])
+    action_text = build_executive_action(
+        item,
+        enrichment_text=enrichment.get("recommended_action") if enrichment else None,
+        max_chars=SHORT_SUMMARY_MAX_CHARS,
+    )
+    if action_text:
+        return _shorten_summary(action_text)
     if item.application_status == "open" and item.deadline_text:
-        return f"Проверить сроки подачи и ответственного: {_shorten_summary(item.deadline_text)}"
-    if item.application_status == "open":
-        return "Проверить условия участия, окно подачи и ответственного по направлению."
-    if get_source_role(item.source_name) == "regional_npa" and item.page_type == "new_rule":
-        return "Проверить изменения порядка субсидирования, сроки вступления в силу и затронутые регионы/организации."
-    if item.action_level == "requires_attention" and get_source_role(item.source_name) == "news_signals":
-        return "Проверить влияние на меры поддержки, экспортные условия и необходимость GR-реакции."
-    if item.action_level == "requires_attention" and item.page_type in {"new_rule", "deadline_update"}:
-        return "Проверить применимость изменений, сроки и влияние на текущие заявки."
-    if item.page_type in {"selection_announcement", "measure_card"}:
-        return "Проверить условия участия и окно подачи."
-    if item.region in {"rostov", "krasnodar", "stavropol"} and item.page_type == "new_rule":
-        return "Проверить изменения порядка субсидирования, сроки вступления в силу и затронутые регионы/организации."
-    if item.source_name.startswith("Правительство РФ") or item.source_name.startswith("Regulation.gov.ru"):
-        return "Оценить влияние на меры господдержки и регулирование."
-    if item.action_level == "requires_attention":
-        return "Проверить применимость меры, сроки и ответственного."
-    if item.source_name.startswith("ZOL.ru"):
-        return "Оставить как отраслевой фон, без срочной реакции."
-    return "Взять в наблюдение и вернуться к теме при следующих обновлениях."
+        return f"Проверить сроки и подачу: {_shorten_summary(item.deadline_text)}"
+    return "Оставить на наблюдении."
 
 
 def _format_stats(
@@ -671,9 +656,10 @@ def _format_header_summary(
     watchlist_count = sum(
         1 for document in documents if user_facing_action_level(document) == "watchlist"
     )
+    period_spec: PeriodSpec | None = build_rolling_period(period_days) if period_days is not None else None
     period_text = period_label or (
-        format_period_label(type("PeriodProxy", (), {"kind": "rolling", "days": period_days or 7, "target_date": None})())
-        if period_days is not None
+        format_period_label(period_spec)
+        if period_spec is not None
         else f"дата отчета, {datetime.strptime(report_date, '%Y-%m-%d').strftime('%d.%m.%Y')}"
     )
     reaction_text = _build_reaction_summary(report_view)
@@ -689,9 +675,6 @@ def _format_header_summary(
     ]
     lines.extend([f"- {line}" for line in period_context_lines])
     lines.append("")
-    return lines
-    lines.append("")
-    return lines
     return lines
 
 
@@ -714,11 +697,27 @@ def _build_reaction_summary(report_view: ReportView) -> str:
     requires_attention_documents = report_view.shown_buckets.get("requires_attention", [])
     if not requires_attention_documents:
         return "Срочных поводов для GR-реакции не выявлено."
-    titles = [_report_title(document, max_chars=REPORT_REACTION_TITLE_MAX_CHARS) for document in requires_attention_documents[:3]]
-    if len(requires_attention_documents) > 3:
-        extra_count = len(requires_attention_documents) - 3
+    titles: list[str] = []
+    seen_titles: set[str] = set()
+    for document in requires_attention_documents:
+        title = _report_title(document, max_chars=REPORT_REACTION_TITLE_MAX_CHARS)
+        if title in seen_titles:
+            continue
+        seen_titles.add(title)
+        titles.append(title)
+        if len(titles) >= 3:
+            break
+    extra_count = max(len(seen_titles_from_documents(requires_attention_documents)) - len(titles), 0)
+    if extra_count > 0:
         return f"{'; '.join(titles)}; и еще {extra_count}."
     return "; ".join(titles)
+
+
+def seen_titles_from_documents(documents: list[RawDocument]) -> set[str]:
+    return {
+        _report_title(document, max_chars=REPORT_REACTION_TITLE_MAX_CHARS)
+        for document in documents
+    }
 
 
 def _report_title(document: RawDocument, *, max_chars: int = REPORT_TITLE_MAX_CHARS) -> str:

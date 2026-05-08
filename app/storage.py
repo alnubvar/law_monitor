@@ -6,6 +6,7 @@ from hashlib import sha256
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from collections.abc import Iterator
 from typing import Any
 
 from app.config import DB_PATH, ensure_directories
@@ -44,7 +45,7 @@ def _get_connection(db_path: Path | str = DB_PATH) -> sqlite3.Connection:
 
 
 @contextmanager
-def _connect_db(db_path: Path | str = DB_PATH) -> sqlite3.Connection:
+def _connect_db(db_path: Path | str = DB_PATH) -> Iterator[sqlite3.Connection]:
     connection = _get_connection(db_path)
     try:
         yield connection

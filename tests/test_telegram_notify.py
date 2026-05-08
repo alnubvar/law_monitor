@@ -443,7 +443,8 @@ class TelegramNotifySmokeTest(unittest.TestCase):
 
         text = telegram.build_command_response("/urgent", db_path=db_path)
 
-        self.assertIn("Региональный НПА меняет порядок/условия поддержки: требуется проверка GR.", text)
+        self.assertIn("- Изменены условия субсидирования", text)
+        self.assertIn("Почему важно: Изменены условия субсидирования", text)
         self.assertNotIn("оставить в наблюдении", text)
 
     def test_period_argument_overrides_default_for_urgent(self) -> None:

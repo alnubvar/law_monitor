@@ -56,7 +56,7 @@ class MockEnrichmentProvider(BaseEnrichmentProvider):
         region: str | None = None,
     ) -> EnrichmentResult:
         del raw_text, url, level
-        source_role = get_source_role(source_name or "")
+        source_role = _normalized_source_role(source_name)
         executive_summary = self._clip_text(
             self._build_executive_summary(analysis, source_role=source_role),
             max_chars=220,
@@ -413,3 +413,7 @@ def is_generic_enrichment_text(value: str | None) -> bool:
         "изменения могут повлиять на",
     )
     return any(marker in normalized for marker in generic_markers)
+
+
+def _normalized_source_role(source_name: str | None) -> str:
+    return str(get_source_role(source_name) or "").strip()

@@ -213,7 +213,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
 
         self.assertIn("Executive summary для руководителя.", markdown)
         self.assertIn("Новая редакция меры меняет условия участия для заемщиков АПК.", markdown)
-        self.assertIn("Проверить применимость обновленных условий и ответственного.", markdown)
+        self.assertIn("Проверить применимость меры, сроки и ответственного.", markdown)
         self.assertIn("До 30 июня 2026 года.", markdown)
 
     def test_report_strips_legacy_ai_prefixes_from_enrichment(self) -> None:
@@ -278,7 +278,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             )
 
         self.assertIn("Почему важно: impact", markdown)
-        self.assertIn("Что проверить: Проверить условия участия и окно подачи.", markdown)
+        self.assertIn("Что проверить: Проверить применимость меры, сроки и ответственного.", markdown)
 
     def test_report_ignores_errored_or_low_confidence_enrichment(self) -> None:
         db_path = self._db_path("report_enrichment_low_conf.db")
@@ -432,11 +432,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         )
 
         self.assertIn("Кратко: Документ содержит изменения в порядке предоставления поддержки", markdown)
-        self.assertIn("Региональный НПА меняет порядок/условия поддержки: требуется проверка GR.", markdown)
-        self.assertIn(
-            "Проверить изменения порядка субсидирования, сроки вступления в силу и затронутые регионы/организации.",
-            markdown,
-        )
+        self.assertIn("### Изменены условия субсидирования", markdown)
+        self.assertIn("Почему важно: Изменены условия субсидирования", markdown)
+        self.assertIn("Проверить изменения порядка субсидирования и сроки вступления.", markdown)
         self.assertNotIn("Сигнал может повлиять на контекст господдержки", markdown)
         self.assertNotIn("Оценить срочность сигнала", markdown)
 
@@ -460,14 +458,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             action_levels=["requires_attention", "watchlist"],
         )
 
-        self.assertIn(
-            "Региональный НПА меняет порядок/условия поддержки: требуется проверка GR.",
-            markdown,
-        )
-        self.assertIn(
-            "Проверить изменения порядка субсидирования, сроки вступления в силу и затронутые регионы/организации.",
-            markdown,
-        )
+        self.assertIn("### Изменены условия субсидирования", markdown)
+        self.assertIn("Почему важно: Изменены условия субсидирования", markdown)
+        self.assertIn("Проверить изменения порядка субсидирования и сроки вступления.", markdown)
         self.assertNotIn("оставить в наблюдении", markdown)
 
     def test_urgent_news_report_does_not_use_background_hint(self) -> None:
@@ -490,11 +483,8 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             action_levels=["requires_attention", "watchlist"],
         )
 
-        self.assertIn(
-            "Проверить влияние на меры поддержки, экспортные условия и необходимость GR-реакции.",
-            markdown,
-        )
-        self.assertNotIn("Оставить как отраслевой фон, без срочной реакции.", markdown)
+        self.assertIn("Проверить влияние на экспорт и меры поддержки.", markdown)
+        self.assertNotIn("Оставить как отраслевой фон.", markdown)
 
     def test_report_header_contains_key_counters(self) -> None:
         requires_attention_document = self._doc(
@@ -558,6 +548,88 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertIn("Включено в сводку: 2", markdown)
         self.assertIn("Главный акцент: Льготное кредитование АПК", markdown)
         self.assertIn("## 📢 Меры и отборы", markdown)
+
+    def test_report_deduplicates_main_focus_headlines(self) -> None:
+        documents = [
+            self._doc(
+                doc_id=910,
+                source_name="Право Краснодарского края",
+                region="krasnodar",
+                title="О внесении изменений в порядок предоставления субсидий",
+                url="https://example.test/subsidy-1",
+                action_level="requires_attention",
+                page_type="new_rule",
+                summary="Изменения по субсидиям.",
+            ),
+            self._doc(
+                doc_id=911,
+                source_name="Право Ростовской области",
+                region="rostov",
+                title="О внесении изменений в порядок предоставления субсидий для АПК",
+                url="https://example.test/subsidy-2",
+                action_level="requires_attention",
+                page_type="new_rule",
+                summary="Изменения по субсидиям для АПК.",
+            ),
+            self._doc(
+                doc_id=912,
+                source_name="ГИСП - меры поддержки АПК",
+                region="federal",
+                title="Льготное кредитование АПК",
+                url="https://example.test/credit",
+                action_level="requires_attention",
+                page_type="measure_card",
+                summary="Активная мера поддержки.",
+            ),
+        ]
+
+        markdown = generate_markdown_report(
+            documents,
+            report_date="2026-05-08",
+            period_days=7,
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn("Главный акцент:", markdown)
+        self.assertEqual(markdown.count("Изменены условия субсидирования"), 3)
+        self.assertNotIn(
+            "Главный акцент: Изменены условия субсидирования; Изменены условия субсидирования;",
+            markdown,
+        )
+
+    def test_weak_strategy_items_are_hidden_from_executive_report(self) -> None:
+        weak_strategy = self._doc(
+            doc_id=920,
+            source_name="Правительство РФ - документы",
+            region="federal",
+            title="Концепция развития пассажирского железнодорожного сообщения",
+            url="https://example.test/railway-concept",
+            action_level="watchlist",
+            page_type="new_rule",
+            summary="Пассажирская железнодорожная инфраструктура и мостовые объекты.",
+        )
+        strong_strategy = self._doc(
+            doc_id=921,
+            source_name="Правительство РФ - документы",
+            region="federal",
+            title="Изменения в господдержке экспорта продукции АПК",
+            url="https://example.test/export-apk",
+            action_level="watchlist",
+            page_type="new_rule",
+            summary="Экспорт АПК, субсидии и квоты для российских поставок.",
+        )
+
+        markdown = generate_markdown_report(
+            [weak_strategy, strong_strategy],
+            report_date="2026-05-08",
+            period_days=7,
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn("Изменения в господдержке экспорта продукции АПК", markdown)
+        self.assertNotIn("пассажирского железнодорожного сообщения", markdown)
 
     def test_report_header_uses_explicit_period_label_for_seven_days(self) -> None:
         document = self._doc(
@@ -1179,9 +1251,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             include_market_background=True,
         )
 
-        self.assertIn("Проверить сроки подачи и ответственного", markdown)
-        self.assertIn("Проверить изменения порядка субсидирования", markdown)
-        self.assertIn("Оставить как отраслевой фон, без срочной реакции.", markdown)
+        self.assertIn("Проверить сроки подачи и ответственного.", markdown)
+        self.assertIn("Проверить изменения порядка субсидирования и сроки вступления.", markdown)
+        self.assertIn("Оставить как отраслевой фон.", markdown)
 
     def test_report_clips_long_titles_cleanly(self) -> None:
         long_title = (
@@ -1206,10 +1278,32 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             action_levels=["requires_attention", "watchlist"],
         )
 
-        self.assertIn("### Постановление Правительства Ростовской области", markdown)
-        self.assertIn("...", markdown)
+        self.assertIn("### Изменены условия субсидирования", markdown)
         self.assertIn("https://pravo.donland.ru/doc/view/id/very-long-title", markdown)
-        self.assertNotIn(long_title + "\n- Источник", markdown)
+        self.assertNotIn(long_title, markdown)
+
+    def test_report_compression_does_not_mutate_original_title(self) -> None:
+        original_title = "О внесении изменений в порядок предоставления субсидий сельхозтоваропроизводителям"
+        document = self._doc(
+            doc_id=1300,
+            source_name="Право Ростовской области",
+            region="rostov",
+            title=original_title,
+            url="https://pravo.donland.ru/doc/view/id/1300",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="Изменения порядка предоставления субсидий.",
+        )
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-05",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn("### Изменены условия субсидирования", markdown)
+        self.assertEqual(document.title, original_title)
 
 
 if __name__ == "__main__":

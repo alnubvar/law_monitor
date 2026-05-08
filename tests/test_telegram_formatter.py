@@ -6,6 +6,7 @@ from unittest import mock
 
 from app.models import RawDocument
 from app.notify.telegram_formatter import build_digest_message
+from app.user_facing import compress_visible_title
 
 
 class TelegramFormatterTest(unittest.TestCase):
@@ -220,7 +221,7 @@ class TelegramFormatterTest(unittest.TestCase):
 
         text = build_digest_message([document])
 
-        self.assertIn("Что проверить: Оставить как отраслевой фон, без срочной реакции.", text)
+        self.assertIn("Что проверить: Оставить как отраслевой фон.", text)
 
     def test_formatter_uses_urgent_news_hint_without_background_wording(self) -> None:
         document = self._doc(
@@ -237,11 +238,13 @@ class TelegramFormatterTest(unittest.TestCase):
 
         text = build_digest_message([document])
 
+        self.assertIn("Сигнал: Обновлены условия льготного кредитования", text)
         self.assertIn(
-            "Что проверить: Проверить влияние на меры поддержки, экспортные условия и необходимость GR-реакции.",
+            "Что проверить: Проверить условия кредитования, сроки и применимость для АПК.",
             text,
         )
-        self.assertNotIn("Что проверить: Оставить как отраслевой фон, без срочной реакции.", text)
+        self.assertNotIn("Что проверить: Оставить как отраслевой фон.", text)
+        self.assertNotIn("Подготовлены экспортные ограничения", text)
 
     def test_formatter_uses_specific_regional_npa_hint(self) -> None:
         document = self._doc(
@@ -257,8 +260,9 @@ class TelegramFormatterTest(unittest.TestCase):
 
         text = build_digest_message([document])
 
+        self.assertIn("- Изменены условия субсидирования", text)
         self.assertIn(
-            "Что проверить: Проверить изменения порядка субсидирования, сроки вступления в силу и затронутые регионы/организации.",
+            "Что проверить: Проверить изменения порядка субсидирования и сроки вступления.",
             text,
         )
 
@@ -320,7 +324,7 @@ class TelegramFormatterTest(unittest.TestCase):
 
         self.assertIn("Executive summary для Telegram.", text)
         self.assertIn("Новая редакция меры меняет условия участия для заемщиков АПК.", text)
-        self.assertIn("Проверить применимость обновленных условий и ответственного.", text)
+        self.assertIn("Проверить применимость меры, сроки и ответственного.", text)
         self.assertIn("До 30 июня 2026 года.", text)
 
     def test_formatter_strips_legacy_ai_prefixes_from_enrichment(self) -> None:
@@ -478,10 +482,29 @@ class TelegramFormatterTest(unittest.TestCase):
         ):
             text = build_digest_message([document])
 
+        self.assertIn("- Изменены условия субсидирования", text)
         self.assertIn("Кратко: Документ содержит изменения в порядке предоставления поддержки", text)
-        self.assertIn("Что проверить: Проверить изменения порядка субсидирования", text)
+        self.assertIn("Что проверить: Проверить изменения порядка субсидирования и сроки вступления.", text)
         self.assertNotIn("Сигнал может повлиять на контекст господдержки", text)
         self.assertNotIn("Оценить срочность сигнала", text)
+
+    def test_compress_visible_title_does_not_mutate_original_title(self) -> None:
+        original_title = "О внесении изменений в порядок предоставления субсидий сельхозтоваропроизводителям"
+        document = self._doc(
+            doc_id=46,
+            source_name="Право Ставропольского края",
+            region="stavropol",
+            title=original_title,
+            url="https://pravo.stavregion.ru/document/46",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="Изменения порядка предоставления субсидий.",
+        )
+
+        compressed = compress_visible_title(document)
+
+        self.assertEqual(compressed, "Изменены условия субсидирования")
+        self.assertEqual(document.title, original_title)
 
 
 if __name__ == "__main__":
