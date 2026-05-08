@@ -62,6 +62,17 @@ LAW_MONITOR_HOURLY_INTERVAL_MINUTES=60
 - `LAW_MONITOR_LOG_MAX_BYTES`
 - `LAW_MONITOR_LOG_BACKUP_COUNT`
 
+LLM enrichment layer:
+
+- по умолчанию отключён: `LLM_ENRICHMENT_ENABLED=false`
+- для локальной безопасной проверки можно оставить `LLM_PROVIDER=mock`
+- OpenAI-compatible endpoint example:
+  - LM Studio: `LLM_BASE_URL=http://127.0.0.1:1234/v1`
+  - Ollama: `LLM_BASE_URL=http://127.0.0.1:11434/v1`
+- дополнительные поля:
+  - `LLM_API_KEY=`
+  - `LLM_MODEL=`
+
 ## Обязательные директории и артефакты
 
 Проект использует:

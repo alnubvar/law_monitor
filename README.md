@@ -163,6 +163,9 @@ Windows OCR note (optional local runtime):
   - `LAW_MONITOR_OCR_ENABLED=true`
   - `LAW_MONITOR_OCR_LANGUAGE=rus+eng`
   - `LAW_MONITOR_OCR_TESSDATA_PATH=C:\Program Files\Tesseract-OCR\tessdata`
+  - `LLM_ENRICHMENT_ENABLED=false` by default
+  - `LLM_PROVIDER=mock` for local safe testing
+  - OpenAI-compatible example: `LLM_BASE_URL=http://127.0.0.1:1234/v1` for LM Studio or `http://127.0.0.1:11434/v1` for Ollama
 
 ## Screenshots / Examples
 
