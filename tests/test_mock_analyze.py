@@ -519,6 +519,116 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         self.assertIn("Прием заявок", result.deadline_text or "")
         self.assertIn("30.06.2026", result.deadline_text or "")
 
+    def test_negated_without_changes_subsidy_rule_is_not_requires_attention(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Порядок предоставления субсидий не изменился",
+            (
+                "Порядок предоставления субсидий не изменился. "
+                "Действует прежняя редакция без изменений и без новых условий."
+            ),
+            source_name="Право Ставропольского края",
+            url="https://pravo.stavregion.ru/doc/no-change-subsidy",
+            level="regional",
+            region="stavropol",
+        )
+
+        self.assertNotEqual(result.action_level, "requires_attention")
+        self.assertIn(result.action_level, {"watchlist", "background"})
+
+    def test_negated_without_extension_deadline_is_not_requires_attention(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Сообщение об отборе на субсидии",
+            (
+                "Срок приема заявок не продлевался. "
+                "Прием завершен, новых сроков подачи заявок не объявлено."
+            ),
+            source_name="Минсельхоз Ставропольского края - господдержка",
+            url="https://mshsk.ru/subsidy-no-extension/",
+            level="support_measures",
+            region="stavropol",
+        )
+
+        self.assertNotEqual(result.action_level, "requires_attention")
+        self.assertIn(result.action_level, {"watchlist", "background"})
+
+    def test_negated_without_new_terms_is_not_requires_attention(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Обновление информации о субсидиях",
+            (
+                "Без новых условий предоставления субсидий. "
+                "Изменение порядка не предусмотрено, действуют прежние требования."
+            ),
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://msh.krasnodar.ru/subsidy-no-new-terms/",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertNotEqual(result.action_level, "requires_attention")
+        self.assertIn(result.action_level, {"watchlist", "background"})
+
+    def test_negated_without_deadline_text_is_not_requires_attention(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Разъяснение по субсидии",
+            (
+                "Без срока подачи заявок. "
+                "Материал носит справочный характер, новых окон приема не открыто."
+            ),
+            source_name="Минсельхоз Ростовской области - господдержка",
+            url="https://mcx.donland.ru/subsidy-no-deadline/",
+            level="regional",
+            region="rostov",
+        )
+
+        self.assertNotEqual(result.action_level, "requires_attention")
+        self.assertIn(result.action_level, {"watchlist", "background"})
+
+    def test_real_subsidy_rule_change_still_requires_attention(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Утверждены изменения порядка предоставления субсидий",
+            (
+                "Внесены изменения в порядок предоставления субсидий. "
+                "Прием заявок открыт до 30 июня 2026 года."
+            ),
+            source_name="Право Ставропольского края",
+            url="https://pravo.stavregion.ru/doc/subsidy-change",
+            level="regional",
+            region="stavropol",
+        )
+
+        self.assertEqual(result.action_level, "requires_attention")
+        self.assertEqual(result.application_status, "open")
+        self.assertIsNotNone(result.deadline_text)
+
+    def test_real_application_window_announcement_remains_requires_attention(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Объявлен отбор заявок на субсидии для АПК",
+            (
+                "Объявлен конкурсный отбор. "
+                "Прием заявок открыт до 15 июля 2026 года."
+            ),
+            source_name="Минсельхоз Ставропольского края - господдержка",
+            url="https://mshsk.ru/subsidy-window-open/",
+            level="support_measures",
+            region="stavropol",
+        )
+
+        self.assertEqual(result.action_level, "requires_attention")
+        self.assertEqual(result.application_status, "open")
+        self.assertIn("15 июля 2026 года", result.deadline_text or "")
+
     def test_active_regular_without_deadline_or_open_is_watchlist(self) -> None:
         client = MockLLMClient(["государственная поддержка АПК"])
 
