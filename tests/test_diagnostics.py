@@ -875,6 +875,18 @@ class DiagnosticsSmokeTest(unittest.TestCase):
         self.assertIn("Source requests do NOT use Telegram proxy.", output)
         self.assertIn("Local VPN/IP may differ from production Russian VPS", output)
 
+    def test_diagnostics_includes_sqlite_runtime_section(self) -> None:
+        db_path = self._db_path("diagnostics_sqlite_runtime.db")
+        init_db(db_path)
+
+        output = run_diagnostics(db_path=db_path, days=7)
+
+        self.assertIn("SQLite runtime:", output)
+        self.assertIn("journal_mode: wal", output.lower())
+        self.assertIn("busy_timeout_ms: 5000", output)
+        self.assertIn("synchronous: NORMAL", output)
+        self.assertIn("foreign_keys: ON", output)
+
     def test_diagnostics_network_section_warns_when_system_proxy_env_detected(self) -> None:
         db_path = self._db_path("diagnostics_network_proxy_env.db")
         init_db(db_path)

@@ -108,6 +108,19 @@ class StorageSmokeTest(unittest.TestCase):
         self.assertTrue(created_connections)
         self.assertTrue(all(connection.closed_called for connection in created_connections))
 
+    def test_runtime_connections_apply_production_sqlite_pragmas(self) -> None:
+        db_path = Path("data/test_artifacts/test_sqlite_pragmas.db")
+        if db_path.exists():
+            db_path.unlink()
+        init_db(db_path)
+
+        settings = storage.get_sqlite_runtime_settings(db_path)
+
+        self.assertEqual(settings["journal_mode"].lower(), "wal")
+        self.assertEqual(settings["busy_timeout"], 5000)
+        self.assertEqual(settings["synchronous"], "NORMAL")
+        self.assertEqual(settings["foreign_keys"], 1)
+
     def test_update_analysis_persists_normalized_title(self) -> None:
         db_path = Path("data/test_artifacts/test_update_analysis.db")
         if db_path.exists():

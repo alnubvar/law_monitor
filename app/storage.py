@@ -15,6 +15,9 @@ from app.llm.enrichment import EnrichmentResult
 from app.models import AnalysisResult, RawDocument, SourceErrorRecord
 
 logger = logging.getLogger(__name__)
+SQLITE_BUSY_TIMEOUT_MS = 5000
+SQLITE_JOURNAL_MODE = "WAL"
+SQLITE_SYNCHRONOUS = "NORMAL"
 
 
 def _serialize_dt(value: datetime | None) -> str | None:
@@ -41,7 +44,15 @@ def _get_connection(db_path: Path | str = DB_PATH) -> sqlite3.Connection:
     resolved_path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(str(resolved_path))
     connection.row_factory = sqlite3.Row
+    _apply_sqlite_pragmas(connection)
     return connection
+
+
+def _apply_sqlite_pragmas(connection: sqlite3.Connection) -> None:
+    connection.execute(f"PRAGMA journal_mode={SQLITE_JOURNAL_MODE}")
+    connection.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+    connection.execute(f"PRAGMA synchronous={SQLITE_SYNCHRONOUS}")
+    connection.execute("PRAGMA foreign_keys=ON")
 
 
 @contextmanager
@@ -51,6 +62,33 @@ def _connect_db(db_path: Path | str = DB_PATH) -> Iterator[sqlite3.Connection]:
         yield connection
     finally:
         connection.close()
+
+
+def get_sqlite_runtime_settings(
+    db_path: Path | str = DB_PATH,
+) -> dict[str, str | int]:
+    with _connect_db(db_path) as connection:
+        journal_mode_row = connection.execute("PRAGMA journal_mode").fetchone()
+        busy_timeout_row = connection.execute("PRAGMA busy_timeout").fetchone()
+        synchronous_row = connection.execute("PRAGMA synchronous").fetchone()
+        foreign_keys_row = connection.execute("PRAGMA foreign_keys").fetchone()
+    synchronous_map = {
+        0: "OFF",
+        1: "NORMAL",
+        2: "FULL",
+        3: "EXTRA",
+    }
+    synchronous_value = synchronous_row[0] if synchronous_row else ""
+    if isinstance(synchronous_value, int):
+        synchronous_label = synchronous_map.get(synchronous_value, str(synchronous_value))
+    else:
+        synchronous_label = str(synchronous_value or "")
+    return {
+        "journal_mode": str(journal_mode_row[0] if journal_mode_row else ""),
+        "busy_timeout": int(busy_timeout_row[0] if busy_timeout_row else 0),
+        "synchronous": synchronous_label,
+        "foreign_keys": int(foreign_keys_row[0] if foreign_keys_row else 0),
+    }
 
 
 def init_db(db_path: Path | str = DB_PATH) -> None:

@@ -11,6 +11,7 @@ from app.config import DB_PATH, OCR_ENABLED, get_source_role, load_sources
 from app.extractors.ocr_extractor import get_ocr_runtime_status
 from app.models import RawDocument
 from app.storage import (
+    get_sqlite_runtime_settings,
     init_db,
     list_documents,
     list_latest_source_audit,
@@ -454,6 +455,7 @@ def run_diagnostics(
     documents = list_documents(db_path=resolved_db_path, days=days)
     snapshot = build_diagnostics_snapshot(documents, days=days)
     diagnostics_text = format_diagnostics(snapshot)
+    sqlite_text = format_sqlite_runtime_diagnostics(db_path=resolved_db_path)
     audit_text = format_source_coverage_audit(db_path=resolved_db_path)
     extraction_text = format_document_extraction_quality_audit(
         db_path=resolved_db_path,
@@ -489,6 +491,7 @@ def run_diagnostics(
     parts.extend(
         [
             network_note,
+            sqlite_text,
             diagnostics_text,
             audit_text,
             extraction_text,
@@ -500,6 +503,19 @@ def run_diagnostics(
         ]
     )
     return "\n\n".join(p for p in parts if p.strip()).strip()
+
+
+def format_sqlite_runtime_diagnostics(*, db_path: Path | str) -> str:
+    settings = get_sqlite_runtime_settings(db_path=db_path)
+    return "\n".join(
+        [
+            "SQLite runtime:",
+            f"- journal_mode: {settings['journal_mode']}",
+            f"- busy_timeout_ms: {settings['busy_timeout']}",
+            f"- synchronous: {settings['synchronous']}",
+            f"- foreign_keys: {'ON' if settings['foreign_keys'] else 'OFF'}",
+        ]
+    )
 
 
 def format_source_coverage_audit(*, db_path: Path | str) -> str:
