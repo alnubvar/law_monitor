@@ -11,6 +11,7 @@ from app.config import DB_PATH, OCR_ENABLED, get_source_role, load_sources
 from app.extractors.ocr_extractor import get_ocr_runtime_status
 from app.models import RawDocument
 from app.storage import (
+    get_runtime_event,
     get_sqlite_runtime_settings,
     init_db,
     list_documents,
@@ -456,6 +457,7 @@ def run_diagnostics(
     snapshot = build_diagnostics_snapshot(documents, days=days)
     diagnostics_text = format_diagnostics(snapshot)
     sqlite_text = format_sqlite_runtime_diagnostics(db_path=resolved_db_path)
+    deadline_text = format_deadline_extraction_diagnostics(db_path=resolved_db_path)
     audit_text = format_source_coverage_audit(db_path=resolved_db_path)
     extraction_text = format_document_extraction_quality_audit(
         db_path=resolved_db_path,
@@ -492,6 +494,7 @@ def run_diagnostics(
         [
             network_note,
             sqlite_text,
+            deadline_text,
             diagnostics_text,
             audit_text,
             extraction_text,
@@ -516,6 +519,29 @@ def format_sqlite_runtime_diagnostics(*, db_path: Path | str) -> str:
             f"- foreign_keys: {'ON' if settings['foreign_keys'] else 'OFF'}",
         ]
     )
+
+
+def format_deadline_extraction_diagnostics(*, db_path: Path | str) -> str:
+    event = get_runtime_event("deadline_extraction", db_path=db_path)
+    payload = _parse_runtime_event_details(event.get("details") if event else None)
+    attempted = _safe_runtime_int(payload.get("attempted"))
+    found = _safe_runtime_int(payload.get("found"))
+    missing = _safe_runtime_int(payload.get("missing"))
+    urgent_missing = _safe_runtime_int(payload.get("urgent_missing"))
+    lines = [
+        "Deadline extraction:",
+        f"- attempted: {attempted}",
+        f"- found: {found}",
+        f"- missing: {missing}",
+        f"- urgent missing: {urgent_missing}",
+    ]
+    top_sources = _format_runtime_breakdown(payload.get("missing_by_source"))
+    top_page_types = _format_runtime_breakdown(payload.get("missing_by_page_type"))
+    if top_sources:
+        lines.append(f"- top missing sources: {top_sources}")
+    if top_page_types:
+        lines.append(f"- top missing page_types: {top_page_types}")
+    return "\n".join(lines)
 
 
 def format_source_coverage_audit(*, db_path: Path | str) -> str:
@@ -924,3 +950,32 @@ def _source_access_warning_text(error_message: str) -> str | None:
     if "connectionpool" in normalized or "max retries exceeded" in normalized:
         return "source network issue"
     return None
+
+
+def _parse_runtime_event_details(details: object) -> dict[str, object]:
+    if not details:
+        return {}
+    try:
+        payload = json.loads(str(details))
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _safe_runtime_int(value: object) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _format_runtime_breakdown(value: object) -> str:
+    if not isinstance(value, dict):
+        return ""
+    parts: list[str] = []
+    for key, raw_count in value.items():
+        count = _safe_runtime_int(raw_count)
+        if count <= 0:
+            continue
+        parts.append(f"{str(key).strip() or 'unknown'}={count}")
+    return ", ".join(parts[:5])

@@ -12,6 +12,7 @@ from app.pipeline.diagnostics import run_diagnostics
 from app.pipeline.digest import run_demo_report
 from unittest.mock import patch
 from app.storage import (
+    mark_runtime_event,
     init_db,
     save_document,
     save_document_extraction_audit,
@@ -886,6 +887,29 @@ class DiagnosticsSmokeTest(unittest.TestCase):
         self.assertIn("busy_timeout_ms: 5000", output)
         self.assertIn("synchronous: NORMAL", output)
         self.assertIn("foreign_keys: ON", output)
+
+    def test_diagnostics_includes_deadline_extraction_summary(self) -> None:
+        db_path = self._db_path("diagnostics_deadline_extraction.db")
+        init_db(db_path)
+        mark_runtime_event(
+            "deadline_extraction",
+            details=(
+                '{"attempted": 5, "found": 2, "missing": 3, "urgent_missing": 1, '
+                '"missing_by_source": {"Минсельхоз России": 2}, '
+                '"missing_by_page_type": {"new_rule": 3}}'
+            ),
+            db_path=db_path,
+        )
+
+        output = run_diagnostics(db_path=db_path, days=7)
+
+        self.assertIn("Deadline extraction:", output)
+        self.assertIn("attempted: 5", output)
+        self.assertIn("found: 2", output)
+        self.assertIn("missing: 3", output)
+        self.assertIn("urgent missing: 1", output)
+        self.assertIn("top missing sources: Минсельхоз России=2", output)
+        self.assertIn("top missing page_types: new_rule=3", output)
 
     def test_diagnostics_network_section_warns_when_system_proxy_env_detected(self) -> None:
         db_path = self._db_path("diagnostics_network_proxy_env.db")

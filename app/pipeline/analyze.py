@@ -1,23 +1,109 @@
 from __future__ import annotations
 
+import json
 import logging
+from collections import Counter
 from collections.abc import Iterable
+from dataclasses import dataclass, field
 
 from app.config import DB_PATH, load_keyword_groups, load_keywords
 from app.llm.enrichment import DocumentEnricher, get_document_enricher
 from app.llm.mock_client import MockLLMClient
 from app.storage import (
     count_documents_by_action_level,
-    save_document_enrichment,
+    get_runtime_event,
     get_document_by_url,
     init_db,
     list_unanalyzed_documents,
     mark_runtime_event,
     reprioritize_high_value_ocr_queue,
+    save_document_enrichment,
     update_analysis,
 )
 
 logger = logging.getLogger(__name__)
+_DEADLINE_BREAKDOWN_LIMIT = 5
+
+
+@dataclass(slots=True)
+class _DeadlineExtractionTelemetry:
+    attempted: int = 0
+    found: int = 0
+    missing: int = 0
+    urgent_missing: int = 0
+    missing_by_source: Counter[str] = field(default_factory=Counter)
+    missing_by_page_type: Counter[str] = field(default_factory=Counter)
+
+    def record(self, *, document, analysis) -> None:
+        self.attempted += 1
+        if analysis.deadline_text:
+            self.found += 1
+            return
+        self.missing += 1
+        if analysis.action_level == "requires_attention":
+            self.urgent_missing += 1
+        source_name = (document.source_name or "").strip() or "unknown"
+        page_type = (analysis.page_type or "").strip() or "unknown"
+        self.missing_by_source[source_name] += 1
+        self.missing_by_page_type[page_type] += 1
+
+    def persist(self, *, db_path) -> None:
+        if self.attempted <= 0:
+            return
+        existing = _load_deadline_extraction_telemetry(db_path=db_path)
+        existing["attempted"] = int(existing.get("attempted", 0)) + self.attempted
+        existing["found"] = int(existing.get("found", 0)) + self.found
+        existing["missing"] = int(existing.get("missing", 0)) + self.missing
+        existing["urgent_missing"] = int(existing.get("urgent_missing", 0)) + self.urgent_missing
+        merged_source = Counter(_normalize_breakdown(existing.get("missing_by_source")))
+        merged_source.update(self.missing_by_source)
+        merged_page_type = Counter(_normalize_breakdown(existing.get("missing_by_page_type")))
+        merged_page_type.update(self.missing_by_page_type)
+        payload = {
+            "attempted": existing["attempted"],
+            "found": existing["found"],
+            "missing": existing["missing"],
+            "urgent_missing": existing["urgent_missing"],
+            "missing_by_source": dict(merged_source.most_common(_DEADLINE_BREAKDOWN_LIMIT)),
+            "missing_by_page_type": dict(
+                merged_page_type.most_common(_DEADLINE_BREAKDOWN_LIMIT)
+            ),
+        }
+        mark_runtime_event(
+            "deadline_extraction",
+            details=json.dumps(payload, ensure_ascii=False, sort_keys=True),
+            db_path=db_path,
+        )
+
+
+def _load_deadline_extraction_telemetry(*, db_path) -> dict[str, object]:
+    event = get_runtime_event("deadline_extraction", db_path=db_path)
+    if event is None:
+        return {}
+    details = event.get("details")
+    if not details:
+        return {}
+    try:
+        payload = json.loads(str(details))
+    except json.JSONDecodeError:
+        logger.warning("Could not parse deadline extraction telemetry payload")
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _normalize_breakdown(value: object) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, int] = {}
+    for key, raw_count in value.items():
+        try:
+            count = int(raw_count)
+        except (TypeError, ValueError):
+            continue
+        normalized_key = str(key).strip() or "unknown"
+        if count > 0:
+            result[normalized_key] = count
+    return result
 
 
 def _build_client() -> MockLLMClient:
@@ -30,6 +116,7 @@ def _build_client() -> MockLLMClient:
 def _analyze_documents(documents: Iterable, *, client: MockLLMClient, db_path) -> int:
     analyzed_count = 0
     enricher = get_document_enricher()
+    deadline_telemetry = _DeadlineExtractionTelemetry()
     for document in documents:
         try:
             analysis = client.analyze_document(
@@ -44,6 +131,7 @@ def _analyze_documents(documents: Iterable, *, client: MockLLMClient, db_path) -
                 raise ValueError("Document id is missing")
             update_analysis(document.id, analysis, db_path=db_path)
             analyzed_count += 1
+            deadline_telemetry.record(document=document, analysis=analysis)
             _run_optional_enrichment(
                 document=document,
                 analysis=analysis,
@@ -58,6 +146,7 @@ def _analyze_documents(documents: Iterable, *, client: MockLLMClient, db_path) -
                 exc,
             )
             continue
+    deadline_telemetry.persist(db_path=db_path)
     return analyzed_count
 
 
