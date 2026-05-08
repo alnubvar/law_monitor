@@ -216,6 +216,47 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertIn("Проверить применимость обновленных условий и ответственного.", markdown)
         self.assertIn("До 30 июня 2026 года.", markdown)
 
+    def test_report_strips_legacy_ai_prefixes_from_enrichment(self) -> None:
+        db_path = self._db_path("report_enrichment_legacy_prefix.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=505,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Льготное кредитование АПК",
+            url="https://gisp.gov.ru/nmp/measure/9564204",
+            action_level="requires_attention",
+            page_type="measure_card",
+            summary="Базовая summary.",
+        )
+        save_document_enrichment(
+            document_id=document.id,
+            document_url=document.url,
+            provider="mock",
+            model="mock-enrichment",
+            enrichment=EnrichmentResult(
+                executive_summary="AI-сводка: Executive summary для руководителя.",
+                business_impact="AI-оценка влияния: Новая редакция меры меняет условия участия для заемщиков АПК.",
+                recommended_action="AI-рекомендация: Проверить применимость обновленных условий и ответственного.",
+                deadline_hint="До 30 июня 2026 года.",
+                confidence=0.8,
+            ),
+            db_path=db_path,
+        )
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-07",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+            db_path=db_path,
+        )
+
+        self.assertIn("Executive summary для руководителя.", markdown)
+        self.assertNotIn("AI-сводка:", markdown)
+        self.assertNotIn("AI-оценка влияния:", markdown)
+        self.assertNotIn("AI-рекомендация:", markdown)
+
     def test_report_falls_back_when_enrichment_missing(self) -> None:
         document = self._doc(
             doc_id=501,
@@ -228,12 +269,13 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             summary="Базовая summary.",
         )
 
-        markdown = generate_markdown_report(
-            [document],
-            report_date="2026-05-07",
-            relevant_only=True,
-            action_levels=["requires_attention", "watchlist"],
-        )
+        with patch("app.reports.markdown_report.list_document_enrichments", return_value={}):
+            markdown = generate_markdown_report(
+                [document],
+                report_date="2026-05-07",
+                relevant_only=True,
+                action_levels=["requires_attention", "watchlist"],
+            )
 
         self.assertIn("Почему важно: impact", markdown)
         self.assertIn("Что проверить: Проверить условия участия и окно подачи.", markdown)
@@ -354,6 +396,50 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertIn("...", markdown)
         self.assertNotIn(long_text.strip(), markdown)
 
+    def test_generic_mock_enrichment_does_not_override_specific_reason_and_action(self) -> None:
+        db_path = self._db_path("report_enrichment_generic_preference.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=904,
+            source_name="Право Ставропольского края",
+            region="stavropol",
+            title="О внесении изменений в порядок предоставления субсидий",
+            url="https://pravo.stavregion.ru/document/904",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="Базовая summary.",
+        )
+        save_document_enrichment(
+            document_id=document.id,
+            document_url=document.url,
+            provider="mock",
+            model="mock-enrichment",
+            enrichment=EnrichmentResult(
+                executive_summary="Документ содержит изменения в порядке предоставления поддержки; требуется проверка условий и сроков.",
+                business_impact="Сигнал может повлиять на контекст господдержки и требует наблюдения со стороны GR.",
+                recommended_action="Оценить срочность сигнала и определить следующий GR-шаг.",
+                confidence=0.8,
+            ),
+            db_path=db_path,
+        )
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-08",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+            db_path=db_path,
+        )
+
+        self.assertIn("Кратко: Документ содержит изменения в порядке предоставления поддержки", markdown)
+        self.assertIn("Региональный НПА меняет порядок/условия поддержки: требуется проверка GR.", markdown)
+        self.assertIn(
+            "Проверить изменения порядка субсидирования, сроки вступления в силу и затронутые регионы/организации.",
+            markdown,
+        )
+        self.assertNotIn("Сигнал может повлиять на контекст господдержки", markdown)
+        self.assertNotIn("Оценить срочность сигнала", markdown)
+
     def test_urgent_regional_npa_report_uses_stronger_reason_and_specific_hint(self) -> None:
         document = self._doc(
             doc_id=150,
@@ -383,6 +469,32 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             markdown,
         )
         self.assertNotIn("оставить в наблюдении", markdown)
+
+    def test_urgent_news_report_does_not_use_background_hint(self) -> None:
+        document = self._doc(
+            doc_id=151,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Пошлина на экспорт пшеницы из РФ останется нулевой",
+            url="https://www.zol.ru/n/rf-duty-1",
+            action_level="requires_attention",
+            page_type="news_background",
+            summary="Экспортная новость с прямым GR-сигналом.",
+        )
+        document.business_signal = "Есть признаки изменения экспортных условий для российского рынка."
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-07",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn(
+            "Проверить влияние на меры поддержки, экспортные условия и необходимость GR-реакции.",
+            markdown,
+        )
+        self.assertNotIn("Оставить как отраслевой фон, без срочной реакции.", markdown)
 
     def test_report_header_contains_key_counters(self) -> None:
         requires_attention_document = self._doc(
@@ -446,6 +558,30 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertIn("Включено в сводку: 2", markdown)
         self.assertIn("Главный акцент: Льготное кредитование АПК", markdown)
         self.assertIn("## 📢 Меры и отборы", markdown)
+
+    def test_report_header_uses_explicit_period_label_for_seven_days(self) -> None:
+        document = self._doc(
+            doc_id=901,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Льготное кредитование АПК",
+            url="https://gisp.gov.ru/nmp/measure/901",
+            action_level="requires_attention",
+            page_type="measure_card",
+            summary="summary",
+        )
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-08",
+            period_days=7,
+            period_label="последние 7 дней",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn("Период: последние 7 дней", markdown)
+        self.assertNotIn("Последние 7 дн.", markdown)
 
     def test_report_does_not_fail_when_published_at_is_none(self) -> None:
         document = self._doc(
@@ -735,12 +871,13 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         document.terms_text = "Срок кредита: До 12 месяцев."
         document.business_signal = "Активная федеральная мера поддержки, действует на регулярной основе"
 
-        markdown = generate_markdown_report(
-            [document],
-            report_date="2026-04-30",
-            relevant_only=True,
-            action_levels=["requires_attention", "watchlist"],
-        )
+        with patch("app.reports.markdown_report.list_document_enrichments", return_value={}):
+            markdown = generate_markdown_report(
+                [document],
+                report_date="2026-04-30",
+                relevant_only=True,
+                action_levels=["requires_attention", "watchlist"],
+            )
 
         self.assertIn("Почему важно:", markdown)
         self.assertIn("Что проверить:", markdown)
@@ -881,7 +1018,8 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             return True
 
         with patch("app.notify.telegram.send_message", side_effect=_capture):
-            sent = telegram.send_digest([document])
+            with patch("app.notify.telegram_formatter.list_document_enrichments", return_value={}):
+                sent = telegram.send_digest([document])
 
         self.assertTrue(sent)
         self.assertEqual(len(captured), 1)

@@ -10,9 +10,10 @@ from urllib.parse import urlsplit, urlunsplit
 
 from app import config
 from app.config import get_source_role
-from app.llm.enrichment import get_display_enrichment
+from app.llm.enrichment import get_display_enrichment, is_generic_enrichment_text
 from app.models import DigestItem, RawDocument, SourceErrorRecord
 from app.operational_health import OperationalNotice, format_operational_notices_markdown
+from app.periods import format_period_label
 from app.storage import list_document_enrichments
 from app.user_facing import user_facing_action_level, user_facing_title
 from app.visibility import (
@@ -125,6 +126,7 @@ def generate_markdown_report(
     report_date: str,
     *,
     period_days: int | None = None,
+    period_label: str | None = None,
     generated_at: datetime | None = None,
     report_title: str | None = None,
     intro_note: str | None = None,
@@ -139,6 +141,7 @@ def generate_markdown_report(
     include_market_background: bool = False,
     include_full_background: bool = False,
     db_path: Path | str | None = None,
+    period_context_lines: Iterable[str] | None = None,
 ) -> str:
     document_list = list(documents)
     report_view = build_report_view(
@@ -169,7 +172,9 @@ def generate_markdown_report(
             report_view=report_view,
             report_date=report_date,
             period_days=period_days,
+            period_label=period_label,
             generated_at=generated_at_value,
+            period_context_lines=list(period_context_lines or []),
         )
     )
     lines.extend(format_operational_notices_markdown(notices))
@@ -517,7 +522,11 @@ def _build_human_importance_text(
     *,
     enrichment: dict[str, str] | None = None,
 ) -> str:
-    if enrichment and enrichment.get("business_impact"):
+    if (
+        enrichment
+        and enrichment.get("business_impact")
+        and not is_generic_enrichment_text(enrichment.get("business_impact"))
+    ):
         return _shorten_summary(enrichment["business_impact"])
     if (
         item.action_level == "requires_attention"
@@ -538,7 +547,11 @@ def _build_human_action_text(
     *,
     enrichment: dict[str, str] | None = None,
 ) -> str:
-    if enrichment and enrichment.get("recommended_action"):
+    if (
+        enrichment
+        and enrichment.get("recommended_action")
+        and not is_generic_enrichment_text(enrichment.get("recommended_action"))
+    ):
         return _shorten_summary(enrichment["recommended_action"])
     if item.application_status == "open" and item.deadline_text:
         return f"Проверить сроки подачи и ответственного: {_shorten_summary(item.deadline_text)}"
@@ -546,6 +559,8 @@ def _build_human_action_text(
         return "Проверить условия участия, окно подачи и ответственного по направлению."
     if get_source_role(item.source_name) == "regional_npa" and item.page_type == "new_rule":
         return "Проверить изменения порядка субсидирования, сроки вступления в силу и затронутые регионы/организации."
+    if item.action_level == "requires_attention" and get_source_role(item.source_name) == "news_signals":
+        return "Проверить влияние на меры поддержки, экспортные условия и необходимость GR-реакции."
     if item.action_level == "requires_attention" and item.page_type in {"new_rule", "deadline_update"}:
         return "Проверить применимость изменений, сроки и влияние на текущие заявки."
     if item.page_type in {"selection_announcement", "measure_card"}:
@@ -554,10 +569,10 @@ def _build_human_action_text(
         return "Проверить изменения порядка субсидирования, сроки вступления в силу и затронутые регионы/организации."
     if item.source_name.startswith("Правительство РФ") or item.source_name.startswith("Regulation.gov.ru"):
         return "Оценить влияние на меры господдержки и регулирование."
-    if item.source_name.startswith("ZOL.ru"):
-        return "Оставить как отраслевой фон, без срочной реакции."
     if item.action_level == "requires_attention":
         return "Проверить применимость меры, сроки и ответственного."
+    if item.source_name.startswith("ZOL.ru"):
+        return "Оставить как отраслевой фон, без срочной реакции."
     return "Взять в наблюдение и вернуться к теме при следующих обновлениях."
 
 
@@ -646,7 +661,9 @@ def _format_header_summary(
     report_view: ReportView,
     report_date: str,
     period_days: int | None,
+    period_label: str | None,
     generated_at: datetime,
+    period_context_lines: list[str],
 ) -> list[str]:
     requires_attention_count = sum(
         1 for document in documents if user_facing_action_level(document) == "requires_attention"
@@ -654,13 +671,13 @@ def _format_header_summary(
     watchlist_count = sum(
         1 for document in documents if user_facing_action_level(document) == "watchlist"
     )
-    period_text = (
-        f"Последние {period_days} дн."
+    period_text = period_label or (
+        format_period_label(type("PeriodProxy", (), {"kind": "rolling", "days": period_days or 7, "target_date": None})())
         if period_days is not None
-        else f"Дата отчета: {report_date}"
+        else f"дата отчета, {datetime.strptime(report_date, '%Y-%m-%d').strftime('%d.%m.%Y')}"
     )
     reaction_text = _build_reaction_summary(report_view)
-    return [
+    lines = [
         "## Сводка",
         f"- Подготовлено: {generated_at.strftime('%Y-%m-%d %H:%M')}",
         f"- Период: {period_text}",
@@ -669,8 +686,13 @@ def _format_header_summary(
         f"- Требует реакции: {requires_attention_count}",
         f"- На наблюдении: {watchlist_count}",
         f"- Главный акцент: {reaction_text}",
-        "",
     ]
+    lines.extend([f"- {line}" for line in period_context_lines])
+    lines.append("")
+    return lines
+    lines.append("")
+    return lines
+    return lines
 
 
 def _format_human_outro(display_sections: dict[str, list[RawDocument]]) -> list[str]:

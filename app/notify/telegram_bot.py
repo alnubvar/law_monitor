@@ -18,9 +18,19 @@ from app.notify.telegram import (
     SEARCH_PROMPT_MESSAGE,
     TELEGRAM_COMMANDS,
     build_command_response,
+    get_interface_summary,
     sanitize_telegram_exception_message,
 )
 from app.operational_health import collect_operational_notices
+from app.periods import (
+    PeriodSpec,
+    build_rolling_period,
+    build_today_period,
+    build_yesterday_period,
+    filter_documents_for_period,
+    format_period_label,
+    parse_period_spec,
+)
 from app.reports.markdown_report import generate_markdown_report
 from app.run_lock import WriterLockHeldError, writer_lock
 from app.pipeline.analyze import run_analyze
@@ -93,15 +103,17 @@ BUTTON_TO_COMMAND: Mapping[str, str] = {
     "🔄 Обновить данные": "/refresh",
     "ℹ️ Помощь": "/help",
 }
-REPORT_PERIOD_BUTTON_TO_DAYS: Mapping[str, int] = {
-    "Сегодня": 1,
-    "3 дня": 3,
-    "7 дней": 7,
-    "14 дней": 14,
+REPORT_PERIOD_BUTTON_TO_COMMAND: Mapping[str, str] = {
+    "Сегодня": "/report today",
+    "Вчера": "/report yesterday",
+    "3 дня": "/report 3",
+    "7 дней": "/report 7",
+    "14 дней": "/report 14",
 }
 REPORT_PERIOD_KEYBOARD_LAYOUT: tuple[tuple[str, ...], ...] = (
-    ("Сегодня", "3 дня"),
-    ("7 дней", "14 дней"),
+    ("Сегодня", "Вчера"),
+    ("3 дня", "7 дней"),
+    ("14 дней",),
     ("Отмена",),
 )
 NORMALIZED_BUTTON_TO_COMMAND: Mapping[str, str] = {
@@ -341,8 +353,8 @@ def _process_update(
             _pending_report_period_chats.discard(chat_key)
             _send_response(chat_id=chat_id, text="Отменено. Возвращаюсь в основное меню.", proxies=proxies)
             return
-        selected_days = REPORT_PERIOD_BUTTON_TO_DAYS.get(normalized_period) if normalized_period else None
-        if selected_days is not None:
+        selected_command = REPORT_PERIOD_BUTTON_TO_COMMAND.get(normalized_period) if normalized_period else None
+        if selected_command is not None:
             _pending_report_period_chats.discard(chat_key)
             _pending_search_chats.discard(chat_key)
             _send_response(
@@ -350,19 +362,20 @@ def _process_update(
                 text="⏳ Подождите немного, формируется GR-отчет...",
                 proxies=proxies,
             )
-            report_command = f"/report {selected_days}"
-            prepared_attachment = _build_period_report_attachment(days=selected_days, db_path=db_path)
+            report_command = selected_command
+            prepared_attachment = _build_period_report_attachment(command_text=report_command, db_path=db_path)
             dispatch_result = dispatch_input_text(
                 report_command,
                 db_path=db_path,
-                default_days=selected_days,
+                default_days=7,
                 chat_id=chat_id,
             )
             _send_response(chat_id=chat_id, text=dispatch_result.response_text, proxies=proxies)
             _send_report_attachment(
                 chat_id=chat_id,
                 proxies=proxies,
-                days=selected_days,
+                command_text=report_command,
+                days=_resolve_report_period(report_command).days,
                 db_path=db_path,
                 prepared_path=prepared_attachment,
             )
@@ -399,13 +412,12 @@ def _process_update(
         return
     prepared_attachment: Path | None = None
     if incoming_command == "/report":
-        report_days = _extract_report_days(resolved_text, default_days=default_days)
         _send_response(
             chat_id=chat_id,
             text="⏳ Подождите немного, формируется GR-отчет...",
             proxies=proxies,
         )
-        prepared_attachment = _build_period_report_attachment(days=report_days, db_path=db_path)
+        prepared_attachment = _build_period_report_attachment(command_text=resolved_text, db_path=db_path)
     dispatch_result = dispatch_input_text(
         resolved_text,
         db_path=db_path,
@@ -417,7 +429,8 @@ def _process_update(
         _send_report_attachment(
             chat_id=chat_id,
             proxies=proxies,
-            days=_extract_report_days(resolved_text, default_days=default_days),
+            command_text=resolved_text,
+            days=_resolve_report_period(resolved_text, default_days=default_days).days,
             db_path=db_path,
             prepared_path=prepared_attachment,
         )
@@ -533,11 +546,17 @@ def _send_report_attachment(
     *,
     chat_id: int | str,
     proxies: dict[str, str] | None,
-    days: int,
+    command_text: str | None = None,
+    days: int | None = None,
     db_path: Path | str | None,
     prepared_path: Path | None = None,
 ) -> bool:
-    txt_report_path = prepared_path or _build_period_report_attachment(days=days, db_path=db_path)
+    resolved_command_text = command_text or f"/report {max(1, min(int(days or 7), 365))}"
+    txt_report_path = prepared_path or _build_period_report_attachment(
+        command_text=resolved_command_text,
+        days=days,
+        db_path=db_path,
+    )
     if txt_report_path is None or not txt_report_path.exists():
         return _send_response(
             chat_id=chat_id,
@@ -621,19 +640,14 @@ def _resolve_period_command_text(
     tokens = (text or "").strip().split()
     if not tokens:
         return 7, text
+    if len(tokens) > 1 and tokens[1].lower() in {"today", "yesterday"}:
+        return 7, f"{tokens[0]} {tokens[1].lower()}"
     if len(tokens) > 1 and tokens[1].isdigit():
         explicit_days = max(1, min(int(tokens[1]), 365))
         set_user_default_period_days(chat_id, explicit_days, db_path=resolved_db_path)
         return explicit_days, f"{tokens[0]} {explicit_days}"
     default_days = get_user_default_period_days(chat_id, db_path=resolved_db_path, fallback=7)
     return default_days, f"{tokens[0]} {default_days}"
-
-
-def _extract_report_days(text: str, *, default_days: int) -> int:
-    tokens = (text or "").strip().split()
-    if len(tokens) > 1 and tokens[1].isdigit():
-        return max(1, min(int(tokens[1]), 365))
-    return max(1, min(int(default_days), 365))
 
 
 def _command_text_for_dispatch(command: str | None, text: str) -> str:
@@ -654,9 +668,11 @@ def _normalize_report_period_choice(text: str) -> str | None:
     normalized = (text or "").strip().lower()
     if not normalized:
         return None
-    if normalized in {"сегодня", "3 дня", "7 дней", "14 дней", "отмена"}:
+    if normalized in {"сегодня", "вчера", "3 дня", "7 дней", "14 дней", "отмена"}:
         if normalized == "сегодня":
             return "Сегодня"
+        if normalized == "вчера":
+            return "Вчера"
         if normalized == "3 дня":
             return "3 дня"
         if normalized == "7 дней":
@@ -674,34 +690,65 @@ def _has_command_arguments(text: str) -> bool:
     return len(normalized.split(maxsplit=1)) > 1
 
 
-def _build_period_report_attachment(*, days: int, db_path: Path | str | None) -> Path | None:
+def _resolve_report_period(command_text: str, *, default_days: int = 7) -> PeriodSpec:
+    tokens = (command_text or "").strip().split()
+    token = tokens[1] if len(tokens) > 1 else None
+    return parse_period_spec(token, default_days=default_days)
+
+
+def _build_period_report_attachment(
+    *,
+    command_text: str | None = None,
+    days: int | None = None,
+    db_path: Path | str | None,
+) -> Path | None:
     try:
         resolved_db_path = db_path or config.DB_PATH
         init_db(resolved_db_path)
         backfill_missing_published_at(resolved_db_path)
+        resolved_command_text = command_text or f"/report {max(1, min(int(days or 7), 365))}"
+        period = _resolve_report_period(resolved_command_text)
         documents = list_recent_documents(
             db_path=resolved_db_path,
-            days=days,
+            days=period.days,
             relevant_only=False,
             action_levels=None,
         )
-        source_errors = list_recent_source_errors(db_path=resolved_db_path, days=days)
+        documents = filter_documents_for_period(documents, period)
+        source_errors = list_recent_source_errors(db_path=resolved_db_path, days=period.days)
+        period_context_lines: list[str] = []
+        if period.kind == "today":
+            summary = get_interface_summary(db_path=resolved_db_path, days=14)
+            has_today_urgent = any(
+                (document.action_level == "requires_attention")
+                and (document.published_at or document.collected_at)
+                for document in documents
+            )
+            if not has_today_urgent:
+                period_context_lines.append("Сегодня новых срочных документов нет.")
+                if summary["requires_attention"] > 0:
+                    period_context_lines.append(
+                        f"Активные срочные вопросы за последние 14 дней: {summary['requires_attention']}. Откройте 🚨 Срочное."
+                    )
         markdown = generate_markdown_report(
             documents,
             report_date=datetime.now().strftime("%Y-%m-%d"),
-            period_days=days,
+            period_days=period.days,
+            period_label=format_period_label(period),
+            period_context_lines=period_context_lines,
             operational_notices=collect_operational_notices(db_path=resolved_db_path),
             source_errors=source_errors,
+            db_path=resolved_db_path,
         )
         txt_content = _markdown_to_plain_text(markdown)
         timestamp = datetime.now().strftime("%Y-%m-%d")
         attachment_dir = config.DATA_DIR / "telegram_attachments"
         attachment_dir.mkdir(parents=True, exist_ok=True)
-        txt_path = attachment_dir / f"gr_monitoring_{timestamp}_{days}d.txt"
+        txt_path = attachment_dir / f"gr_monitoring_{timestamp}_{period.kind}_{period.days}d.txt"
         txt_path.write_text(txt_content, encoding="utf-8")
         return txt_path
     except Exception:
-        logger.exception("Failed to build report attachment for %s days.", days)
+        logger.exception("Failed to build report attachment for command %s.", command_text or days)
         return None
 
 
@@ -728,8 +775,10 @@ def _run_manual_refresh(*, db_path: Path | str | None) -> str:
         collected = run_collect()
         analyzed = run_analyze()
         run_digest(days=7)
-        requires_attention = count_documents_by_action_level("requires_attention")
-        watchlist = count_documents_by_action_level("watchlist")
+        interface_summary = get_interface_summary(
+            db_path=db_path or config.DB_PATH,
+            days=7,
+        )
         audit_rows = list_latest_source_audit(db_path=db_path or config.DB_PATH)
         problematic_sources = sum(1 for row in audit_rows if row.get("error_message"))
         mark_runtime_event(
@@ -741,8 +790,10 @@ def _run_manual_refresh(*, db_path: Path | str | None) -> str:
             "✅ Обновление завершено\n"
             f"Новых документов: {collected}\n"
             f"Обработано: {analyzed}\n"
-            f"Требует внимания: {requires_attention}\n"
-            f"Наблюдение: {watchlist}"
+            f"Включено в интерфейс: {interface_summary['visible_total']}\n"
+            f"Требует реакции: {interface_summary['requires_attention']}\n"
+            f"На наблюдении: {interface_summary['watchlist']}\n"
+            "Период проверки: последние 7 дней"
         ]
         if problematic_sources > 0:
             lines.append(f"Проблемных источников: {problematic_sources}")

@@ -191,6 +191,7 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         self.assertIn("Найдено документов: 1", text)
         self.assertIn("Уровень: требует внимания", text)
         self.assertIn("Льготное кредитование АПК", text)
+        self.assertIn("Для сегодняшних сигналов используйте 📅 Сегодня.", text)
 
     def test_status_counts_follow_user_facing_visibility_and_match_urgent_after_downgrade_and_dedup(self) -> None:
         db_path = self._db_path("telegram_status_user_facing_counts.db")
@@ -301,6 +302,28 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         text = telegram.build_command_response("/today", db_path=db_path)
 
         self.assertEqual(text, "📅 Сегодня новых срочных документов нет.")
+
+    def test_today_empty_state_includes_active_urgent_count_for_last_14_days(self) -> None:
+        db_path = self._db_path("telegram_today_active_urgent_context.db")
+        init_db(db_path)
+        save_document(
+            self._doc(
+                doc_id=10,
+                source_name="ГИСП - меры поддержки АПК",
+                region="federal",
+                title="Активный срочный документ",
+                url="https://gisp.gov.ru/nmp/measure/999",
+                action_level="requires_attention",
+                page_type="measure_card",
+                days_ago=2,
+            ),
+            db_path,
+        )
+
+        text = telegram.build_command_response("/today", db_path=db_path)
+
+        self.assertIn("Сегодня новых срочных документов нет.", text)
+        self.assertIn("Активные срочные вопросы за последние 14 дней: 1. Откройте 🚨 Срочное.", text)
 
     def test_today_deduplicates_government_news_and_docs_pair(self) -> None:
         db_path = self._db_path("telegram_today_government_dedup.db")
@@ -648,7 +671,10 @@ class TelegramNotifySmokeTest(unittest.TestCase):
 
         text = telegram.build_command_response("/urgent", db_path=db_path)
 
-        self.assertEqual(text, "🚨 Требует внимания GR: новых документов нет за 7 дней.")
+        self.assertEqual(
+            text,
+            "🚨 Требует внимания GR: новых документов нет за 7 дней.\nДля сегодняшних сигналов используйте 📅 Сегодня.",
+        )
 
     def test_report_command_does_not_show_local_report_path(self) -> None:
         text = telegram.build_command_response("/report")
@@ -664,7 +690,30 @@ class TelegramNotifySmokeTest(unittest.TestCase):
 
     def test_report_period_wording_for_one_day(self) -> None:
         text = telegram.build_command_response("/report 1")
-        self.assertIn("GR-сводка за сегодня", text)
+        self.assertIn("Период: сегодня,", text)
+
+    def test_report_today_empty_state_includes_active_urgent_count(self) -> None:
+        db_path = self._db_path("telegram_report_today_active_urgent.db")
+        init_db(db_path)
+        save_document(
+            self._doc(
+                doc_id=20,
+                source_name="ГИСП - меры поддержки АПК",
+                region="federal",
+                title="Активный срочный документ",
+                url="https://gisp.gov.ru/nmp/measure/1001",
+                action_level="requires_attention",
+                page_type="measure_card",
+                days_ago=3,
+            ),
+            db_path,
+        )
+
+        text = telegram.build_command_response("/report today", db_path=db_path)
+
+        self.assertIn("Период: сегодня,", text)
+        self.assertIn("Сегодня новых срочных документов нет.", text)
+        self.assertIn("Активные срочные вопросы за последние 14 дней: 1. Откройте 🚨 Срочное.", text)
 
     def test_watchlist_is_limited_for_user_and_has_tail_hint(self) -> None:
         db_path = self._db_path("telegram_watchlist_limit.db")

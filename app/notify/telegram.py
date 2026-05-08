@@ -12,13 +12,22 @@ import requests
 
 from app import config
 from app.config import get_source_role, load_sources
-from app.llm.enrichment import get_display_enrichment
+from app.llm.enrichment import get_display_enrichment, is_generic_enrichment_text
 from app.models import RawDocument
 from app.notify.telegram_formatter import build_digest_message
 from app.operational_health import (
     OperationalNotice,
     collect_operational_notices,
     format_operational_notices_telegram,
+)
+from app.periods import (
+    PeriodSpec,
+    build_rolling_period,
+    build_today_period,
+    document_event_date,
+    filter_documents_for_period,
+    format_period_label,
+    parse_period_spec,
 )
 from app.user_facing import user_facing_action_level, user_facing_title
 from app.pipeline.diagnostics import build_diagnostics_snapshot
@@ -67,6 +76,8 @@ TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 TELEGRAM_SAFE_MESSAGE_LENGTH = 3900
 TELEGRAM_LIST_LIMIT = 10
 TELEGRAM_WATCHLIST_USER_LIMIT = 5
+REFRESH_INTERFACE_PERIOD_DAYS = 14
+REFRESH_SUMMARY_PERIOD_DAYS = 7
 SEARCH_PROMPT_MESSAGE = "🔎 Введите запрос для поиска по архиву."
 PUBLISHED_AT_FUTURE_TOLERANCE = timedelta(days=2)
 
@@ -214,7 +225,13 @@ def build_command_response(
     normalized_command, command_args = _parse_command_request(command_text)
     resolved_db_path = Path(db_path) if db_path is not None else config.DB_PATH
     init_db(resolved_db_path)
-    period_days = _extract_period_days(command_args, default_days=default_days)
+    report_period = parse_period_spec(
+        command_args[0] if command_args else None,
+        default_days=default_days,
+    ) if normalized_command == "/report" else build_rolling_period(
+        _extract_period_days(command_args, default_days=default_days)
+    )
+    period_days = report_period.days
 
     if normalized_command == "/status":
         return _build_status_message(resolved_db_path)
@@ -225,7 +242,7 @@ def build_command_response(
     if normalized_command == "/watchlist":
         return _build_watchlist_message(resolved_db_path, days=period_days)
     if normalized_command == "/report":
-        return _build_report_message(resolved_db_path, days=period_days)
+        return _build_report_message(resolved_db_path, period=report_period)
     if normalized_command == "/sources":
         return _build_sources_message(resolved_db_path)
     if normalized_command == "/ocr":
@@ -333,17 +350,27 @@ def _build_status_message(db_path: Path | str) -> str:
 
 def _build_today_message(db_path: Path | str) -> str:
     today_documents = _select_today_visible_documents(db_path)
+    active_urgent_last_14_days = get_interface_summary(db_path=db_path, days=14)["requires_attention"]
     if not today_documents:
-        return "📅 Сегодня новых срочных документов нет."
+        lines = ["📅 Сегодня новых срочных документов нет."]
+        if active_urgent_last_14_days > 0:
+            lines.append(
+                f"Активные срочные вопросы за последние 14 дней: {active_urgent_last_14_days}. Откройте 🚨 Срочное."
+            )
+        return "\n".join(lines)
     enrichment_by_url = list_document_enrichments([document.url for document in today_documents], db_path=db_path)
     urgent_count = sum(1 for document in today_documents if user_facing_action_level(document) == "requires_attention")
     watchlist_documents = [document for document in today_documents if user_facing_action_level(document) == "watchlist"]
     urgent_documents = [document for document in today_documents if user_facing_action_level(document) == "requires_attention"]
     lines = [
-        f"📅 Сегодня ({_today_utc().isoformat()})",
+        f"📅 Сегодня ({build_today_period().target_date.strftime('%d.%m.%Y')})",
     ]
     if urgent_count == 0:
         lines.append("Сегодня новых срочных документов нет.")
+        if active_urgent_last_14_days > 0:
+            lines.append(
+                f"Активные срочные вопросы за последние 14 дней: {active_urgent_last_14_days}. Откройте 🚨 Срочное."
+            )
     else:
         lines.append(f"Требует внимания GR: {urgent_count}")
         lines.extend(_format_document_lines(urgent_documents, include_summary=False, enrichment_by_url=enrichment_by_url))
@@ -368,14 +395,61 @@ def _build_urgent_message(db_path: Path | str, *, days: int) -> str:
         include_market_background=False,
     )
     if not urgent_documents:
-        return f"🚨 Требует внимания GR: новых документов нет за {days} дней."
+        return (
+            f"🚨 Требует внимания GR: новых документов нет за {days} дней.\n"
+            "Для сегодняшних сигналов используйте 📅 Сегодня."
+        )
     enrichment_by_url = list_document_enrichments([document.url for document in urgent_documents], db_path=db_path)
     lines = [
         f"🚨 Требует внимания GR (за {days} дней)",
         f"Найдено документов: {len(urgent_documents)}",
     ]
     lines.extend(_format_document_lines(urgent_documents, include_summary=False, enrichment_by_url=enrichment_by_url))
+    lines.append("Для сегодняшних сигналов используйте 📅 Сегодня.")
     return _cap_message("\n".join(lines))
+
+
+def get_interface_summary(
+    db_path: Path | str,
+    *,
+    days: int = REFRESH_INTERFACE_PERIOD_DAYS,
+) -> dict[str, int]:
+    recent_documents = list_recent_documents(
+        db_path=db_path,
+        days=days,
+        relevant_only=False,
+        action_levels=["requires_attention", "watchlist"],
+    )
+    visible_documents = select_visible_report_documents(
+        recent_documents,
+        relevant_only=False,
+        action_levels=["requires_attention", "watchlist"],
+        include_market_background=False,
+    )
+    requires_attention_count = sum(
+        1
+        for document in visible_documents
+        if user_facing_action_level(document) == "requires_attention"
+    )
+    watchlist_count = sum(
+        1
+        for document in visible_documents
+        if user_facing_action_level(document) == "watchlist"
+    )
+    return {
+        "visible_total": len(visible_documents),
+        "requires_attention": requires_attention_count,
+        "watchlist": watchlist_count,
+    }
+
+
+def get_interface_counts(
+    db_path: Path | str,
+    *,
+    days: int = REFRESH_INTERFACE_PERIOD_DAYS,
+) -> tuple[int, int]:
+    summary = get_interface_summary(db_path=db_path, days=days)
+    return summary["requires_attention"], summary["watchlist"]
 
 
 def _build_watchlist_message(db_path: Path | str, *, days: int) -> str:
@@ -411,13 +485,14 @@ def _build_watchlist_message(db_path: Path | str, *, days: int) -> str:
     return _cap_message("\n".join(lines))
 
 
-def _build_report_message(db_path: Path | str, *, days: int) -> str:
+def _build_report_message(db_path: Path | str, *, period: PeriodSpec) -> str:
     documents = list_recent_documents(
         db_path=db_path,
-        days=days,
+        days=period.days,
         relevant_only=False,
         action_levels=["requires_attention", "watchlist"],
     )
+    documents = filter_documents_for_period(documents, period)
     visible_documents = select_visible_report_documents(
         documents,
         relevant_only=False,
@@ -428,7 +503,7 @@ def _build_report_message(db_path: Path | str, *, days: int) -> str:
     return _cap_message(
         _build_short_report_text(
             visible_documents,
-            days=days,
+            period=period,
             operational_notices=notices,
             db_path=db_path,
         )
@@ -438,7 +513,7 @@ def _build_report_message(db_path: Path | str, *, days: int) -> str:
 def _build_short_report_text(
     documents: Sequence[RawDocument],
     *,
-    days: int,
+    period: PeriodSpec,
     operational_notices: Sequence[OperationalNotice] = (),
     db_path: Path | str | None = None,
 ) -> str:
@@ -459,7 +534,8 @@ def _build_short_report_text(
             sections[section].append(document)
 
     lines = [
-        f"🧾 {_format_report_period_label(days)}",
+        "🧾 GR-сводка",
+        f"Период: {format_period_label(period)}",
         f"📊 Включено в краткую сводку: {len(documents)}",
         (
             f"🚨 Требует реакции: {len(sections['requires_attention'])} | "
@@ -468,6 +544,15 @@ def _build_short_report_text(
         ),
         "",
     ]
+    if period.kind == "today" and not sections["requires_attention"]:
+        lines.append("Сегодня новых срочных документов нет.")
+        if db_path is not None:
+            active_urgent_last_14_days = get_interface_summary(db_path=db_path, days=14)["requires_attention"]
+            if active_urgent_last_14_days > 0:
+                lines.append(
+                    f"Активные срочные вопросы за последние 14 дней: {active_urgent_last_14_days}. Откройте 🚨 Срочное."
+                )
+        lines.append("")
     if operational_notices:
         lines.extend(format_operational_notices_telegram(operational_notices))
         lines.append("")
@@ -564,27 +649,24 @@ def _build_search_message(db_path: Path | str, *, query: str) -> str:
     return _cap_message("\n".join(lines))
 
 
-def _format_report_period_label(days: int) -> str:
-    if days <= 1:
-        return "GR-сводка за сегодня"
-    if days in {3, 7, 14}:
-        suffix = "дня" if days in {3} else "дней"
-        return f"GR-сводка за {days} {suffix}"
-    return f"GR-сводка за {days} дней"
-
-
 def _build_report_summary_action_hint(
     document: RawDocument,
     *,
     section: str,
     enrichment: dict[str, str] | None = None,
 ) -> str:
-    if enrichment and enrichment.get("recommended_action"):
+    if (
+        enrichment
+        and enrichment.get("recommended_action")
+        and not is_generic_enrichment_text(enrichment.get("recommended_action"))
+    ):
         return enrichment["recommended_action"][:120]
     if document.application_status == "open" and document.deadline_text:
         return document.deadline_text[:120]
     if get_source_role(document.source_name) == "regional_npa" and document.page_type == "new_rule":
         return "Проверить изменения порядка субсидирования, сроки вступления в силу и затронутые регионы/организации."
+    if section == "requires_attention" and get_source_role(document.source_name) == "news_signals":
+        return "Проверить влияние на меры поддержки, экспортные условия и необходимость GR-реакции."
     if section == "requires_attention":
         return "Проверить применимость меры, сроки и ответственного."
     if section == "measures_and_selections":
@@ -772,15 +854,8 @@ def _select_today_visible_documents(db_path: Path | str) -> list[RawDocument]:
     return [
         document
         for document in visible_documents
-        if _document_event_date(document) == today
+        if document_event_date(document) == today
     ]
-
-
-def _document_event_date(document: RawDocument) -> date:
-    event_dt = document.published_at or document.collected_at
-    if event_dt.tzinfo is None:
-        event_dt = event_dt.replace(tzinfo=timezone.utc)
-    return event_dt.astimezone(timezone.utc).date()
 
 
 def _today_utc() -> date:
@@ -831,7 +906,11 @@ def _build_user_facing_reason(
     *,
     enrichment: dict[str, str] | None = None,
 ) -> str:
-    if enrichment and enrichment.get("business_impact"):
+    if (
+        enrichment
+        and enrichment.get("business_impact")
+        and not is_generic_enrichment_text(enrichment.get("business_impact"))
+    ):
         return enrichment["business_impact"]
     if (
         classify_display_section(document) == "requires_attention"

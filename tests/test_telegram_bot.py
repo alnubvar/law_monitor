@@ -92,6 +92,7 @@ class TelegramBotTest(unittest.TestCase):
         self.assertIn("one_time_keyboard", payload)
         self.assertNotIn("one_tiime_keyboard", payload)
         self.assertTrue(payload["one_time_keyboard"])
+        self.assertEqual(payload["keyboard"][0][1]["text"], "Вчера")
 
     def test_dispatch_start_returns_welcome_text(self) -> None:
         result = telegram_bot.dispatch_input_text("/start")
@@ -298,12 +299,19 @@ class TelegramBotTest(unittest.TestCase):
                 with patch("app.notify.telegram_bot.run_collect", return_value=3):
                     with patch("app.notify.telegram_bot.run_analyze", return_value=2):
                         with patch("app.notify.telegram_bot.run_digest"):
-                            with patch("app.notify.telegram_bot.count_documents_by_action_level", side_effect=[1, 4]):
+                            with patch(
+                                "app.notify.telegram_bot.get_interface_summary",
+                                return_value={"visible_total": 5, "requires_attention": 1, "watchlist": 4},
+                            ):
                                 with patch("app.notify.telegram_bot.list_latest_source_audit", return_value=[]):
                                     with patch("app.notify.telegram_bot.mark_runtime_event"):
                                         text = telegram_bot._run_manual_refresh(db_path=None)
         self.assertIn("Обновление завершено", text)
         self.assertIn("Новых документов: 3", text)
+        self.assertIn("Включено в интерфейс: 5", text)
+        self.assertIn("Требует реакции: 1", text)
+        self.assertIn("На наблюдении: 4", text)
+        self.assertIn("Период проверки: последние 7 дней", text)
         self.assertIn("Ошибки источников: 0", text)
 
     def test_refresh_blocked_if_called_too_often(self) -> None:
@@ -348,7 +356,10 @@ class TelegramBotTest(unittest.TestCase):
                 with patch("app.notify.telegram_bot.run_collect", return_value=1):
                     with patch("app.notify.telegram_bot.run_analyze", return_value=1):
                         with patch("app.notify.telegram_bot.run_digest"):
-                            with patch("app.notify.telegram_bot.count_documents_by_action_level", side_effect=[1, 2]):
+                            with patch(
+                                "app.notify.telegram_bot.get_interface_summary",
+                                return_value={"visible_total": 3, "requires_attention": 1, "watchlist": 2},
+                            ):
                                 with patch("app.notify.telegram_bot.list_latest_source_audit", return_value=audits):
                                     with patch("app.notify.telegram_bot.mark_runtime_event"):
                                         text = telegram_bot._run_manual_refresh(db_path=None)
@@ -444,7 +455,18 @@ class TelegramBotTest(unittest.TestCase):
                 with patch("app.notify.telegram_bot.dispatch_input_text", return_value=telegram_bot.DispatchResult(command="/report", response_text="summary")) as dispatch:
                     with patch("app.notify.telegram_bot._send_report_attachment", return_value=True):
                         telegram_bot._process_update(update, db_path=None, proxies=None)
-        self.assertEqual(dispatch.call_args.args[0], "/report 1")
+        self.assertEqual(dispatch.call_args.args[0], "/report today")
+
+    def test_report_period_selection_supports_yesterday(self) -> None:
+        telegram_bot._pending_report_period_chats.clear()
+        telegram_bot._pending_report_period_chats.add("123")
+        update = {"update_id": 2, "message": {"chat": {"id": 123}, "text": "ВЧЕРА"}}
+        with patch.multiple(telegram_bot.config, TELEGRAM_CHAT_ID="123"):
+            with patch("app.notify.telegram_bot._send_response", return_value=True):
+                with patch("app.notify.telegram_bot.dispatch_input_text", return_value=telegram_bot.DispatchResult(command="/report", response_text="summary")) as dispatch:
+                    with patch("app.notify.telegram_bot._send_report_attachment", return_value=True):
+                        telegram_bot._process_update(update, db_path=None, proxies=None)
+        self.assertEqual(dispatch.call_args.args[0], "/report yesterday")
 
     def test_report_period_selection_runs_report_with_days(self) -> None:
         telegram_bot._pending_report_period_chats.clear()
@@ -467,7 +489,7 @@ class TelegramBotTest(unittest.TestCase):
         self.assertIsNotNone(path)
         assert path is not None
         content = path.read_text(encoding="utf-8")
-        self.assertIn("Период: Последние 30 дн.", content)
+        self.assertIn("Период: последние 30 дней", content)
         path.unlink(missing_ok=True)
 
     def test_report_7_attachment_contains_period_label(self) -> None:
@@ -478,7 +500,19 @@ class TelegramBotTest(unittest.TestCase):
         self.assertIsNotNone(path)
         assert path is not None
         content = path.read_text(encoding="utf-8")
-        self.assertIn("Период: Последние 7 дн.", content)
+        self.assertIn("Период: последние 7 дней", content)
+        path.unlink(missing_ok=True)
+
+    def test_yesterday_attachment_contains_previous_calendar_date_label(self) -> None:
+        db_path = self._offset_path("telegram_report_yesterday_attachment.db")
+        init_db(db_path)
+        save_document(self._doc(url="https://gisp.gov.ru/nmp/measure/9564206", days_ago=1), db_path)
+        path = telegram_bot._build_period_report_attachment(command_text="/report yesterday", db_path=str(db_path))
+        self.assertIsNotNone(path)
+        assert path is not None
+        content = path.read_text(encoding="utf-8")
+        yesterday_label = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%d.%m.%Y")
+        self.assertIn(f"Период: вчера, {yesterday_label}", content)
         path.unlink(missing_ok=True)
 
     def test_send_response_logs_do_not_contain_tokenized_url(self) -> None:

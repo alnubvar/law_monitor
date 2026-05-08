@@ -4,7 +4,7 @@ import re
 from collections.abc import Sequence
 
 from app.config import get_source_role
-from app.llm.enrichment import get_display_enrichment
+from app.llm.enrichment import get_display_enrichment, is_generic_enrichment_text
 from app.models import RawDocument
 from app.operational_health import OperationalNotice, format_operational_notices_telegram
 from app.storage import list_document_enrichments
@@ -214,7 +214,11 @@ def _format_digest_item(
         lines.append(f"  Срок: {_truncate_text(deadline_text, DETAIL_MAX_CHARS)}")
     signal_text = (
         enrichment.get("business_impact")
-        if enrichment and enrichment.get("business_impact")
+        if (
+            enrichment
+            and enrichment.get("business_impact")
+            and not is_generic_enrichment_text(enrichment.get("business_impact"))
+        )
         else document.business_signal
     )
     if signal_text:
@@ -252,7 +256,11 @@ def _build_digest_action_hint(
     *,
     enrichment: dict[str, str] | None = None,
 ) -> str:
-    if enrichment and enrichment.get("recommended_action"):
+    if (
+        enrichment
+        and enrichment.get("recommended_action")
+        and not is_generic_enrichment_text(enrichment.get("recommended_action"))
+    ):
         return _truncate_text(enrichment["recommended_action"], DETAIL_MAX_CHARS)
     if document.application_status == "open" and document.deadline_text:
         return _truncate_text(document.deadline_text, DETAIL_MAX_CHARS)
@@ -261,6 +269,8 @@ def _build_digest_action_hint(
     if get_source_role(document.source_name) == "regional_npa" and document.page_type == "new_rule":
         return "Проверить изменения порядка субсидирования, сроки вступления в силу и затронутые регионы/организации."
     section = classify_display_section(document)
+    if section == "requires_attention" and get_source_role(document.source_name) == "news_signals":
+        return "Проверить влияние на меры поддержки, экспортные условия и необходимость GR-реакции."
     if section == "requires_attention":
         return "Проверить применимость меры, сроки и ответственного."
     if section == "measures_and_selections":

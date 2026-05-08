@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from abc import ABC, abstractmethod
 from functools import lru_cache
 from typing import Any, Mapping
@@ -10,6 +11,7 @@ from urllib import request as urllib_request
 from pydantic import BaseModel, Field
 
 from app import config
+from app.config import get_source_role
 from app.models import AnalysisResult, ActionLevel
 
 ELIGIBLE_ACTION_LEVELS: set[str] = {"requires_attention", "watchlist"}
@@ -54,24 +56,78 @@ class MockEnrichmentProvider(BaseEnrichmentProvider):
         region: str | None = None,
     ) -> EnrichmentResult:
         del raw_text, url, level
-        executive_summary = analysis.summary.strip() or title.strip()
-        source_hint = source_name or "источник"
-        region_hint = self._format_region(region)
-        impact = analysis.impact.strip()
-        if region_hint and "регион" not in impact.lower():
-            impact = f"{impact} Регион: {region_hint}."
-        impact = impact.strip()
-        if source_hint and source_hint not in impact:
-            impact = f"{impact} Источник: {source_hint}.".strip()
+        source_role = get_source_role(source_name or "")
+        executive_summary = self._clip_text(
+            self._build_executive_summary(analysis, source_role=source_role),
+            max_chars=220,
+        )
+        business_impact = self._clip_text(
+            self._build_business_impact(
+                analysis,
+                source_role=source_role,
+                region=region,
+                source_name=source_name,
+            ),
+            max_chars=280,
+        )
+        recommended_action = self._clip_text(
+            self._build_recommended_action(analysis, source_role=source_role),
+            max_chars=220,
+        )
         return EnrichmentResult(
             executive_summary=executive_summary,
-            business_impact=impact,
-            recommended_action=self._build_recommended_action(analysis),
+            business_impact=business_impact,
+            recommended_action=recommended_action,
             deadline_hint=self._build_deadline_hint(analysis),
-            confidence=0.35,
+            confidence=0.85,
         )
 
-    def _build_recommended_action(self, analysis: AnalysisResult) -> str:
+    def _build_executive_summary(
+        self,
+        analysis: AnalysisResult,
+        *,
+        source_role: str,
+    ) -> str:
+        if source_role == "regional_npa" and analysis.action_level == "requires_attention":
+            return "Документ содержит изменения в порядке предоставления поддержки; требуется проверка условий и сроков."
+        if source_role in {"active_support_measures", "support_documents"} or analysis.page_type in {
+            "measure_card",
+            "selection_announcement",
+            "deadline_update",
+        }:
+            return "Мера поддержки требует проверки применимости, условий участия и возможных сроков."
+        return "Документ оставлен на наблюдении как возможный стратегический сигнал."
+
+    def _build_business_impact(
+        self,
+        analysis: AnalysisResult,
+        *,
+        source_role: str,
+        region: str | None,
+        source_name: str | None,
+    ) -> str:
+        if source_role == "regional_npa":
+            base = "Изменения могут повлиять на порядок предоставления поддержки, круг получателей или сроки применения."
+        elif source_role in {"active_support_measures", "support_documents"} or analysis.application_status in {
+            "open",
+            "regular",
+        }:
+            base = "Изменения могут повлиять на применимость меры, условия участия и организацию подачи."
+        else:
+            base = "Сигнал может повлиять на контекст господдержки и требует наблюдения со стороны GR."
+
+        details: list[str] = []
+        region_hint = self._format_region(region)
+        if region_hint:
+            details.append(f"Регион: {region_hint}.")
+        if source_name:
+            details.append(f"Источник: {source_name}.")
+        suffix = f" {' '.join(details)}" if details else ""
+        return f"{base}{suffix}".strip()
+
+    def _build_recommended_action(self, analysis: AnalysisResult, *, source_role: str) -> str:
+        if source_role == "regional_npa":
+            return "Проверить изменения условий, сроки вступления в силу и затронутые организации."
         if analysis.action_level == "requires_attention":
             if analysis.application_status == "open" or analysis.deadline_text:
                 return "Проверить применимость меры, сроки подачи и ответственного."
@@ -96,6 +152,12 @@ class MockEnrichmentProvider(BaseEnrichmentProvider):
         if not normalized:
             return ""
         return normalized
+
+    def _clip_text(self, value: str, *, max_chars: int) -> str:
+        normalized = " ".join(value.split()).strip()
+        if len(normalized) <= max_chars:
+            return normalized
+        return f"{normalized[: max_chars - 3].rstrip(' ,.;:-')}..."
 
 
 class OpenAICompatibleEnrichmentProvider(BaseEnrichmentProvider):
@@ -322,11 +384,32 @@ def get_display_enrichment(
     if isinstance(confidence, (int, float)) and float(confidence) < min_confidence:
         return None
     fields = {
-        "executive_summary": str(enrichment_row.get("executive_summary") or "").strip(),
-        "business_impact": str(enrichment_row.get("business_impact") or "").strip(),
-        "recommended_action": str(enrichment_row.get("recommended_action") or "").strip(),
-        "deadline_hint": str(enrichment_row.get("deadline_hint") or "").strip(),
+        "executive_summary": _sanitize_enrichment_text(enrichment_row.get("executive_summary")),
+        "business_impact": _sanitize_enrichment_text(enrichment_row.get("business_impact")),
+        "recommended_action": _sanitize_enrichment_text(enrichment_row.get("recommended_action")),
+        "deadline_hint": _sanitize_enrichment_text(enrichment_row.get("deadline_hint")),
     }
     if not any(fields.values()):
         return None
     return fields
+
+
+def _sanitize_enrichment_text(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"^\s*AI-(?:сводка|оценка влияния|рекомендация)\s*:\s*", "", text, flags=re.IGNORECASE)
+    return " ".join(text.split()).strip()
+
+
+def is_generic_enrichment_text(value: str | None) -> bool:
+    normalized = " ".join(str(value or "").lower().split()).strip()
+    if not normalized:
+        return False
+    generic_markers = (
+        "документ оставлен на наблюдении",
+        "сигнал может повлиять",
+        "оценить срочность сигнала",
+        "изменения могут повлиять на",
+    )
+    return any(marker in normalized for marker in generic_markers)

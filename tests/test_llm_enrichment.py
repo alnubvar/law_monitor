@@ -186,8 +186,57 @@ class LLMEnrichmentTest(unittest.TestCase):
         self.assertTrue(result.executive_summary)
         self.assertTrue(result.business_impact)
         self.assertTrue(result.recommended_action)
+        self.assertNotIn("AI-", result.executive_summary)
+        self.assertNotIn("AI-", result.business_impact)
+        self.assertNotIn("AI-", result.recommended_action)
+        self.assertEqual(
+            result.executive_summary,
+            "Мера поддержки требует проверки применимости, условий участия и возможных сроков.",
+        )
         self.assertEqual(result.deadline_hint, "до 1 июня 2026 года")
-        self.assertGreater(result.confidence or 0.0, 0.0)
+        self.assertGreaterEqual(result.confidence or 0.0, 0.8)
+
+    def test_mock_enrichment_uses_safe_generic_regional_npa_summary(self) -> None:
+        analysis = _analysis_result("requires_attention").model_copy(
+            update={
+                "page_type": "new_rule",
+                "summary": "МИНИСТЕРСТВО ФИЗИЧЕСКОЙ КУЛЬТУРЫ И СПОРТА ... OCR шум",
+            }
+        )
+        provider = MockEnrichmentProvider()
+
+        result = provider.enrich_document(
+            title="О внесении изменений в порядок предоставления субсидий",
+            raw_text="OCR NOISE",
+            analysis=analysis,
+            source_name="Право Ставропольского края",
+            region="stavropol",
+        )
+
+        self.assertEqual(
+            result.executive_summary,
+            "Документ содержит изменения в порядке предоставления поддержки; требуется проверка условий и сроков.",
+        )
+        self.assertNotIn("МИНИСТЕРСТВО ФИЗИЧЕСКОЙ КУЛЬТУРЫ", result.executive_summary)
+
+    def test_display_enrichment_strips_legacy_ai_prefixes(self) -> None:
+        display = get_display_enrichment(
+            {
+                "executive_summary": "AI-сводка: Кратко для пользователя.",
+                "business_impact": "AI-оценка влияния: Влияние на условия участия.",
+                "recommended_action": "AI-рекомендация: Проверить сроки подачи.",
+                "deadline_hint": "AI-сводка: До 1 июня 2026 года.",
+                "confidence": 0.8,
+                "error": None,
+            }
+        )
+
+        self.assertIsNotNone(display)
+        assert display is not None
+        self.assertEqual(display["executive_summary"], "Кратко для пользователя.")
+        self.assertEqual(display["business_impact"], "Влияние на условия участия.")
+        self.assertEqual(display["recommended_action"], "Проверить сроки подачи.")
+        self.assertEqual(display["deadline_hint"], "До 1 июня 2026 года.")
 
     def test_only_requires_attention_and_watchlist_are_eligible(self) -> None:
         spy_provider = _SpyProvider()

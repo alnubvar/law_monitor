@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.config import DOCS_DIR, REPORTS_DIR, ensure_directories
 from app.operational_health import collect_operational_notices
+from app.periods import build_rolling_period, format_period_label
 from app.reports.markdown_report import generate_markdown_report, save_markdown_report
 from app.storage import (
     backfill_missing_published_at,
@@ -57,6 +58,7 @@ def run_digest(
         documents,
         report_date=report_date,
         period_days=days,
+        period_label=format_period_label(build_rolling_period(days)),
         report_title=report_title,
         intro_note=intro_note,
         operational_notices=(

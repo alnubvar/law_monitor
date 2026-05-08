@@ -130,7 +130,8 @@ class TelegramFormatterTest(unittest.TestCase):
         urgent.application_status = "regular"
         urgent.business_signal = "Активная федеральная мера поддержки, действует на регулярной основе"
 
-        text = build_digest_message([urgent])
+        with mock.patch("app.notify.telegram_formatter.list_document_enrichments", return_value={}):
+            text = build_digest_message([urgent])
 
         self.assertIn("статус: активна", text)
         self.assertIn("режим: регулярная мера", text)
@@ -221,6 +222,27 @@ class TelegramFormatterTest(unittest.TestCase):
 
         self.assertIn("Что проверить: Оставить как отраслевой фон, без срочной реакции.", text)
 
+    def test_formatter_uses_urgent_news_hint_without_background_wording(self) -> None:
+        document = self._doc(
+            doc_id=31,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Минсельхоз предложил новые условия льготного кредитования АПК",
+            url="https://www.zol.ru/n/urgent-credit-news",
+            action_level="requires_attention",
+            page_type="news_background",
+            summary="Новость о правилах господдержки.",
+        )
+        document.business_signal = "Есть признаки изменения условий льготного кредитования для АПК."
+
+        text = build_digest_message([document])
+
+        self.assertIn(
+            "Что проверить: Проверить влияние на меры поддержки, экспортные условия и необходимость GR-реакции.",
+            text,
+        )
+        self.assertNotIn("Что проверить: Оставить как отраслевой фон, без срочной реакции.", text)
+
     def test_formatter_uses_specific_regional_npa_hint(self) -> None:
         document = self._doc(
             doc_id=30,
@@ -300,6 +322,38 @@ class TelegramFormatterTest(unittest.TestCase):
         self.assertIn("Новая редакция меры меняет условия участия для заемщиков АПК.", text)
         self.assertIn("Проверить применимость обновленных условий и ответственного.", text)
         self.assertIn("До 30 июня 2026 года.", text)
+
+    def test_formatter_strips_legacy_ai_prefixes_from_enrichment(self) -> None:
+        document = self._doc(
+            doc_id=44,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Льготное кредитование АПК",
+            url="https://gisp.gov.ru/nmp/measure/9564204",
+            action_level="requires_attention",
+            page_type="measure_card",
+            summary="Базовая summary.",
+        )
+
+        with mock.patch(
+            "app.notify.telegram_formatter.list_document_enrichments",
+            return_value={
+                document.url: {
+                    "executive_summary": "AI-сводка: Executive summary для Telegram.",
+                    "business_impact": "AI-оценка влияния: Изменения влияют на условия участия.",
+                    "recommended_action": "AI-рекомендация: Проверить применимость обновленных условий.",
+                    "deadline_hint": "До 30 июня 2026 года.",
+                    "confidence": 0.8,
+                    "error": None,
+                }
+            },
+        ):
+            text = build_digest_message([document])
+
+        self.assertIn("Executive summary для Telegram.", text)
+        self.assertNotIn("AI-сводка:", text)
+        self.assertNotIn("AI-оценка влияния:", text)
+        self.assertNotIn("AI-рекомендация:", text)
 
     def test_formatter_falls_back_without_enrichment(self) -> None:
         document = self._doc(
@@ -397,6 +451,37 @@ class TelegramFormatterTest(unittest.TestCase):
 
         self.assertIn("...", text)
         self.assertNotIn(long_text.strip(), text)
+
+    def test_generic_mock_enrichment_does_not_override_specific_digest_reason_and_action(self) -> None:
+        document = self._doc(
+            doc_id=45,
+            source_name="Право Ставропольского края",
+            region="stavropol",
+            title="О внесении изменений в порядок предоставления субсидий",
+            url="https://pravo.stavregion.ru/document/45",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="Базовая summary.",
+        )
+
+        with mock.patch(
+            "app.notify.telegram_formatter.list_document_enrichments",
+            return_value={
+                document.url: {
+                    "executive_summary": "Документ содержит изменения в порядке предоставления поддержки; требуется проверка условий и сроков.",
+                    "business_impact": "Сигнал может повлиять на контекст господдержки и требует наблюдения со стороны GR.",
+                    "recommended_action": "Оценить срочность сигнала и определить следующий GR-шаг.",
+                    "confidence": 0.8,
+                    "error": None,
+                }
+            },
+        ):
+            text = build_digest_message([document])
+
+        self.assertIn("Кратко: Документ содержит изменения в порядке предоставления поддержки", text)
+        self.assertIn("Что проверить: Проверить изменения порядка субсидирования", text)
+        self.assertNotIn("Сигнал может повлиять на контекст господдержки", text)
+        self.assertNotIn("Оценить срочность сигнала", text)
 
 
 if __name__ == "__main__":
