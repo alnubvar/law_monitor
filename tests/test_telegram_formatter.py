@@ -200,9 +200,12 @@ class TelegramFormatterTest(unittest.TestCase):
             action_level="requires_attention",
             page_type="new_rule",
         )
+        document.raw_text = "Распознанный текст отсутствует."
 
         text = build_digest_message([document])
 
+        self.assertNotIn("🚨 Новые документы, требующие внимания", text)
+        self.assertIn("⚖️ Региональные НПА (1)", text)
         self.assertIn("НПА Краснодарского края: документ после OCR", text)
         self.assertNotIn("requires OCR extraction", text)
 
@@ -246,6 +249,34 @@ class TelegramFormatterTest(unittest.TestCase):
         self.assertNotIn("Что проверить: Оставить как отраслевой фон.", text)
         self.assertNotIn("Подготовлены экспортные ограничения", text)
         self.assertNotIn("Проверить влияние на экспорт и меры поддержки.", text)
+
+    def test_formatter_credit_news_keeps_credit_hint_even_with_trade_words(self) -> None:
+        document = self._doc(
+            doc_id=311,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Минсельхоз предложил новые условия льготного кредитования АПК",
+            url="https://www.zol.ru/n/formatter-credit-trade",
+            action_level="requires_attention",
+            page_type="news_background",
+            summary="Новость об обновлении условий льготного кредитования.",
+        )
+        document.raw_text = (
+            "Минсельхоз предложил обновить условия льготного кредитования АПК. "
+            "В тексте также упоминаются экспортные пошлины на смежном рынке."
+        )
+
+        text = build_digest_message([document])
+
+        self.assertIn("Сигнал: Обновлены условия льготного кредитования", text)
+        self.assertIn(
+            "Что проверить: Проверить условия кредитования, сроки и применимость для АПК.",
+            text,
+        )
+        self.assertNotIn(
+            "Что проверить: Проверить влияние пошлины/торгового регулирования на рынок и контрагентов.",
+            text,
+        )
 
     def test_fertilizer_duty_item_uses_trade_action_not_credit_wording(self) -> None:
         document = self._doc(

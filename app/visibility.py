@@ -8,6 +8,7 @@ from urllib.parse import urlsplit, urlunsplit
 from app.config import get_source_role
 from app.models import RawDocument
 from app.rules.news_background_guard import guard_news_signal_action_level
+from app.user_facing import is_weak_ocr_placeholder_document
 
 VISIBLE_WATCHLIST_PAGE_TYPES = {
     "news_background",
@@ -79,12 +80,17 @@ AGRO_STRATEGY_RE = re.compile(
     r"|масличн|подсолнечн|рапс|соя|сои|соев|кукуруз|ячмен|молок|мясн|птицевод|удобрен|семеновод|мелиор",
     re.IGNORECASE,
 )
+MACRO_STRATEGY_TITLE_NOISE_RE = re.compile(
+    r"ситуаци\w*\s+в\s+экономик|макроэконом|экономик\w*\s+показател|совещан\w*"
+    r"|финансирован\w*|бюджетн\w*\s+кредит|реконструкц|пассажирск\w*\s+железнодорож",
+    re.IGNORECASE,
+)
 
 VisibilitySurface = Literal["report", "telegram_digest", "telegram_list"]
 
 
 def effective_user_action_level(document: RawDocument) -> str | None:
-    return guard_news_signal_action_level(
+    guarded_action_level = guard_news_signal_action_level(
         document.action_level,
         source_role=get_source_role(document.source_name),
         reason=document.relevance_reason,
@@ -95,6 +101,9 @@ def effective_user_action_level(document: RawDocument) -> str | None:
         raw_text=document.raw_text,
         page_type=document.page_type,
     )
+    if guarded_action_level == "requires_attention" and is_weak_ocr_placeholder_document(document):
+        return "watchlist"
+    return guarded_action_level
 
 
 def deduplicate_user_facing_documents(
@@ -211,17 +220,25 @@ def should_show_document(
 
 
 def _is_executive_strategy_relevant(document: RawDocument) -> bool:
+    title = document.title or ""
+    summary = document.summary or ""
+    raw_text = document.raw_text[:1200] if document.raw_text else ""
+    title_summary_text = " ".join(part for part in (title, summary) if part)
     text = " ".join(
         part
         for part in (
-            document.title,
-            document.summary,
-            document.raw_text[:1200] if document.raw_text else "",
+            title,
+            summary,
+            raw_text,
             document.source_name,
         )
         if part
     )
-    return bool(AGRO_STRATEGY_RE.search(text))
+    if not AGRO_STRATEGY_RE.search(text):
+        return False
+    if MACRO_STRATEGY_TITLE_NOISE_RE.search(title_summary_text) and not AGRO_STRATEGY_RE.search(title_summary_text):
+        return False
+    return True
 
 
 def _should_show_watchlist_document(

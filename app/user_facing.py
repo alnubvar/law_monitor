@@ -8,7 +8,6 @@ from urllib.parse import urlsplit
 from app.config import get_source_role
 from app.llm.enrichment import is_generic_enrichment_text
 from app.models import DigestItem, RawDocument
-from app.visibility import effective_user_action_level
 
 OCR_FALLBACK_KRASNODAR_TITLE = "НПА Краснодарского края: документ после OCR"
 OCR_FALLBACK_GENERIC_TITLE = "Документ после OCR: требуется ручная проверка"
@@ -30,9 +29,48 @@ EXPORT_RESTRICTION_RE = re.compile(
     r"экспорт|импорт|квот|пошлин|пошлина|тариф|ограничен|запрет|тамож|вывоз",
     re.IGNORECASE,
 )
+TRADE_REGULATION_RE = re.compile(
+    r"импорт|квот|пошлин|пошлина|тариф|ограничен|запрет|тамож|вывоз"
+    r"|правил\w*\s+экспорт|экспортн\w*\s+правил",
+    re.IGNORECASE,
+)
+OCR_FALLBACK_TITLE_RE = re.compile(r"\bдокумент после ocr\b", re.IGNORECASE)
+OCR_MEANINGFUL_MARKERS = (
+    "субсид",
+    "поддержк",
+    "поряд",
+    "утвержд",
+    "измен",
+    "вступ",
+    "льгот",
+    "кредит",
+    "отбор",
+    "заяв",
+    "срок",
+    "апк",
+)
+OCR_WEAK_TEXT_RE = re.compile(
+    r"распознанн\w*\s+текст\s+отсутств|требует\s+ручн\w*\s+провер|документ\s+после\s+ocr"
+    r"|requires\s+ocr\s+extraction|ocr\s+placeholder",
+    re.IGNORECASE,
+)
+INTENT_SELECTION_OPEN = "selection_open"
+INTENT_SELECTION_CHANGE = "selection_change"
+INTENT_MARKET_OBSERVATION = "market_observation"
+INTENT_STRATEGY = "strategy_general"
+INTENT_REGIONAL_SUBSIDY = "regional_subsidy_rule"
+INTENT_REGIONAL_RULE = "regional_rule"
+INTENT_CREDIT_SUPPORT = "credit_support_change"
+INTENT_SUPPORT_CHANGE = "support_change"
+INTENT_TRADE_REGULATION = "trade_regulation"
+INTENT_SUPPORT_MEASURE = "support_measure"
+INTENT_SUPPORT_ATTENTION = "support_attention"
+INTENT_OCR_PLACEHOLDER = "ocr_placeholder"
 
 
 def user_facing_action_level(document: RawDocument) -> str | None:
+    from app.visibility import effective_user_action_level
+
     return effective_user_action_level(document)
 
 
@@ -232,6 +270,40 @@ def is_useful_executive_summary(text: str | None) -> bool:
     return not any(marker in lowered for marker in generic_markers)
 
 
+def has_meaningful_extracted_ocr_text(document: PresentationDocument) -> bool:
+    raw_text = _normalize_text(_get_value(document, "raw_text"))
+    if not raw_text:
+        return False
+    lowered = raw_text.lower()
+    if (
+        _is_technical_ocr_placeholder(raw_text)
+        or OCR_FALLBACK_TITLE_RE.search(raw_text)
+        or OCR_WEAK_TEXT_RE.search(raw_text)
+    ):
+        return False
+    informative_words = re.findall(r"[a-zа-яё]{4,}", lowered, flags=re.IGNORECASE)
+    unique_words = set(informative_words)
+    marker_hits = sum(1 for marker in OCR_MEANINGFUL_MARKERS if marker in lowered)
+    if len(raw_text) >= 250 and len(unique_words) >= 14 and marker_hits >= 2:
+        return True
+    if len(raw_text) >= 120 and len(unique_words) >= 10 and marker_hits >= 3:
+        return True
+    return False
+
+
+def is_weak_ocr_placeholder_document(document: PresentationDocument) -> bool:
+    title = _normalize_text(_get_value(document, "title"))
+    visible_title = _normalize_text(_base_visible_title(document))
+    has_placeholder_title = (
+        _is_technical_ocr_placeholder(title)
+        or bool(OCR_FALLBACK_TITLE_RE.search(title))
+        or bool(OCR_FALLBACK_TITLE_RE.search(visible_title))
+    )
+    if not has_placeholder_title:
+        return False
+    return not has_meaningful_extracted_ocr_text(document)
+
+
 def _base_visible_title(document: PresentationDocument) -> str:
     title = _normalize_text(_get_value(document, "title"))
     if _is_technical_ocr_placeholder(title):
@@ -288,27 +360,8 @@ def _deterministic_reason(
     *,
     section: str | None,
 ) -> str:
-    combined = _combined_text(document)
-    source_role = _source_role(document)
-    if _looks_like_selection_announcement(document, combined):
-        return "Открыт прием заявок"
-    if _source_role(document) == "news_signals" and (_action_level(document) == "watchlist" or section == "news_signals"):
-        return "Рынок оставлен на наблюдении"
-    if source_role == "regional_npa" and _page_type(document) == "new_rule":
-        if _looks_like_subsidy(combined):
-            return "Изменены условия субсидирования"
-        return "Обновлены правила поддержки"
-    if _looks_like_subsidy(combined) and _contains_change_signal(combined):
-        if "льгот" in combined and "кредит" in combined:
-            return "Обновлены условия льготного кредитования"
-        return "Изменены условия поддержки"
-    if _looks_like_export_restriction(combined):
-        return "Подготовлены экспортные ограничения"
-    if _looks_like_selection(combined) and _contains_change_signal(combined):
-        return "Обновлены правила отбора"
-    if _is_support_context(combined) and _contains_change_signal(combined):
-        return "Изменены условия поддержки"
-    return ""
+    intent = _detect_deterministic_intent(document, section=section)
+    return _reason_for_intent(intent)
 
 
 def _deterministic_action(
@@ -316,36 +369,8 @@ def _deterministic_action(
     *,
     section: str | None,
 ) -> str:
-    combined = _combined_text(document)
-    source_role = _source_role(document)
-    application_status = _get_value(document, "application_status").lower()
-    if _looks_like_selection_announcement(document, combined):
-        return "Проверить сроки подачи и ответственного."
-    if application_status == "open":
-        return "Проверить сроки подачи и ответственного."
-    if source_role == "news_signals" and (_action_level(document) == "watchlist" or section == "news_signals"):
-        return "Оставить как отраслевой фон."
-    if source_role == "news_signals" and _looks_like_export_restriction(combined):
-        return "Проверить влияние пошлины/торгового регулирования на рынок и контрагентов."
-    if source_role == "news_signals" and _looks_like_credit_support_context(combined):
-        return "Проверить условия кредитования, сроки и применимость для АПК."
-    if source_role == "news_signals" and _is_support_context(combined):
-        return "Проверить влияние на условия поддержки."
-    if source_role == "regional_npa" and _page_type(document) == "new_rule":
-        if _looks_like_subsidy(combined):
-            return "Проверить изменения порядка субсидирования и сроки вступления."
-        return "Проверить новые правила и сроки вступления."
-    if _looks_like_export_restriction(combined):
-        return "Проверить влияние пошлины/торгового регулирования на рынок и контрагентов."
-    if _looks_like_selection(combined):
-        return "Проверить условия и сроки отбора."
-    if section == "strategy_signals" or source_role == "strategy":
-        return "Оценить влияние на регулирование."
-    if _is_support_measure_context(document, combined):
-        return "Проверить применимость меры, сроки и ответственного."
-    if _is_support_context(combined) and _action_level(document) == "requires_attention":
-        return "Проверить условия поддержки."
-    return ""
+    intent = _detect_deterministic_intent(document, section=section)
+    return _action_for_intent(intent, document=document)
 
 
 def _compress_freeform_reason(text: str, *, document: PresentationDocument) -> str:
@@ -353,18 +378,10 @@ def _compress_freeform_reason(text: str, *, document: PresentationDocument) -> s
     if not normalized:
         return ""
     combined = f"{normalized} {_combined_text(document)}"
-    if _looks_like_selection_announcement(document, combined):
-        return "Открыт прием заявок"
-    if _looks_like_subsidy(combined) and _contains_change_signal(combined):
-        if "льгот" in combined and "кредит" in combined:
-            return "Обновлены условия льготного кредитования"
-        return "Изменены условия поддержки"
-    if _looks_like_export_restriction(combined):
-        return "Подготовлены экспортные ограничения"
-    if _looks_like_selection(combined) and _contains_change_signal(combined):
-        return "Обновлены правила отбора"
-    if _source_role(document) == "news_signals" and _action_level(document) != "requires_attention":
-        return "Рынок оставлен на наблюдении"
+    intent = _detect_deterministic_intent(document, combined_text=combined)
+    deterministic = _reason_for_intent(intent)
+    if deterministic:
+        return deterministic
     return normalized
 
 
@@ -373,25 +390,112 @@ def _compress_freeform_action(text: str, *, document: PresentationDocument) -> s
     if not normalized:
         return ""
     combined = f"{normalized} {_combined_text(document)}"
-    if _source_role(document) == "news_signals" and _action_level(document) != "requires_attention":
-        return "Оставить как отраслевой фон."
-    if _source_role(document) == "news_signals" and _looks_like_export_restriction(combined):
-        return "Проверить влияние пошлины/торгового регулирования на рынок и контрагентов."
-    if _source_role(document) == "news_signals" and _looks_like_credit_support_context(combined):
-        return "Проверить условия кредитования, сроки и применимость для АПК."
-    if _source_role(document) == "news_signals" and _is_support_context(combined):
-        return "Проверить влияние на условия поддержки."
-    if _looks_like_selection(combined):
-        return "Проверить сроки подачи и ответственного."
-    if _source_role(document) == "regional_npa" and _page_type(document) == "new_rule":
-        if _looks_like_subsidy(combined):
-            return "Проверить изменения порядка субсидирования и сроки вступления."
-        return "Проверить новые правила и сроки вступления."
-    if _is_support_measure_context(document, combined):
-        return "Проверить применимость меры, сроки и ответственного."
-    if _is_support_context(combined) and _action_level(document) == "requires_attention":
-        return "Проверить условия поддержки."
+    intent = _detect_deterministic_intent(document, combined_text=combined)
+    deterministic = _action_for_intent(intent, document=document)
+    if deterministic:
+        return deterministic
     return normalized
+
+
+def _detect_deterministic_intent(
+    document: PresentationDocument,
+    *,
+    section: str | None = None,
+    combined_text: str | None = None,
+) -> str:
+    combined = combined_text or _combined_text(document)
+    source_role = _source_role(document)
+    page_type = _page_type(document)
+    action_level = _action_level(document)
+    application_status = _get_value(document, "application_status").lower()
+
+    if is_weak_ocr_placeholder_document(document):
+        return INTENT_OCR_PLACEHOLDER
+    if _looks_like_selection_announcement(document, combined):
+        return INTENT_SELECTION_OPEN
+    if application_status == "open":
+        return INTENT_SELECTION_OPEN
+    if source_role == "news_signals" and (action_level == "watchlist" or section == "news_signals"):
+        return INTENT_MARKET_OBSERVATION
+    if section == "strategy_signals" or source_role == "strategy":
+        return INTENT_STRATEGY
+    if source_role == "regional_npa" and page_type == "new_rule":
+        if _looks_like_credit_support_context(combined) and _contains_change_signal(combined):
+            return INTENT_CREDIT_SUPPORT
+        if _looks_like_subsidy(combined):
+            return INTENT_REGIONAL_SUBSIDY
+        return INTENT_REGIONAL_RULE
+    if _looks_like_credit_support_context(combined) and _contains_change_signal(combined):
+        return INTENT_CREDIT_SUPPORT
+    if _looks_like_selection(combined) and _contains_change_signal(combined):
+        return INTENT_SELECTION_CHANGE
+    if _is_support_context(combined) and _contains_change_signal(combined):
+        return INTENT_SUPPORT_CHANGE
+    if _looks_like_trade_regulation_context(combined):
+        return INTENT_TRADE_REGULATION
+    if _is_support_measure_context(document, combined):
+        return INTENT_SUPPORT_MEASURE
+    if _is_support_context(combined) and action_level == "requires_attention":
+        return INTENT_SUPPORT_ATTENTION
+    return ""
+
+
+def _reason_for_intent(intent: str) -> str:
+    if intent == INTENT_SELECTION_OPEN:
+        return "Открыт прием заявок"
+    if intent == INTENT_MARKET_OBSERVATION:
+        return "Рынок оставлен на наблюдении"
+    if intent == INTENT_STRATEGY:
+        return "Стратегический федеральный сигнал по господдержке или порядку регулирования."
+    if intent == INTENT_REGIONAL_SUBSIDY:
+        return "Изменены условия субсидирования"
+    if intent == INTENT_REGIONAL_RULE:
+        return "Обновлены правила поддержки"
+    if intent == INTENT_CREDIT_SUPPORT:
+        return "Обновлены условия льготного кредитования"
+    if intent == INTENT_SUPPORT_CHANGE:
+        return "Изменены условия поддержки"
+    if intent == INTENT_TRADE_REGULATION:
+        return "Подготовлены экспортные ограничения"
+    if intent == INTENT_SELECTION_CHANGE:
+        return "Обновлены правила отбора"
+    if intent == INTENT_OCR_PLACEHOLDER:
+        return "Документ после OCR требует ручной проверки"
+    return ""
+
+
+def _action_for_intent(
+    intent: str,
+    *,
+    document: PresentationDocument,
+) -> str:
+    if intent == INTENT_SELECTION_OPEN:
+        return "Проверить сроки подачи и ответственного."
+    if intent == INTENT_MARKET_OBSERVATION:
+        return "Оставить как отраслевой фон."
+    if intent == INTENT_STRATEGY:
+        return "Оценить влияние на регулирование."
+    if intent == INTENT_REGIONAL_SUBSIDY:
+        return "Проверить изменения порядка субсидирования и сроки вступления."
+    if intent == INTENT_REGIONAL_RULE:
+        return "Проверить новые правила и сроки вступления."
+    if intent == INTENT_CREDIT_SUPPORT:
+        return "Проверить условия кредитования, сроки и применимость для АПК."
+    if intent == INTENT_SUPPORT_CHANGE:
+        if _source_role(document) == "news_signals":
+            return "Проверить влияние на условия поддержки."
+        return "Проверить условия поддержки."
+    if intent == INTENT_TRADE_REGULATION:
+        return "Проверить влияние пошлины/торгового регулирования на рынок и контрагентов."
+    if intent == INTENT_SELECTION_CHANGE:
+        return "Проверить условия и сроки отбора."
+    if intent == INTENT_SUPPORT_MEASURE:
+        return "Проверить применимость меры, сроки и ответственного."
+    if intent == INTENT_SUPPORT_ATTENTION:
+        return "Проверить условия поддержки."
+    if intent == INTENT_OCR_PLACEHOLDER:
+        return "Дождаться повторной проверки OCR или сверить текст вручную."
+    return ""
 
 
 def _combined_text(document: PresentationDocument, *, title: str | None = None) -> str:
@@ -440,6 +544,10 @@ def _is_support_measure_context(document: PresentationDocument, text: str) -> bo
 
 def _looks_like_export_restriction(text: str) -> bool:
     return bool(EXPORT_RESTRICTION_RE.search(text))
+
+
+def _looks_like_trade_regulation_context(text: str) -> bool:
+    return bool(TRADE_REGULATION_RE.search(text))
 
 
 def _looks_like_credit_support_context(text: str) -> bool:

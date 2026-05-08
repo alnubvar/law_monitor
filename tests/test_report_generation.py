@@ -486,6 +486,33 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertIn("Проверить влияние пошлины/торгового регулирования на рынок и контрагентов.", markdown)
         self.assertNotIn("Оставить как отраслевой фон.", markdown)
 
+    def test_credit_news_report_keeps_credit_action_even_with_trade_words(self) -> None:
+        document = self._doc(
+            doc_id=152,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Минсельхоз предложил новые условия льготного кредитования АПК",
+            url="https://www.zol.ru/n/credit-with-trade-words",
+            action_level="requires_attention",
+            page_type="news_background",
+            summary="Обновление условий льготного кредитования для АПК.",
+        )
+        document.raw_text = (
+            "Минсельхоз предложил обновить условия льготного кредитования АПК. "
+            "В тексте также упоминаются экспортные пошлины на смежном рынке."
+        )
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-08",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn("Почему важно: Обновлены условия льготного кредитования", markdown)
+        self.assertIn("Что проверить: Проверить условия кредитования, сроки и применимость для АПК.", markdown)
+        self.assertNotIn("Проверить влияние пошлины/торгового регулирования на рынок и контрагентов.", markdown)
+
     def test_report_header_contains_key_counters(self) -> None:
         requires_attention_document = self._doc(
             doc_id=1,
@@ -758,6 +785,33 @@ class ReportGenerationSmokeTest(unittest.TestCase):
 
         self.assertIn("## 🏛 Стратегические сигналы", markdown)
         self.assertIn("Правительство расширило программу господдержки экспортеров АПК", markdown)
+
+    def test_markdown_strategy_section_hides_novak_macro_meeting_with_food_in_raw_text(self) -> None:
+        document = self._doc(
+            doc_id=937,
+            source_name="Правительство РФ - новости",
+            region="federal",
+            title="Александр Новак провёл совещание по ситуации в экономике",
+            url="https://example.test/novak-economy",
+            action_level="watchlist",
+            page_type="new_rule",
+            summary="Совещание по макроэкономическим показателям и инфляции.",
+        )
+        document.raw_text = (
+            "Обсуждались макроэкономические показатели, инфляция и цены, включая продовольственные товары, "
+            "а также вопросы экспорта и тарифного регулирования."
+        )
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-08",
+            period_days=7,
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn("Новых стратегических сигналов не найдено.", markdown)
+        self.assertNotIn("Александр Новак провёл совещание по ситуации в экономике", markdown)
 
     def test_report_header_uses_explicit_period_label_for_seven_days(self) -> None:
         document = self._doc(
@@ -1264,6 +1318,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             page_type="new_rule",
             summary="OCR-текст регионального НПА.",
         )
+        document.raw_text = "Распознанный текст отсутствует."
 
         markdown = generate_markdown_report(
             [document],
@@ -1274,6 +1329,61 @@ class ReportGenerationSmokeTest(unittest.TestCase):
 
         self.assertIn("НПА Краснодарского края: документ после OCR", markdown)
         self.assertNotIn("requires OCR extraction", markdown)
+
+    def test_weak_ocr_placeholder_is_removed_from_urgent_report_section(self) -> None:
+        document = self._doc(
+            doc_id=2,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="document 'weak-ocr.pdf' requires OCR extraction",
+            url="https://admkrai.krasnodar.ru/upload/iblock/d69/weak-ocr.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="OCR placeholder документ.",
+        )
+        document.raw_text = "Распознанный текст отсутствует."
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-08",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn("## 🚨 Требует внимания", markdown)
+        self.assertIn("Новых пунктов, требующих внимания, не найдено.", markdown)
+        self.assertIn("## ⚖️ Региональные изменения", markdown)
+        self.assertIn("НПА Краснодарского края: документ после OCR", markdown)
+        urgent_block = markdown.split("## 🚨 Требует внимания", 1)[1].split("## 📢 Меры и отборы", 1)[0]
+        self.assertNotIn("НПА Краснодарского края: документ после OCR", urgent_block)
+
+    def test_fallback_titled_weak_ocr_placeholder_is_not_rendered_in_urgent_section(self) -> None:
+        document = self._doc(
+            doc_id=3,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="НПА Краснодарского края: документ после OCR",
+            url="https://admkrai.krasnodar.ru/upload/iblock/d69/fallback-ocr.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="OCR placeholder документ.",
+        )
+        document.raw_text = (
+            "Документ после OCR требует ручной проверки. Распознанный текст частично отсутствует, "
+            "структура фрагментарна и не позволяет уверенно выделить условия меры."
+        )
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-08",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        urgent_block = markdown.split("## 🚨 Требует внимания", 1)[1].split("## 📢 Меры и отборы", 1)[0]
+        regional_block = markdown.split("## ⚖️ Региональные изменения", 1)[1].split("## 🏛 Стратегические сигналы", 1)[0]
+        self.assertNotIn("НПА Краснодарского края: документ после OCR", urgent_block)
+        self.assertIn("НПА Краснодарского края: документ после OCR", regional_block)
 
     def test_news_market_background_is_not_reported_as_requires_attention(self) -> None:
         document = self._doc(

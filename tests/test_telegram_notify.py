@@ -858,23 +858,46 @@ class TelegramNotifySmokeTest(unittest.TestCase):
     def test_telegram_lists_use_ocr_fallback_title(self) -> None:
         db_path = self._db_path("telegram_ocr_title_cleanup.db")
         init_db(db_path)
-        save_document(
-            self._doc(
-                doc_id=1,
-                source_name="Нормативные акты Краснодарского края",
-                region="krasnodar",
-                title="document 'wgketjm9pqmq00n60yoyq8c0z2u13z38_cfa07cc203.pdf' requires OCR extraction",
-                url="https://admkrai.krasnodar.ru/upload/wgketjm9pqmq00n60yoyq8c0z2u13z38_cfa07cc203.pdf",
-                action_level="requires_attention",
-                page_type="new_rule",
-            ),
-            db_path,
+        document = self._doc(
+            doc_id=1,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="document 'wgketjm9pqmq00n60yoyq8c0z2u13z38_cfa07cc203.pdf' requires OCR extraction",
+            url="https://admkrai.krasnodar.ru/upload/wgketjm9pqmq00n60yoyq8c0z2u13z38_cfa07cc203.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
         )
+        document.raw_text = "Распознанный текст отсутствует."
+        save_document(document, db_path)
 
         text = telegram.build_command_response("/urgent", db_path=db_path)
 
-        self.assertIn("НПА Краснодарского края: документ после OCR", text)
+        self.assertIn("новых документов нет", text)
+        self.assertNotIn("НПА Краснодарского края: документ после OCR", text)
         self.assertNotIn("requires OCR extraction", text)
+
+    def test_urgent_hides_fallback_titled_weak_ocr_placeholder(self) -> None:
+        db_path = self._db_path("telegram_fallback_titled_ocr_placeholder.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=2,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="НПА Краснодарского края: документ после OCR",
+            url="https://admkrai.krasnodar.ru/upload/iblock/d69/fallback-ocr.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
+        )
+        document.raw_text = (
+            "Документ после OCR требует ручной проверки. Распознанный текст частично отсутствует, "
+            "структура фрагментарна и не позволяет уверенно выделить условия меры."
+        )
+        save_document(document, db_path)
+
+        text = telegram.build_command_response("/urgent", db_path=db_path)
+
+        self.assertIn("новых документов нет", text)
+        self.assertNotIn("НПА Краснодарского края: документ после OCR", text)
 
     def test_long_message_is_split_to_multiple_chunks(self) -> None:
         with patch.multiple(

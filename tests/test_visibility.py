@@ -24,6 +24,7 @@ class VisibilityDecisionTest(unittest.TestCase):
         action_level: str,
         page_type: str,
         summary: str = "summary",
+        raw_text: str = "text",
     ) -> RawDocument:
         now = datetime.now(timezone.utc)
         return RawDocument(
@@ -37,7 +38,7 @@ class VisibilityDecisionTest(unittest.TestCase):
             published_at=now,
             collected_at=now,
             content_hash=f"visibility-{doc_id}",
-            raw_text="text",
+            raw_text=raw_text,
             is_relevant=action_level != "irrelevant",
             relevance_reason="reason",
             importance="high" if action_level == "requires_attention" else "medium",
@@ -343,6 +344,79 @@ class VisibilityDecisionTest(unittest.TestCase):
 
         self.assertEqual(effective_user_action_level(document), "watchlist")
 
+    def test_weak_ocr_placeholder_is_capped_to_watchlist(self) -> None:
+        document = self._doc(
+            doc_id=10,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="document 'wgketjm9pqmq00n60yoyq8c0z2u13z38_cfa07cc203.pdf' requires OCR extraction",
+            url="https://admkrai.krasnodar.ru/upload/iblock/d69/wgketjm9pqmq00n60yoyq8c0z2u13z38.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
+            raw_text="Распознанный текст отсутствует.",
+        )
+
+        self.assertEqual(effective_user_action_level(document), "watchlist")
+        self.assertFalse(
+            should_show_document(
+                document,
+                surface="report",
+                relevant_only=False,
+                action_levels=["requires_attention"],
+            )
+        )
+        self.assertTrue(should_show_document(document, surface="report", relevant_only=False))
+
+    def test_fallback_titled_weak_ocr_placeholder_is_also_capped_to_watchlist(self) -> None:
+        document = self._doc(
+            doc_id=12,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="НПА Краснодарского края: документ после OCR",
+            url="https://admkrai.krasnodar.ru/upload/iblock/d69/fallback-ocr.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
+            raw_text=(
+                "Документ после OCR требует ручной проверки. Распознанный текст частично отсутствует, "
+                "структура фрагментарна и не позволяет уверенно выделить условия меры."
+            ),
+        )
+
+        self.assertEqual(effective_user_action_level(document), "watchlist")
+        self.assertFalse(
+            should_show_document(
+                document,
+                surface="report",
+                relevant_only=False,
+                action_levels=["requires_attention"],
+            )
+        )
+
+    def test_real_ocr_document_with_meaningful_text_remains_requires_attention(self) -> None:
+        document = self._doc(
+            doc_id=11,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="document 'meaningful.pdf' requires OCR extraction",
+            url="https://admkrai.krasnodar.ru/upload/iblock/9a3/meaningful.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
+            raw_text=(
+                "Настоящим постановлением утвержден порядок предоставления субсидий для АПК, "
+                "определены сроки отбора заявок и условия льготного кредитования получателей."
+            ),
+        )
+
+        self.assertEqual(effective_user_action_level(document), "requires_attention")
+        self.assertTrue(
+            should_show_document(
+                document,
+                surface="report",
+                relevant_only=False,
+                action_levels=["requires_attention"],
+            )
+        )
+
 
 class StrategyRelevanceGateTest(unittest.TestCase):
     """Tests for _is_executive_strategy_relevant via should_show_document.
@@ -441,6 +515,19 @@ class StrategyRelevanceGateTest(unittest.TestCase):
             summary="Совещание по макроэкономическим показателям.",
             raw_text=(
                 "Обсуждались вопросы экспорта, импорта и тарифного регулирования в общеэкономическом контексте."
+            ),
+        )
+        self.assertFalse(should_show_document(document, surface="report"))
+        self.assertFalse(should_show_document(document, surface="telegram_digest"))
+
+    def test_generic_economy_meeting_with_food_in_raw_text_but_not_in_title_summary_is_hidden(self) -> None:
+        document = self._strategy_doc(
+            doc_id=205,
+            title="Александр Новак провёл совещание по ситуации в экономике",
+            summary="Совещание по макроэкономическим показателям и инфляции.",
+            raw_text=(
+                "Обсуждались макроэкономические показатели, инфляция и цены, включая продовольственные товары, "
+                "а также вопросы экспорта и тарифного регулирования."
             ),
         )
         self.assertFalse(should_show_document(document, surface="report"))
