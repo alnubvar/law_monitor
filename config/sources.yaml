@@ -1,3 +1,66 @@
+- name: Минсельхоз России - меры господдержки
+  url: https://mcx.gov.ru/activity/state-support/measures/
+  level: federal
+  region: federal
+  source_role: support_documents
+  source_type: html_listing
+  enabled: false
+  parser: generic_html
+  verify_ssl: false
+  request_timeout: 30
+  request_headers:
+    User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/135.0 Safari/537.36
+    Accept-Language: ru-RU,ru;q=0.9
+  max_items: 30
+  allow_patterns:
+    - "subsid"
+    - "gospod"
+    - "льгот"
+    - "кредит"
+    - "поддерж"
+    - ".pdf"
+    - ".docx"
+    - "/measures/"
+    - "/state-support/"
+  deny_patterns:
+    - "/veterinary/"
+    - "/international/"
+    - "/contacts"
+    - "/about"
+    - "/leadership"
+  description: Меры государственной поддержки АПК Министерства сельского хозяйства РФ.
+
+- name: Минсельхоз России - новости
+  url: https://mcx.gov.ru/press-service/news/
+  level: federal
+  region: federal
+  source_role: news_signals
+  source_type: html_listing
+  enabled: false
+  parser: generic_html
+  verify_ssl: false
+  request_timeout: 30
+  request_headers:
+    User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/135.0 Safari/537.36
+    Accept-Language: ru-RU,ru;q=0.9
+  max_items: 25
+  allow_patterns:
+    - "subsid"
+    - "господдерж"
+    - "льготн"
+    - "апк"
+    - "зерн"
+    - "семен"
+    - "экспорт"
+    - "/news/"
+  deny_patterns:
+    - "/veterinary/"
+    - "/international/"
+    - "/contacts"
+    - "/about"
+    - "?page="
+  description: Новости и пресс-релизы Министерства сельского хозяйства РФ по темам АПК и господдержки.
+
 - name: Правительство РФ - документы
   url: http://government.ru/docs/
   level: federal
