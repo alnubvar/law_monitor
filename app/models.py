@@ -45,7 +45,7 @@ class SourceConfig(BaseModel):
     source_role: SourceRole
     source_type: str = "html_listing"
     enabled: bool = True
-    parser: Literal["generic_html", "government", "regional_law", "krasnodar", "donland", "stavropol"] = "generic_html"
+    parser: Literal["generic_html", "government", "regional_law", "krasnodar", "donland", "stavropol", "regulation_gov"] = "generic_html"
     verify_ssl: bool = True
     request_timeout: int | None = None
     user_agent: str | None = None

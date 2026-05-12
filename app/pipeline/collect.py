@@ -20,6 +20,7 @@ from app.sources.generic_html_source import GenericHTMLSource
 from app.sources.government_source import GovernmentSource
 from app.sources.krasnodar_source import KrasnodarSource
 from app.sources.regional_law_source import RegionalLawSource
+from app.sources.regulation_gov_source import RegulationGovSource
 from app.sources.stavropol_source import StavropolSource
 from app.storage import (
     determine_ocr_priority,
@@ -48,6 +49,7 @@ PARSER_REGISTRY: dict[str, type[BaseSource]] = {
     "government": GovernmentSource,
     "krasnodar": KrasnodarSource,
     "regional_law": RegionalLawSource,
+    "regulation_gov": RegulationGovSource,
     "stavropol": StavropolSource,
 }
 
