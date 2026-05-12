@@ -4,8 +4,8 @@
   region: federal
   source_role: support_documents
   source_type: html_listing
-  enabled: false
-  parser: generic_html
+  enabled: true
+  parser: mcx
   verify_ssl: false
   request_timeout: 30
   request_headers:
@@ -36,8 +36,8 @@
   region: federal
   source_role: news_signals
   source_type: html_listing
-  enabled: false
-  parser: generic_html
+  enabled: true
+  parser: mcx
   verify_ssl: false
   request_timeout: 30
   request_headers:
