@@ -51,7 +51,7 @@
   source_role: strategy
   source_type: html_listing
   enabled: true
-  parser: donland
+  parser: generic_html
   verify_ssl: true
   request_timeout: 30
   request_headers:
