@@ -5,6 +5,11 @@ import re
 
 from app.llm.facts_extractor import DocumentFacts
 from app.models import SourceRole
+from app.rules.ahstep_domain_rules import (
+    has_ahstep_domain_relevance,
+    is_non_ahstep_domain_document,
+    should_apply_ahstep_domain_gate,
+)
 from app.rules.news_rules import has_news_signal
 from app.rules.noise_rules import looks_anti_corruption_noise, looks_irrelevant
 from app.rules.page_type_rules import (
@@ -184,8 +189,12 @@ def detect_action_level(
     title_text = title.lower().strip()
     body_text = raw_text.lower()
     lead_text = body_text[:1500]
+    domain_gate_applies = should_apply_ahstep_domain_gate(source_role)
+    has_ahstep_domain_context = has_ahstep_domain_relevance(title_text, body_text[:5000])
 
     if is_service_page or page_type == "navigation" or content_quality in {"navigation", "empty"}:
+        if domain_gate_applies and not has_ahstep_domain_context:
+            return "irrelevant"
         if source_role == "strategy" and has_strategy_signal:
             return "watchlist"
         if (
@@ -202,6 +211,8 @@ def detect_action_level(
             return "watchlist"
         return "irrelevant"
     if looks_irrelevant(title_text, body_text):
+        if domain_gate_applies and not has_ahstep_domain_context:
+            return "irrelevant"
         if source_role == "strategy" and has_strategy_signal:
             return "watchlist"
         if (
@@ -219,6 +230,12 @@ def detect_action_level(
         return "irrelevant"
     if looks_anti_corruption_noise(title_text, lead_text):
         return "irrelevant"
+    if (
+        domain_gate_applies
+        and not has_ahstep_domain_context
+        and page_type in {*ACTIONABLE_PAGE_TYPES, "news_background", "unknown"}
+    ):
+        return "background"
 
     has_watch_in_title = any(marker in title_text for marker in WATCHLIST_MARKERS)
     has_watch_in_body = any(marker in body_text for marker in WATCHLIST_MARKERS)
@@ -511,6 +528,7 @@ def build_business_signal(
     page_type: str,
     facts: DocumentFacts,
     title: str,
+    raw_text: str = "",
     source_role: SourceRole | None,
     source_name: str | None,
     url: str | None,
@@ -544,6 +562,15 @@ def build_business_signal(
     )
     title_text = title.lower()
     combined_text = f"{title_text} {(url or '').lower()}"
+    if (
+        action_level in {"background", "irrelevant"}
+        and facts.support_status != "inactive"
+        and facts.application_status != "closed"
+        and should_apply_ahstep_domain_gate(source_role)
+        and page_type in {*ACTIONABLE_PAGE_TYPES, "news_background", "unknown"}
+        and is_non_ahstep_domain_document(title_text, raw_text[:5000])
+    ):
+        return "Непрофильный документ: контекст АПК или сельского хозяйства не подтвержден."
     if page_type in {"results_protocol", "registry"}:
         return "Результаты/протокол отбора: не требует срочной реакции"
     if looks_low_value_support_or_npa_page(

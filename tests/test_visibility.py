@@ -334,15 +334,50 @@ class VisibilityDecisionTest(unittest.TestCase):
             doc_id=9,
             source_name="Право Ставропольского края",
             region="stavropol",
-            title="Постановление о внесении изменений в порядок предоставления субсидий",
+            title="Постановление о внесении изменений в порядок предоставления субсидий сельхозтоваропроизводителям",
             url="https://pravo.stavregion.ru/document/98765",
             action_level="watchlist",
             page_type="new_rule",
-            summary="Изменения порядка предоставления субсидий.",
+            summary="Изменения порядка предоставления субсидий сельхозтоваропроизводителям.",
         )
         document.business_signal = "Региональный НПА по профильной теме: оставить в наблюдении."
 
         self.assertEqual(effective_user_action_level(document), "watchlist")
+
+    def test_ahstep_gate_hides_non_agro_sport_subsidy_from_all_user_surfaces(self) -> None:
+        sport_subsidy = self._doc(
+            doc_id=13,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="Постановление об утверждении порядка предоставления субсидий организациям физической культуры и спорта",
+            url="https://admkrai.krasnodar.ru/upload/iblock/sport-subsidy.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="Утверждены условия субсидирования физической культуры и спорта.",
+            raw_text=(
+                "Утвержден порядок предоставления субсидий организациям физической культуры "
+                "и спорта Краснодарского края."
+            ),
+        )
+        agriculture_subsidy = self._doc(
+            doc_id=14,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="Постановление об утверждении порядка предоставления субсидий сельхозтоваропроизводителям",
+            url="https://admkrai.krasnodar.ru/upload/iblock/agro-subsidy.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="Утверждены условия субсидирования сельхозтоваропроизводителей.",
+            raw_text="Утвержден порядок предоставления субсидий сельхозтоваропроизводителям Краснодарского края.",
+        )
+
+        self.assertEqual(effective_user_action_level(sport_subsidy), "background")
+        self.assertFalse(should_show_document(sport_subsidy, surface="report", relevant_only=False))
+        self.assertFalse(should_show_document(sport_subsidy, surface="telegram_digest", relevant_only=False))
+        self.assertFalse(should_show_document(sport_subsidy, surface="telegram_list", relevant_only=False))
+        self.assertEqual(effective_user_action_level(agriculture_subsidy), "requires_attention")
+        self.assertTrue(should_show_document(agriculture_subsidy, surface="report", relevant_only=False))
+        self.assertTrue(should_show_document(agriculture_subsidy, surface="telegram_digest", relevant_only=False))
 
     def test_weak_ocr_placeholder_is_capped_to_watchlist(self) -> None:
         document = self._doc(

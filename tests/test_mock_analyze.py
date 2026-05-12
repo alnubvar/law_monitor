@@ -412,10 +412,10 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         client = MockLLMClient(["субсидии сельское хозяйство"])
 
         result = client.analyze_document(
-            "Объявление об отборе на предоставление субсидии",
+            "Объявление об отборе на предоставление субсидии сельхозтоваропроизводителям",
             (
                 "Активная мера поддержки. Объявлен отбор. "
-                "Прием заявок открыт до 20 июня 2026 года."
+                "Прием заявок открыт до 20 июня 2026 года. Мера действует для АПК."
             ),
             source_name="ГИСП - меры поддержки АПК",
             url="https://gisp.gov.ru/nmp/measure/9999999",
@@ -595,10 +595,10 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         client = MockLLMClient(["субсидии сельское хозяйство"])
 
         result = client.analyze_document(
-            "Утверждены изменения порядка предоставления субсидий",
+            "Утверждены изменения порядка предоставления субсидий сельхозтоваропроизводителям",
             (
                 "Внесены изменения в порядок предоставления субсидий. "
-                "Прием заявок открыт до 30 июня 2026 года."
+                "Прием заявок открыт до 30 июня 2026 года. Получатели — сельхозтоваропроизводители."
             ),
             source_name="Право Ставропольского края",
             url="https://pravo.stavregion.ru/doc/subsidy-change",
@@ -609,6 +609,162 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         self.assertEqual(result.action_level, "requires_attention")
         self.assertEqual(result.application_status, "open")
         self.assertIsNotNone(result.deadline_text)
+
+    def test_regional_sport_subsidy_pdf_is_not_requires_attention(self) -> None:
+        client = MockLLMClient(["порядок предоставления", "субсидии"])
+
+        result = client.analyze_document(
+            "Постановление об утверждении порядка предоставления субсидий организациям физической культуры и спорта",
+            (
+                "Утвержден порядок предоставления субсидий организациям физической культуры "
+                "и спорта Краснодарского края. Региональная программа развития спорта."
+            ),
+            source_name="Нормативные акты Краснодарского края",
+            url="https://admkrai.krasnodar.ru/upload/iblock/sport-subsidy.pdf",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertEqual(result.page_type, "new_rule")
+        self.assertNotEqual(result.action_level, "requires_attention")
+        self.assertIn(result.action_level, {"background", "irrelevant"})
+
+    def test_non_agro_subsidy_domains_do_not_pass_ahstep_gate(self) -> None:
+        client = MockLLMClient(["порядок предоставления", "субсидии", "финансирование"])
+
+        cases = [
+            (
+                "Постановление о порядке предоставления субсидий в сфере туризма",
+                "Субсидии предоставляются туристическим организациям на развитие внутреннего туризма.",
+            ),
+            (
+                "Постановление о субсидиях учреждениям культуры",
+                "Утверждены условия финансирования театров, музеев и учреждений культуры.",
+            ),
+            (
+                "Постановление о поддержке образовательных организаций и школ",
+                "Утвержден порядок предоставления субсидий школам и организациям образования.",
+            ),
+        ]
+
+        for title, raw_text in cases:
+            with self.subTest(title=title):
+                result = client.analyze_document(
+                    title,
+                    raw_text,
+                    source_name="Право Ставропольского края",
+                    url="https://pravo.stavregion.ru/document/non-agro",
+                    level="regional",
+                    region="stavropol",
+                )
+
+                self.assertNotEqual(result.action_level, "requires_attention")
+                self.assertIn(result.action_level, {"background", "irrelevant"})
+
+    def test_government_finance_education_health_decision_is_hidden_without_agro(self) -> None:
+        client = MockLLMClient(["порядок предоставления", "финансирование", "субсидии"])
+
+        result = client.analyze_document(
+            "Постановление о финансировании школ и медицинских организаций",
+            (
+                "Правительство утвердило условия предоставления субсидий на развитие "
+                "образования и здравоохранения. Документ определяет региональную программу."
+            ),
+            source_name="Правительство РФ - документы",
+            url="http://government.ru/docs/health-education-finance/",
+            level="federal",
+            region="federal",
+        )
+
+        self.assertNotEqual(result.action_level, "requires_attention")
+        self.assertIn(result.action_level, {"background", "irrelevant"})
+
+    def test_terrorism_prevention_program_is_hidden_even_with_government_program(self) -> None:
+        client = MockLLMClient(["государственная программа", "финансирование"])
+
+        result = client.analyze_document(
+            "Постановление о государственной программе профилактики терроризма и безопасности населения",
+            (
+                "Утверждены условия финансирования мероприятий по профилактике терроризма, "
+                "антитеррористической защищенности и безопасности населения."
+            ),
+            source_name="Право Ростовской области",
+            url="https://pravo.donland.ru/doc/view/id/security-program/",
+            level="regional",
+            region="rostov",
+        )
+
+        self.assertNotEqual(result.action_level, "requires_attention")
+        self.assertIn(result.action_level, {"background", "irrelevant"})
+
+    def test_ahstep_agriculture_domains_pass_relevance_gate(self) -> None:
+        client = MockLLMClient(
+            [
+                "субсидии сельское хозяйство",
+                "льготное кредитование АПК",
+                "экспорт зерна",
+                "удобрения",
+            ]
+        )
+
+        cases = [
+            (
+                "Постановление о порядке предоставления субсидий сельхозтоваропроизводителям",
+                "Прием заявок открыт до 30 июня 2026 года. Получатели — сельхозтоваропроизводители.",
+                "Право Ростовской области",
+                "https://pravo.donland.ru/doc/view/id/agro-subsidy/",
+                {"requires_attention"},
+            ),
+            (
+                "Льготное кредитование АПК",
+                "Активная мера поддержки для сельхозтоваропроизводителей. На регулярной основе.",
+                "ГИСП - меры поддержки АПК",
+                "https://gisp.gov.ru/nmp/measure/agro-credit",
+                {"requires_attention", "watchlist"},
+            ),
+            (
+                "Субсидия на поддержку молочного животноводства",
+                "Мера поддержки производителей молока и КРС. Прием заявок открыт до 20 июня 2026 года.",
+                "Минсельхоз Ростовской области - господдержка",
+                "https://mcx.donland.ru/presscenter/events/dairy-support/",
+                {"requires_attention"},
+            ),
+            (
+                "Объявление об отборе на поддержку растениеводства, зерна и элитного семеноводства",
+                "Субсидии предоставляются на растениеводство, зерновые культуры и элитное семеноводство.",
+                "Минсельхоз Ставропольского края - господдержка",
+                "https://mshsk.ru/gospodderzhka/selection-seeds-2026.php",
+                {"requires_attention", "watchlist"},
+            ),
+            (
+                "Постановление о квоте на экспорт зерна",
+                "Правительство скорректировало экспортную квоту на зерно и пшеницу.",
+                "Правительство РФ - документы",
+                "http://government.ru/docs/grain-export-quota/",
+                {"watchlist"},
+            ),
+            (
+                "Постановление о регулировании экспорта минеральных удобрений",
+                "Введены правила экспорта удобрений для нужд АПК и сельхозпроизводителей.",
+                "Правительство РФ - документы",
+                "http://government.ru/docs/fertilizer-export/",
+                {"watchlist"},
+            ),
+        ]
+
+        for title, raw_text, source_name, url, expected_levels in cases:
+            with self.subTest(title=title):
+                result = client.analyze_document(
+                    title,
+                    raw_text,
+                    source_name=source_name,
+                    url=url,
+                    level="support_measures" if "gisp.gov.ru" in url else "regional",
+                    region="federal" if "government.ru" in url or "gisp.gov.ru" in url else "rostov",
+                )
+
+                self.assertIn(result.action_level, expected_levels)
+                self.assertNotEqual(result.action_level, "irrelevant")
 
     def test_real_application_window_announcement_remains_requires_attention(self) -> None:
         client = MockLLMClient(["субсидии сельское хозяйство"])

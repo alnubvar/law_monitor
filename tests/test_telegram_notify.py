@@ -311,7 +311,7 @@ class TelegramNotifySmokeTest(unittest.TestCase):
                 doc_id=10,
                 source_name="ГИСП - меры поддержки АПК",
                 region="federal",
-                title="Активный срочный документ",
+                title="Активный срочный документ АПК",
                 url="https://gisp.gov.ru/nmp/measure/999",
                 action_level="requires_attention",
                 page_type="measure_card",
@@ -425,6 +425,48 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         self.assertIn("новых документов нет", text)
         self.assertNotIn("Турцию", text)
 
+    def test_urgent_hides_sport_subsidy_but_keeps_agriculture_subsidy(self) -> None:
+        db_path = self._db_path("telegram_urgent_ahstep_domain_gate.db")
+        init_db(db_path)
+        sport_subsidy = self._doc(
+            doc_id=205,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="Постановление об утверждении порядка предоставления субсидий организациям физической культуры и спорта",
+            url="https://admkrai.krasnodar.ru/upload/iblock/sport-subsidy.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="Утверждены условия субсидирования физической культуры и спорта.",
+        )
+        sport_subsidy.raw_text = (
+            "Утвержден порядок предоставления субсидий организациям физической культуры "
+            "и спорта Краснодарского края."
+        )
+        agriculture_subsidy = self._doc(
+            doc_id=206,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="Постановление об утверждении порядка предоставления субсидий сельхозтоваропроизводителям",
+            url="https://admkrai.krasnodar.ru/upload/iblock/agro-subsidy.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="Утверждены условия субсидирования сельхозтоваропроизводителей.",
+        )
+        agriculture_subsidy.raw_text = (
+            "Утвержден порядок предоставления субсидий сельхозтоваропроизводителям "
+            "Краснодарского края."
+        )
+        save_document(sport_subsidy, db_path)
+        save_document(agriculture_subsidy, db_path)
+
+        text = telegram.build_command_response("/urgent", db_path=db_path)
+
+        self.assertIn("Найдено документов: 1", text)
+        self.assertIn("agro-subsidy.pdf", text)
+        self.assertNotIn("sport-subsidy.pdf", text)
+        self.assertNotIn("физической культуры", text)
+        self.assertNotIn("спорта Краснодарского края", text)
+
     def test_urgent_regional_npa_uses_stronger_reason_wording(self) -> None:
         db_path = self._db_path("telegram_urgent_regional_reason.db")
         init_db(db_path)
@@ -432,11 +474,11 @@ class TelegramNotifySmokeTest(unittest.TestCase):
             doc_id=210,
             source_name="Право Ставропольского края",
             region="stavropol",
-            title="О внесении изменений в порядок предоставления субсидий",
+            title="О внесении изменений в порядок предоставления субсидий сельхозтоваропроизводителям",
             url="https://pravo.stavregion.ru/document/98765",
             action_level="requires_attention",
             page_type="new_rule",
-            summary="Изменения порядка предоставления субсидий.",
+            summary="Изменения порядка предоставления субсидий сельхозтоваропроизводителям.",
         )
         document.business_signal = "Региональный НПА по профильной теме: оставить в наблюдении."
         save_document(document, db_path)
@@ -455,7 +497,7 @@ class TelegramNotifySmokeTest(unittest.TestCase):
                 doc_id=1,
                 source_name="ГИСП - меры поддержки АПК",
                 region="federal",
-                title="Новый документ",
+                title="Новый документ АПК",
                 url="https://example.com/new",
                 action_level="requires_attention",
                 page_type="measure_card",
@@ -468,7 +510,7 @@ class TelegramNotifySmokeTest(unittest.TestCase):
                 doc_id=2,
                 source_name="ГИСП - меры поддержки АПК",
                 region="federal",
-                title="Старый документ",
+                title="Старый документ АПК",
                 url="https://example.com/old",
                 action_level="requires_attention",
                 page_type="measure_card",
@@ -701,7 +743,7 @@ class TelegramNotifySmokeTest(unittest.TestCase):
                 doc_id=20,
                 source_name="ГИСП - меры поддержки АПК",
                 region="federal",
-                title="Активный срочный документ",
+                title="Активный срочный документ АПК",
                 url="https://gisp.gov.ru/nmp/measure/1001",
                 action_level="requires_attention",
                 page_type="measure_card",

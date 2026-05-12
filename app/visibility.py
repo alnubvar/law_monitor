@@ -7,6 +7,10 @@ from urllib.parse import urlsplit, urlunsplit
 
 from app.config import get_source_role
 from app.models import RawDocument
+from app.rules.ahstep_domain_rules import (
+    has_ahstep_domain_relevance,
+    should_apply_ahstep_domain_gate,
+)
 from app.rules.news_background_guard import guard_news_signal_action_level
 from app.user_facing import is_weak_ocr_placeholder_document
 
@@ -75,11 +79,6 @@ GOVERNMENT_DUPLICATE_RE = re.compile(
     r"^https?://government\.ru/(?:news|docs)/(?P<doc_id>\d+)/?$",
     re.IGNORECASE,
 )
-AGRO_STRATEGY_RE = re.compile(
-    r"апк|сельхоз|сельск(ое|ого)\s+хозяй|аграр|растениевод|животновод|продовольств|зерн|пшениц"
-    r"|масличн|подсолнечн|рапс|соя|сои|соев|кукуруз|ячмен|молок|мясн|птицевод|удобрен|семеновод|мелиор",
-    re.IGNORECASE,
-)
 MACRO_STRATEGY_TITLE_NOISE_RE = re.compile(
     r"ситуаци\w*\s+в\s+экономик|макроэконом|экономик\w*\s+показател|совещан\w*"
     r"|финансирован\w*|бюджетн\w*\s+кредит|реконструкц|пассажирск\w*\s+железнодорож",
@@ -101,6 +100,8 @@ def effective_user_action_level(document: RawDocument) -> str | None:
         raw_text=document.raw_text,
         page_type=document.page_type,
     )
+    if _is_ahstep_domain_excluded(document, action_level=guarded_action_level):
+        return "background"
     if guarded_action_level == "requires_attention" and is_weak_ocr_placeholder_document(document):
         return "watchlist"
     return guarded_action_level
@@ -179,6 +180,11 @@ def should_show_document(
         return False
     if action_levels is not None and display_action_level not in action_levels:
         return False
+    if _is_ahstep_domain_excluded(
+        document,
+        action_level=display_action_level,
+    ) or _is_ahstep_domain_excluded(document, action_level=document.action_level):
+        return False
     if get_source_role(document.source_name) == "strategy" and not _is_executive_strategy_relevant(document):
         return False
 
@@ -224,21 +230,31 @@ def _is_executive_strategy_relevant(document: RawDocument) -> bool:
     summary = document.summary or ""
     raw_text = document.raw_text[:1200] if document.raw_text else ""
     title_summary_text = " ".join(part for part in (title, summary) if part)
-    text = " ".join(
-        part
-        for part in (
-            title,
-            summary,
-            raw_text,
-            document.source_name,
-        )
-        if part
-    )
-    if not AGRO_STRATEGY_RE.search(text):
+    if not has_ahstep_domain_relevance(title, summary, raw_text):
         return False
-    if MACRO_STRATEGY_TITLE_NOISE_RE.search(title_summary_text) and not AGRO_STRATEGY_RE.search(title_summary_text):
+    if MACRO_STRATEGY_TITLE_NOISE_RE.search(title_summary_text) and not has_ahstep_domain_relevance(title_summary_text):
         return False
     return True
+
+
+def _is_ahstep_domain_excluded(
+    document: RawDocument,
+    *,
+    action_level: str | None,
+) -> bool:
+    if action_level not in {"requires_attention", "watchlist"}:
+        return False
+    if is_weak_ocr_placeholder_document(document):
+        return False
+    source_role = get_source_role(document.source_name)
+    if not should_apply_ahstep_domain_gate(source_role):
+        return False
+    return not has_ahstep_domain_relevance(
+        document.title,
+        document.summary,
+        (document.raw_text or "")[:5000],
+        document.terms_text,
+    )
 
 
 def _should_show_watchlist_document(
