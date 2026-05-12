@@ -171,7 +171,7 @@
   region: stavropol
   source_role: regional_npa
   source_type: html_listing
-  enabled: true
+  enabled: false
   parser: stavropol
   verify_ssl: false
   request_timeout: 30
@@ -185,7 +185,23 @@
     - ".pdf"
     - ".doc"
     - ".docx"
-  description: Официальный правовой портал Ставропольского края.
+  description: Официальный правовой портал Ставропольского края. Отключён — сайт использует JavaScript SPA, статическая HTML-страница не содержит ссылок.
+
+- name: Официальные акты Ставропольского края (НПА)
+  url: http://publication.pravo.gov.ru/api/Documents
+  level: regional
+  region: stavropol
+  source_role: regional_npa
+  source_type: api_json
+  enabled: true
+  parser: publication_pravo_stav
+  verify_ssl: true
+  request_timeout: 30
+  request_headers:
+    User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0 Safari/537.36
+    Accept: application/json
+  max_items: 40
+  description: Правительство, Губернатор, Дума и Минсельхоз Ставропольского края через API официального опубликования НПА (publication.pravo.gov.ru). До 10 актов с каждого органа власти за последнюю страницу.
 
 - name: Нормативные акты Краснодарского края
   url: https://admkrai.krasnodar.ru/content/1291/
