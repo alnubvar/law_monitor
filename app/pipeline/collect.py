@@ -333,7 +333,14 @@ def run_collect_with_options(
                     source_skipped_existing += 1
                     continue
 
-                extracted = extract_document(item, source_config)
+                if item.raw_text:
+                    extracted = ExtractionResult(
+                        raw_text=item.raw_text,
+                        document_type=item.document_type,
+                        extracted_text_length=len(item.raw_text.strip()),
+                    )
+                else:
+                    extracted = extract_document(item, source_config)
                 raw_text_length = extracted.extracted_text_length
                 if raw_text_length is None:
                     raw_text_length = len((extracted.raw_text or "").strip())

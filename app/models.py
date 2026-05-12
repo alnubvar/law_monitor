@@ -65,6 +65,7 @@ class CollectedItem(BaseModel):
     url: str
     published_at: datetime | None = None
     document_type: str = "unknown"
+    raw_text: str | None = None
 
 
 class ExtractionResult(BaseModel):

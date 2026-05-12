@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 from app.models import SourceConfig
-from app.sources.regulation_gov_source import RegulationGovSource, _parse_iso_date
+from app.sources.regulation_gov_source import RegulationGovSource, _build_synthetic_text, _parse_iso_date
 
 _SOURCE_CONFIG = SourceConfig(
     name="Regulation.gov.ru",
@@ -196,6 +196,44 @@ class RegulationGovSourceTest(unittest.TestCase):
         called_url = mock_get.call_args[0][0]
         self.assertIn("sort=desc", called_url)
         self.assertIn("api/npalist", called_url)
+
+    def test_raw_text_is_populated_for_all_items(self) -> None:
+        source = _make_source()
+        with patch.object(source, "get", return_value=_mock_response(_XML_MULTIPLE)):
+            items = source.fetch_items()
+        for item in items:
+            self.assertIsNotNone(item.raw_text)
+            self.assertGreater(len(item.raw_text or ""), 0)
+
+    def test_raw_text_contains_title_and_department(self) -> None:
+        source = _make_source()
+        with patch.object(source, "get", return_value=_mock_response(_XML_MULTIPLE)):
+            items = source.fetch_items()
+        # Second item has Минсельхоз России
+        self.assertIn("АПК", items[1].raw_text or "")
+        self.assertIn("Минсельхоз России", items[1].raw_text or "")
+
+    def test_different_projects_produce_different_raw_text(self) -> None:
+        source = _make_source()
+        with patch.object(source, "get", return_value=_mock_response(_XML_MULTIPLE)):
+            items = source.fetch_items()
+        texts = [item.raw_text for item in items]
+        self.assertEqual(len(texts), len(set(texts)), "Each project must produce unique raw_text")
+
+    def test_raw_text_contains_stage(self) -> None:
+        source = _make_source()
+        with patch.object(source, "get", return_value=_mock_response(_XML_MULTIPLE)):
+            items = source.fetch_items()
+        self.assertIn("Разработка", items[0].raw_text or "")
+        self.assertIn("Обсуждение", items[1].raw_text or "")
+
+    def test_raw_text_still_set_when_optional_fields_absent(self) -> None:
+        source = _make_source()
+        with patch.object(source, "get", return_value=_mock_response(_XML_NO_PUBLISHDATE)):
+            items = source.fetch_items()
+        for item in items:
+            self.assertIsNotNone(item.raw_text)
+            self.assertIn("Проект НПА:", item.raw_text or "")
 
 
 class ParseIsoDateTest(unittest.TestCase):

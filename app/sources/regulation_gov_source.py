@@ -8,6 +8,29 @@ from app.sources.base import BaseSource
 
 _API_ENDPOINT = "https://regulation.gov.ru/api/npalist"
 
+_FIELD_LABELS: list[tuple[str, str]] = [
+    ("projectId", "Код"),
+    ("department", "Министерство"),
+    ("stage", "Стадия"),
+    ("publishDate", "Дата публикации"),
+    ("status", "Статус"),
+    ("procedure", "Процедура"),
+    ("startDiscussion", "Начало обсуждения"),
+    ("endDiscussion", "Конец обсуждения"),
+    ("problem", "Проблема"),
+    ("objectives", "Цели"),
+    ("rationale", "Обоснование"),
+]
+
+
+def _build_synthetic_text(project: ET.Element, pid: str, title: str) -> str:
+    lines = [f"Проект НПА: {title}", f"ID: {pid}"]
+    for tag, label in _FIELD_LABELS:
+        value = (project.findtext(tag) or "").strip()
+        if value:
+            lines.append(f"{label}: {value}")
+    return "\n".join(lines)
+
 
 class RegulationGovSource(BaseSource):
     """Fetches recent NPA projects from the public regulation.gov.ru XML API."""
@@ -41,6 +64,7 @@ class RegulationGovSource(BaseSource):
                     url=f"https://regulation.gov.ru/projects/{pid}",
                     published_at=published_at,
                     document_type="html",
+                    raw_text=_build_synthetic_text(project, pid, title),
                 )
             )
         self.logger.info("Fetched %s items from %s", len(items), self.config.name)

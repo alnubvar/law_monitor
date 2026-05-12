@@ -673,6 +673,59 @@ class CollectAuditTest(unittest.TestCase):
         self.assertEqual(len(queue_rows), 0, "Hash-duplicate must not enter OCR queue")
 
 
+    def test_prefilled_raw_text_skips_extract_document(self) -> None:
+        """When CollectedItem.raw_text is set, extract_document must not be called."""
+        db_path = self._db_path("collect_prefilled_raw_text.db")
+        init_db(db_path)
+        source_config = SourceConfig(
+            name="Regulation.gov.ru",
+            url="https://regulation.gov.ru/",
+            level="federal",
+            region="federal",
+            source_role="strategy",
+            parser="regulation_gov",
+            description="test",
+        )
+        items = [
+            CollectedItem(
+                source_name=source_config.name,
+                source_url=source_config.url,
+                level=source_config.level,
+                region=source_config.region,
+                title=f"Проект НПА {i}",
+                url=f"https://regulation.gov.ru/projects/{i}",
+                document_type="html",
+                raw_text=f"Проект НПА: Проект НПА {i}\nID: {i}\nМинистерство: Минсельхоз России",
+            )
+            for i in range(1, 4)
+        ]
+
+        class FakeSource:
+            def __init__(self) -> None:
+                self.last_fetch_stats = {"links_found_count": 3, "html_links_count": 3}
+
+            def fetch_items(self) -> list[CollectedItem]:
+                return items
+
+        with patch("app.pipeline.collect.load_sources", return_value=[source_config]):
+            with patch("app.pipeline.collect.create_source", return_value=FakeSource()):
+                with patch("app.pipeline.collect.extract_document") as mock_extract:
+                    saved_count = run_collect_with_options(
+                        source_name=source_config.name,
+                        limit=10,
+                        audit_existing=False,
+                        db_path=str(db_path),
+                    )
+
+        mock_extract.assert_not_called()
+        self.assertEqual(saved_count, 3)
+        documents = list_documents(db_path=db_path)
+        self.assertEqual(len(documents), 3)
+        urls = {d.url for d in documents}
+        self.assertIn("https://regulation.gov.ru/projects/1", urls)
+        self.assertIn("https://regulation.gov.ru/projects/3", urls)
+
+
 class BaseSourceUserAgentTest(unittest.TestCase):
     def test_user_agent_field_overrides_request_headers_ua(self) -> None:
         from app.sources.base import BaseSource
