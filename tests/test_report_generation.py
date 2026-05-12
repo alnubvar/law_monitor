@@ -403,7 +403,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             doc_id=904,
             source_name="Право Ставропольского края",
             region="stavropol",
-            title="О внесении изменений в порядок предоставления субсидий",
+            title="О внесении изменений в порядок предоставления субсидий сельхозтоваропроизводителям",
             url="https://pravo.stavregion.ru/document/904",
             action_level="requires_attention",
             page_type="new_rule",
@@ -443,7 +443,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             doc_id=150,
             source_name="Право Ставропольского края",
             region="stavropol",
-            title="О внесении изменений в порядок предоставления субсидий",
+            title="О внесении изменений в порядок предоставления субсидий сельхозтоваропроизводителям",
             url="https://pravo.stavregion.ru/document/98765",
             action_level="requires_attention",
             page_type="new_rule",
@@ -528,7 +528,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             doc_id=2,
             source_name="Минсельхоз Ставропольского края - господдержка",
             region="stavropol",
-            title="Анкета получателя мер государственной поддержки",
+            title="Анкета получателя мер государственной поддержки АПК",
             url="https://mshsk.ru/anketa.docx",
             action_level="watchlist",
             page_type="reference_page",
@@ -582,7 +582,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             doc_id=801,
             source_name="Нормативные акты Краснодарского края",
             region="krasnodar",
-            title="Изменения по субсидиям",
+            title="Изменения по субсидиям сельхозтоваропроизводителям",
             url="https://admkrai.krasnodar.ru/upload/a.pdf",
             action_level="requires_attention",
             page_type="new_rule",
@@ -673,7 +673,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             doc_id=913,
             source_name="Нормативные акты Краснодарского края",
             region="krasnodar",
-            title="О внесении изменений в порядок предоставления субсидий",
+            title="О внесении изменений в порядок предоставления субсидий сельхозтоваропроизводителям",
             url="https://admkrai.krasnodar.ru/upload/iblock/f90/a.pdf",
             action_level="requires_attention",
             page_type="new_rule",
@@ -716,9 +716,53 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertNotIn("Главный акцент: НПА Краснодарского края: документ после OCR", markdown)
         self.assertNotIn("документ после OCR; Минсельхоз", markdown)
 
+    def test_report_hides_non_agro_sport_subsidy_but_keeps_agriculture_subsidy(self) -> None:
+        sport_subsidy = self._doc(
+            doc_id=916,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="Постановление об утверждении порядка предоставления субсидий организациям физической культуры и спорта",
+            url="https://admkrai.krasnodar.ru/upload/iblock/sport-subsidy.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="Утверждены условия субсидирования физической культуры и спорта.",
+        )
+        sport_subsidy.raw_text = (
+            "Утвержден порядок предоставления субсидий организациям физической культуры "
+            "и спорта Краснодарского края."
+        )
+        agriculture_subsidy = self._doc(
+            doc_id=917,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="Постановление об утверждении порядка предоставления субсидий сельхозтоваропроизводителям",
+            url="https://admkrai.krasnodar.ru/upload/iblock/agro-subsidy.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="Утверждены условия субсидирования сельхозтоваропроизводителей.",
+        )
+        agriculture_subsidy.raw_text = (
+            "Утвержден порядок предоставления субсидий сельхозтоваропроизводителям "
+            "Краснодарского края."
+        )
+
+        markdown = generate_markdown_report(
+            [sport_subsidy, agriculture_subsidy],
+            report_date="2026-05-08",
+            period_days=7,
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn("agro-subsidy.pdf", markdown)
+        self.assertIn("Главный акцент: Утверждены условия субсидирования", markdown)
+        self.assertNotIn("sport-subsidy.pdf", markdown)
+        self.assertNotIn("физической культуры", markdown)
+        self.assertNotIn("спорта Краснодарского края", markdown)
+
     def test_main_focus_falls_back_to_no_urgent_when_only_weak_placeholder_exists(self) -> None:
         weak_ocr = self._doc(
-            doc_id=916,
+            doc_id=918,
             source_name="Нормативные акты Краснодарского края",
             region="krasnodar",
             title="НПА Краснодарского края: документ после OCR",
@@ -1026,7 +1070,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             doc_id=2,
             source_name="Нормативные акты Краснодарского края",
             region="krasnodar",
-            title="О внесении изменений в порядок предоставления субсидий",
+            title="О внесении изменений в порядок предоставления субсидий сельхозтоваропроизводителям",
             url="https://admkrai.krasnodar.ru/upload/subsidy.pdf",
             action_level="watchlist",
             page_type="new_rule",
@@ -1046,7 +1090,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertEqual(len(visible_documents), 1)
         self.assertEqual(
             visible_documents[0].title,
-            "О внесении изменений в порядок предоставления субсидий",
+            "О внесении изменений в порядок предоставления субсидий сельхозтоваропроизводителям",
         )
         self.assertEqual(visible_documents[0].deadline_text, "Срок подачи заявок до 30.06.2026.")
 
@@ -1307,7 +1351,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             doc_id=1,
             source_name="ГИСП - меры поддержки АПК",
             region="federal",
-            title="Субсидии на возмещение затрат",
+            title="Субсидии на возмещение затрат сельхозтоваропроизводителям",
             url="https://gisp.gov.ru/nmp/measure/8130026",
             action_level="watchlist",
             page_type="new_rule",
@@ -1568,7 +1612,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             doc_id=1,
             source_name="Минсельхоз Ростовской области - господдержка",
             region="rostov",
-            title="Объявление о проведении отбора на предоставление субсидии",
+            title="Объявление о проведении отбора на предоставление субсидии сельхозтоваропроизводителям",
             url="https://mcx.donland.ru/selection",
             action_level="requires_attention",
             page_type="selection_announcement",
@@ -1581,7 +1625,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             doc_id=2,
             source_name="Право Ростовской области",
             region="rostov",
-            title="Постановление о внесении изменений в порядок предоставления субсидий",
+            title="Постановление о внесении изменений в порядок предоставления субсидий сельхозтоваропроизводителям",
             url="https://pravo.donland.ru/doc/view/id/42",
             action_level="watchlist",
             page_type="new_rule",

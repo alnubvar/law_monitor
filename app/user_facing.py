@@ -271,6 +271,29 @@ def select_executive_summary(
     return ""
 
 
+def is_meaningful_executive_highlight(document: PresentationDocument) -> bool:
+    if is_weak_ocr_placeholder_document(document):
+        return False
+    title = user_facing_title(document).lower()
+    if (
+        "документ после ocr" in title
+        or "требуется ручная проверка" in title
+        or title == "документ требует проверки"
+    ):
+        return False
+    summary = select_executive_summary(
+        document,
+        fallback_text=_get_value(document, "summary"),
+    ).lower()
+    if summary and (
+        "текст после ocr недостаточен" in summary
+        or _is_generic_executive_summary(summary)
+        or "краткое пояснение пока не добавлено" in summary
+    ):
+        return False
+    return True
+
+
 def is_useful_executive_summary(text: str | None) -> bool:
     normalized = _normalize_text(text)
     if not normalized:
