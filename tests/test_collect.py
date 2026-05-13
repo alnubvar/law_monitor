@@ -725,6 +725,64 @@ class CollectAuditTest(unittest.TestCase):
         self.assertIn("https://regulation.gov.ru/projects/1", urls)
         self.assertIn("https://regulation.gov.ru/projects/3", urls)
 
+    def test_php_support_page_is_extracted_as_html_document(self) -> None:
+        db_path = self._db_path("collect_php_support_html.db")
+        init_db(db_path)
+        source_config = SourceConfig(
+            name="Минсельхоз Ставропольского края - господдержка",
+            url="https://mshsk.ru/gospodderzhka/",
+            level="regional",
+            region="stavropol",
+            source_role="support_documents",
+            parser="stavropol",
+            description="test",
+        )
+        item = CollectedItem(
+            source_name=source_config.name,
+            source_url=source_config.url,
+            level=source_config.level,
+            region=source_config.region,
+            title="Объявление об отборе на субсидии",
+            url="https://mshsk.ru/gospodderzhka/selection-berry-2026.php",
+            document_type="html",
+        )
+
+        class FakeSource:
+            def __init__(self) -> None:
+                self.last_fetch_stats = {"links_found_count": 1, "html_links_count": 1}
+
+            def fetch_items(self) -> list[CollectedItem]:
+                return [item]
+
+        extracted = ExtractionResult(
+            raw_text="Объявление об отборе на субсидии. Прием заявок открыт для сельхозтоваропроизводителей.",
+            document_type="html",
+            extracted_text_length=87,
+        )
+        with patch("app.pipeline.collect.load_sources", return_value=[source_config]):
+            with patch("app.pipeline.collect.create_source", return_value=FakeSource()):
+                with patch("app.pipeline.collect.extract_text_from_html", return_value=extracted) as mock_extract:
+                    saved_count = run_collect_with_options(
+                        source_name=source_config.name,
+                        limit=10,
+                        audit_existing=False,
+                        db_path=str(db_path),
+                    )
+
+        self.assertEqual(saved_count, 1)
+        mock_extract.assert_called_once_with(
+            item.url,
+            source_name=source_config.name,
+            headers=source_config.request_headers,
+            timeout=source_config.request_timeout,
+            verify_ssl=source_config.verify_ssl,
+        )
+        documents = list_documents(db_path=db_path)
+        self.assertEqual(len(documents), 1)
+        self.assertEqual(documents[0].document_type, "html")
+        self.assertGreater(len(documents[0].raw_text), 0)
+        self.assertIn("Прием заявок", documents[0].raw_text)
+
 
 class BaseSourceUserAgentTest(unittest.TestCase):
     def test_user_agent_field_overrides_request_headers_ua(self) -> None:

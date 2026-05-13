@@ -73,6 +73,7 @@ class StavropolSourceTest(unittest.TestCase):
 
         self.assertEqual(len(items), 2)
         self.assertEqual(items[0].url, "https://mshsk.ru/gospodderzhka/selection-berry-2026.php")
+        self.assertEqual(items[0].document_type, "html")
         self.assertEqual(items[1].document_type, "pdf")
         self.assertEqual(normalize_date_to_iso(items[0].published_at), "2026-01-30")
         self.assertEqual(normalize_date_to_iso(items[1].published_at), "2026-01-24")

@@ -17,6 +17,7 @@ DOCUMENT_EXTENSIONS = {
     ".docx": "docx",
     ".htm": "html",
     ".html": "html",
+    ".php": "html",
     ".xml": "xml",
     ".rss": "xml",
 }
