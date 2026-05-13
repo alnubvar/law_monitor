@@ -154,6 +154,20 @@ MCX_NEWS_WATCHLIST_PATTERNS = (
     r"(?:цифров|платформ|логист).{0,120}(?:апк|агро|сельск)",
     r"(?:посевн|полев|уборк|урож).{0,120}(?:ставрополь|ростов|краснодар|заседан\w*\s+правительств)",
 )
+KRASNODAR_SUPPORT_SOURCE_MARKER = "минсельхоз краснодарского края - субсидирование и финансирование"
+KRASNODAR_SUPPORT_FILE_RE = re.compile(r"^/rest/files/\d+/?$", re.IGNORECASE)
+KRASNODAR_SUPPORT_ORDER_MARKERS = (
+    "субсид",
+    "грант",
+    "порядок предоставления",
+    "отбор",
+    "крестьянск",
+    "фермерск",
+    "агротуризм",
+    "картофел",
+    "овощ",
+    "мелиорац",
+)
 
 
 def detect_importance(action_level: str) -> str:
@@ -290,6 +304,16 @@ def detect_action_level(
         return "irrelevant"
     if looks_anti_corruption_noise(title_text, lead_text):
         return "irrelevant"
+    if _has_krasnodar_support_order_signal(
+        source_name=source_name,
+        url=url,
+        domain=domain,
+        title_text=title_text,
+        lead_text=lead_text,
+    ):
+        if facts.application_status == "open" and facts.deadline_text:
+            return "requires_attention"
+        return "watchlist"
     if (
         domain_gate_applies
         and not has_ahstep_domain_context
@@ -461,6 +485,19 @@ def detect_action_level(
             return "watchlist"
         return "background"
     if is_support_context_value and page_type in ACTIONABLE_PAGE_TYPES:
+        if (
+            source_role == "support_documents"
+            and domain == "npa.krasnodar.ru"
+            and KRASNODAR_SUPPORT_SOURCE_MARKER in (source_name or "").lower()
+            and not _has_krasnodar_support_order_signal(
+                source_name=source_name,
+                url=url,
+                domain=domain,
+                title_text=title_text,
+                lead_text=lead_text,
+            )
+        ):
+            return "background"
         if not (is_target_region_value or is_federal_measure_value):
             return "background"
         if (
@@ -616,6 +653,29 @@ def _has_mcx_official_news_watchlist_signal(
     return any(re.search(pattern, text) for pattern in MCX_NEWS_WATCHLIST_PATTERNS)
 
 
+def _has_krasnodar_support_order_signal(
+    *,
+    source_name: str | None,
+    url: str | None,
+    domain: str,
+    title_text: str,
+    lead_text: str,
+) -> bool:
+    if domain != "npa.krasnodar.ru":
+        return False
+    if KRASNODAR_SUPPORT_SOURCE_MARKER not in (source_name or "").lower():
+        return False
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url or "")
+    if parsed.scheme != "https" or KRASNODAR_SUPPORT_FILE_RE.fullmatch(parsed.path) is None:
+        return False
+    text = f"{title_text} {lead_text}"
+    if "приказ" not in text:
+        return False
+    return any(marker in text for marker in KRASNODAR_SUPPORT_ORDER_MARKERS)
+
+
 def _regulation_discussion_deadline_status(
     *,
     domain: str,
@@ -708,6 +768,9 @@ def build_business_signal(
     )
     title_text = title.lower()
     combined_text = f"{title_text} {(url or '').lower()}"
+    lead_text = raw_text.lower()[:1500]
+    if looks_anti_corruption_noise(title_text, lead_text):
+        return "Внутренний административный/антикоррупционный приказ; прямой GR-сигнал для АПК не выявлен."
     if (
         action_level in {"background", "irrelevant"}
         and facts.support_status != "inactive"
@@ -742,11 +805,19 @@ def build_business_signal(
         return "Региональный НПА по профильной теме: оставить в наблюдении."
     if source_role == "support_documents" and page_type in {"reference_page", "section_page", "category_page"}:
         return "Общий раздел/список документов; прямой GR-сигнал не выявлен."
+    if _has_krasnodar_support_order_signal(
+        source_name=source_name,
+        url=url,
+        domain=domain,
+        title_text=title_text,
+        lead_text=lead_text,
+    ):
+        return "Региональный приказ Минсельхоза Краснодарского края по субсидии, гранту или порядку поддержки; держать на наблюдении."
     if source_role == "news_signals":
         if _has_mcx_official_news_watchlist_signal(
             source_name=source_name,
             title_text=title_text,
-            lead_text=raw_text.lower()[:1500],
+            lead_text=lead_text,
         ):
             return "Официальная новость Минсельхоза с GR-сигналом по господдержке, регулированию, экспорту, логистике или цифровизации АПК."
         if has_news_signal(

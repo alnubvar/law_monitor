@@ -1686,6 +1686,121 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
 
         self.assertEqual(result.action_level, "background")
 
+    def test_msh_krasnodar_potato_vegetable_subsidy_order_is_watchlist(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            '№167 от 30.04.2026 "О внесении изменений в приказ министерства сельского хозяйства и перерабатывающей промышленности Краснодарского края от 01 апреля 2026 г. № 114 «Об утверждении Порядка предоставления субсидий сельскохозяйственным товаропроизводителям на финансовое обеспечение части затрат на стимулирование увеличения производства картофеля и овощей»',
+            (
+                "МИНИСТЕРСТВО СЕЛЬСКОГО ХОЗЯЙСТВА И ПЕРЕРАБАТЫВАЮЩЕЙ ПРОМЫШЛЕННОСТИ "
+                "КРАСНОДАРСКОГО КРАЯ. ПРИКАЗ. О внесении изменений в приказ от 01 апреля 2026 г. №114 "
+                "«Об утверждении Порядка предоставления субсидий сельскохозяйственным товаропроизводителям "
+                "на финансовое обеспечение части затрат на стимулирование увеличения производства картофеля и овощей»."
+            ),
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://npa.krasnodar.ru/rest/files/1233707",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertEqual(result.page_type, "new_rule")
+        self.assertEqual(result.action_level, "watchlist")
+
+    def test_msh_krasnodar_kfh_grant_procedure_is_watchlist(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            '№ 161 от 28.04.2026 "Об утверждении Порядка предоставления грантов крестьянским (фермерским) хозяйствам на развитие фермерских хозяйств"',
+            (
+                "ПРИКАЗ. Об утверждении Порядка предоставления грантов крестьянским "
+                "(фермерским) хозяйствам на развитие фермерских хозяйств. Гранты предоставляются "
+                "в форме субсидий в рамках государственной программы развития сельского хозяйства."
+            ),
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://npa.krasnodar.ru/rest/files/1233654",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertEqual(result.page_type, "new_rule")
+        self.assertEqual(result.action_level, "watchlist")
+
+    def test_msh_krasnodar_agrotourism_selection_working_group_is_watchlist(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            '№164 от 29.04.2026 "Об образовании рабочей группы по отбору проектов развития сельского туризма для участия в конкурсе на предоставление гранта «Агротуризм»"',
+            (
+                "ПРИКАЗ. Об образовании рабочей группы по отбору проектов развития сельского туризма "
+                "для участия в конкурсе на предоставление гранта «Агротуризм». Утвердить положение "
+                "о рабочей группе по отбору проектов."
+            ),
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://npa.krasnodar.ru/rest/files/1233677",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertEqual(result.page_type, "new_rule")
+        self.assertEqual(result.action_level, "watchlist")
+
+    def test_msh_krasnodar_melioration_subsidy_order_is_watchlist(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            '№ 183 от 13.05.2026 "О внесении изменения в приказ министерства сельского хозяйства и перерабатывающей промышленности Краснодарского края от 19 марта 2018 г. № 70 «Об утверждении Порядка предоставления субсидий на реализацию проектов мелиорации»',
+            (
+                "ПРИКАЗ. О внесении изменения в приказ министерства сельского хозяйства "
+                "Краснодарского края «Об утверждении Порядка предоставления субсидий на реализацию "
+                "проектов мелиорации». Документ регулирует предоставление субсидий сельскому хозяйству."
+            ),
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://npa.krasnodar.ru/rest/files/1233833",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertEqual(result.page_type, "new_rule")
+        self.assertEqual(result.action_level, "watchlist")
+
+    def test_msh_krasnodar_corruption_risk_order_stays_irrelevant(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            '№165 от 30.04.2026 "О внесении изменений в приказ министерства сельского хозяйства и перерабатывающей промышленности Краснодарского края от 01 апреля 2020 г. № 78 «О перечне должностей государственной гражданской службы Краснодарского края в министерстве сельского хозяйства и перерабатывающей промышленности Краснодарского края, замещение которых связано с коррупционными рисками»',
+            (
+                "ПРИКАЗ. О внесении изменений в перечень должностей государственной гражданской службы "
+                "Краснодарского края, замещение которых связано с коррупционными рисками. "
+                "Документ относится к противодействию коррупции и кадровой службе."
+            ),
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://npa.krasnodar.ru/rest/files/1233704",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertEqual(result.action_level, "irrelevant")
+        self.assertIn("антикоррупционный", result.business_signal or "")
+
+    def test_msh_krasnodar_parent_orders_listing_stays_background(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Приказы минсельхоза Краснодарского края",
+            (
+                "Приказы минсельхоза Краснодарского края. Все По названию За период с по. "
+                "№167 О внесении изменений в порядок предоставления субсидий. "
+                "№164 грант Агротуризм. Список документов и навигация раздела."
+            ),
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://msh.krasnodar.ru/documents/prikazy-minselkhoza-krasnodarskogo-kraya",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertEqual(result.page_type, "reference_page")
+        self.assertEqual(result.action_level, "background")
+
 
 if __name__ == "__main__":
     unittest.main()

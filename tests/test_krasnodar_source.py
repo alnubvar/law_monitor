@@ -162,6 +162,7 @@ class KrasnodarSourceTest(unittest.TestCase):
             ["html", "pdf", "pdf", "pdf"],
         )
         self.assertEqual(items[0].url, listing_url)
+        self.assertIsNone(items[0].published_at)
         self.assertEqual(
             [item.url for item in items[1:]],
             [
@@ -173,6 +174,9 @@ class KrasnodarSourceTest(unittest.TestCase):
         self.assertIn("Порядка предоставления субсидий", items[1].title)
         self.assertIn("гранта «Агротуризм»", items[2].title)
         self.assertIn("крестьянским (фермерским)", items[3].title)
+        self.assertEqual(normalize_date_to_iso(items[1].published_at), "2026-04-30")
+        self.assertEqual(normalize_date_to_iso(items[2].published_at), "2026-04-29")
+        self.assertEqual(normalize_date_to_iso(items[3].published_at), "2026-04-28")
         self.assertNotIn(
             "https://msh.krasnodar.ru/documents/prikazy-minselkhoza-krasnodarskogo-kraya/page2",
             {item.url for item in items},
@@ -183,6 +187,50 @@ class KrasnodarSourceTest(unittest.TestCase):
         )
         self.assertNotIn("https://msh.krasnodar.ru/contacts/", {item.url for item in items})
         self.assertEqual(source.last_fetch_stats["harvested_attachment_count"], 3)
+
+    def test_msh_krasnodar_document_item_ignores_referenced_internal_date(self) -> None:
+        source = self._source(
+            name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://msh.krasnodar.ru/documents/subsidirovanie-i-finansirovanie1",
+            source_role="support_documents",
+        )
+        source.config.max_items = 10
+        root_html = """
+        <html><body>
+          <a href="/documents/prikazy-minselkhoza-krasnodarskogo-kraya">Приказы минсельхоза Краснодарского края</a>
+        </body></html>
+        """
+        listing_url = "https://msh.krasnodar.ru/documents/prikazy-minselkhoza-krasnodarskogo-kraya"
+        listing_html = """
+        <html><body>
+          <div class="document-item">
+            <a class="document-item__title" href="/documents/prikazy-minselkhoza-krasnodarskogo-kraya/1">
+              О внесении изменений в приказ министерства сельского хозяйства Краснодарского края
+              от 01 апреля 2026 г. № 114 «Об утверждении Порядка предоставления субсидий»
+            </a>
+            <span class="document-info-bar__type">pdf</span>
+            <a class="document-info-bar__download-link" href="https://npa.krasnodar.ru/rest/files/1233999">
+              <span class="document-info-bar__download-text">скачать документ</span>
+            </a>
+          </div>
+        </body></html>
+        """
+
+        def fake_get(url: str):
+            if url == source.config.url:
+                return self._response(root_html, source.config.url)
+            if url == listing_url:
+                return self._response(listing_html, listing_url)
+            raise AssertionError(f"Unexpected recursive fetch: {url}")
+
+        source.get = fake_get  # type: ignore[method-assign]
+
+        items = source.fetch_items()
+
+        self.assertIsNone(items[0].published_at)
+        npa_items = [item for item in items if item.url == "https://npa.krasnodar.ru/rest/files/1233999"]
+        self.assertEqual(len(npa_items), 1)
+        self.assertIsNone(npa_items[0].published_at)
 
 
 if __name__ == "__main__":

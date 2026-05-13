@@ -88,6 +88,8 @@ TITLE_DUPLICATE_RE_TEMPLATE = r"^({title}[.:]?\s+)(?:{title}[.:]?\s+)+"
 
 
 def looks_irrelevant(title: str, raw_text: str) -> bool:
+    if _looks_like_official_agro_order_title(title):
+        return False
     if title in IRRELEVANT_TITLES:
         return True
     if any(fragment in title for fragment in IRRELEVANT_TITLE_FRAGMENTS):
@@ -104,6 +106,20 @@ def looks_irrelevant(title: str, raw_text: str) -> bool:
     if len(compact_body) < 80 and any(marker in compact_body.lower() for marker in IRRELEVANT_MARKERS):
         return True
     return False
+
+
+def _looks_like_official_agro_order_title(title: str) -> bool:
+    normalized = title.lower().strip()
+    if "приказ" not in normalized:
+        return False
+    return (
+        "министерств" in normalized
+        and (
+            "сельского хозяйства" in normalized
+            or "сельхоз" in normalized
+            or "агропромышлен" in normalized
+        )
+    )
 
 
 def looks_anti_corruption_noise(title: str, raw_text: str) -> bool:

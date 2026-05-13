@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from urllib.parse import urlparse
 
 from app.models import SourceRole
 from app.rules.noise_rules import looks_irrelevant
@@ -220,6 +221,19 @@ PRAVO_STAV_DOCUMENT_MARKERS = (
     "решение",
     "указ",
 )
+KRASNODAR_NPA_FILE_RE = re.compile(r"^/rest/files/\d+/?$", re.IGNORECASE)
+KRASNODAR_SUPPORT_ORDER_MARKERS = (
+    "субсид",
+    "грант",
+    "порядок предоставления",
+    "отбор",
+    "крестьянск",
+    "фермерск",
+    "агротуризм",
+    "картофел",
+    "овощ",
+    "мелиорац",
+)
 
 
 def detect_page_type(
@@ -257,6 +271,14 @@ def detect_page_type(
         domain=domain,
     ):
         return "reference_page"
+    if looks_krasnodar_support_file_order(
+        title_text,
+        lead_text,
+        source_name=source_name,
+        url=url or "",
+        domain=domain,
+    ):
+        return "new_rule"
     if domain == "admkrai.krasnodar.ru" and (url or "").lower().endswith((".pdf", ".doc", ".docx")):
         return "new_rule"
     if looks_low_value_regional_section_page(
@@ -467,3 +489,26 @@ def looks_reference_title(title: str) -> bool:
     if title in {"нормативные документы", "креативные индустрии"}:
         return False
     return bool(REFERENCE_TITLE_WORD_RE.search(title))
+
+
+def looks_krasnodar_support_file_order(
+    title: str,
+    lead_text: str,
+    *,
+    source_name: str | None,
+    url: str,
+    domain: str,
+) -> bool:
+    if domain != "npa.krasnodar.ru":
+        return False
+    if "минсельхоз краснодарского края - субсидирование и финансирование" not in (
+        source_name or ""
+    ).lower():
+        return False
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or KRASNODAR_NPA_FILE_RE.fullmatch(parsed.path) is None:
+        return False
+    text = f"{title} {lead_text}"
+    if "приказ" not in text:
+        return False
+    return any(marker in text for marker in KRASNODAR_SUPPORT_ORDER_MARKERS)

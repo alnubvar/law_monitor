@@ -48,6 +48,10 @@ DATE_CONTEXT_RE = re.compile(
     r"[:\s]+(.{0,80})",
     re.IGNORECASE,
 )
+MSH_LEADING_ORDER_DATE_RE = re.compile(
+    r"^\s*№\s*\d+\s+от\s+(\d{1,2}[.]\d{1,2}[.]\d{4})\b",
+    re.IGNORECASE,
+)
 NPA_KRASNODAR_FILE_RE = re.compile(r"^/rest/files/\d+/?$", re.IGNORECASE)
 
 
@@ -241,7 +245,7 @@ def _extract_msh_document_item_attachment(
         region=source.config.region,
         title=title,
         url=normalized_url,
-        published_at=source._extract_published_at(title_tag, normalized_url),
+        published_at=_extract_msh_document_item_published_at(title, normalized_url),
         document_type=document_type,
     )
 
@@ -263,6 +267,23 @@ def _extract_msh_document_item_title(title_tag: Tag) -> str:
     for extra in title_tag.select(".document-item-extra-info"):
         extra.extract()
     return " ".join(title_tag.stripped_strings).strip()[:500]
+
+
+def _extract_msh_document_item_published_at(title: str, normalized_url: str) -> datetime | None:
+    parsed_url = urlparse(normalized_url)
+    if (
+        parsed_url.scheme != "https"
+        or parsed_url.netloc.lower() != "npa.krasnodar.ru"
+        or NPA_KRASNODAR_FILE_RE.fullmatch(parsed_url.path) is None
+    ):
+        return None
+    match = MSH_LEADING_ORDER_DATE_RE.search(title)
+    if match is None:
+        return None
+    parsed_date = parse_russian_date(match.group(1))
+    if parsed_date is None:
+        return None
+    return datetime.combine(parsed_date, time.min, tzinfo=timezone.utc)
 
 
 def _extract_msh_attachment_title(source: KrasnodarSource, link: Tag, normalized_url: str) -> str:
