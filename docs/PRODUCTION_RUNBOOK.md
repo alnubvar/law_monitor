@@ -111,7 +111,7 @@ LLM enrichment layer:
 - `Telegram configured: yes`
 - `Send result: success`
 
-Если нужен отдельный тестовый пинг:
+Если нужен отдельный тестовый пинг (`telegram-check` и `notify-test` — алиасы одной команды):
 
 ```powershell
 .\.venv\Scripts\python.exe main.py notify-test

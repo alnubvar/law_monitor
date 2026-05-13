@@ -88,6 +88,9 @@ Source adapters and parser-specific fetch logic.
 - `krasnodar_source.py` - Krasnodar source logic.
 - `donland_source.py` - Rostov/Donland source logic.
 - `stavropol_source.py` - Stavropol source logic.
+- `mcx_source.py` - MCX (Минсельхоз России) source logic.
+- `publication_pravo_stav_source.py` - publication.pravo.gov.ru JSON API for Stavropol NPA.
+- `regulation_gov_source.py` - regulation.gov.ru XML API for federal NPA projects.
 
 The parser registry is in `app/pipeline/collect.py`.
 
