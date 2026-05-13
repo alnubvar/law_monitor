@@ -32,6 +32,14 @@ class KrasnodarSourceTest(unittest.TestCase):
         soup = BeautifulSoup(html, "html.parser")
         return source._extract_items_from_soup(soup, source.config.url)
 
+    def _response(self, text: str, url: str):
+        class Response:
+            def __init__(self, response_text: str, response_url: str) -> None:
+                self.text = response_text
+                self.url = response_url
+
+        return Response(text, url)
+
     def test_admkrai_listing_keeps_pdf_and_drops_reference_pages(self) -> None:
         source = self._source(
             name="Нормативные акты Краснодарского края",
@@ -116,6 +124,60 @@ class KrasnodarSourceTest(unittest.TestCase):
             ["pdf", "docx"],
         )
         self.assertTrue(all(normalize_date_to_iso(item.published_at) == "2026-05-04" for item in items))
+
+    def test_msh_krasnodar_fetch_harvests_direct_attachments_from_accepted_listing(self) -> None:
+        source = self._source(
+            name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://msh.krasnodar.ru/documents/subsidirovanie-i-finansirovanie1",
+            source_role="support_documents",
+        )
+        source.config.max_items = 10
+        root_html = """
+        <html><body>
+          <a href="/documents/prikazy-minselkhoza-krasnodarskogo-kraya">Приказы минсельхоза Краснодарского края</a>
+          <a href="/contacts/">Контакты</a>
+        </body></html>
+        """
+        listing_url = "https://msh.krasnodar.ru/documents/prikazy-minselkhoza-krasnodarskogo-kraya"
+        listing_html = (FIXTURES_DIR / "msh_krasnodar_prikazy_listing_with_attachments.html").read_text(
+            encoding="utf-8"
+        )
+        calls: list[str] = []
+
+        def fake_get(url: str):
+            calls.append(url)
+            if url == source.config.url:
+                return self._response(root_html, source.config.url)
+            if url == listing_url:
+                return self._response(listing_html, listing_url)
+            raise AssertionError(f"Unexpected recursive fetch: {url}")
+
+        source.get = fake_get  # type: ignore[method-assign]
+
+        items = source.fetch_items()
+
+        self.assertEqual(calls, [source.config.url, listing_url])
+        self.assertEqual(
+            [item.document_type for item in items],
+            ["html", "pdf", "doc", "docx"],
+        )
+        self.assertEqual(items[0].url, listing_url)
+        self.assertEqual(
+            [item.url for item in items[1:]],
+            [
+                "https://msh.krasnodar.ru/upload/subsidy-potato-2026.pdf",
+                "https://msh.krasnodar.ru/upload/agrotourism-grant-2026.doc",
+                "https://msh.krasnodar.ru/upload/kfh-grant-2026.docx",
+            ],
+        )
+        self.assertIn("Порядка предоставления субсидий", items[1].title)
+        self.assertIn("гранта «Агротуризм»", items[2].title)
+        self.assertIn("крестьянским (фермерским)", items[3].title)
+        self.assertNotIn(
+            "https://msh.krasnodar.ru/documents/prikazy-minselkhoza-krasnodarskogo-kraya/page2",
+            {item.url for item in items},
+        )
+        self.assertEqual(source.last_fetch_stats["harvested_attachment_count"], 3)
 
 
 if __name__ == "__main__":
