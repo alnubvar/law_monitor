@@ -15,6 +15,7 @@ data/
 venv/
 .venv/
 .venv_audit/
+.pytest_cache/
 
 .idea/
 .vscode/settings.json
@@ -22,9 +23,9 @@ venv/
 .claude
 
 node_modules/
-law_monitor_mvp.egg-info/
+*.egg-info/
 
 reports/*.md
 !reports/.gitkeep
 docs/demo_report.md
-diagnostics_after_phase20.txt
+diagnostics_after_*.txt
