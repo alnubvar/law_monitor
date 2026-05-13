@@ -13,7 +13,7 @@ from app.rules.ahstep_domain_rules import (
     should_apply_ahstep_domain_gate,
 )
 from app.rules.news_rules import has_news_signal
-from app.rules.noise_rules import looks_anti_corruption_noise, looks_irrelevant
+from app.rules.noise_rules import looks_anti_corruption_noise, looks_cultural_heritage_npa_noise, looks_irrelevant
 from app.rules.page_type_rules import (
     ACTIONABLE_PAGE_TYPES,
     ACTION_MARKERS,
@@ -304,6 +304,8 @@ def detect_action_level(
         return "irrelevant"
     if looks_anti_corruption_noise(title_text, lead_text):
         return "irrelevant"
+    if source_role == "regional_npa" and looks_cultural_heritage_npa_noise(title_text, lead_text):
+        return "background"
     if _has_krasnodar_support_order_signal(
         source_name=source_name,
         url=url,

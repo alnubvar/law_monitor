@@ -73,6 +73,13 @@ ANTI_CORRUPTION_NOISE_MARKERS = (
     "декларирован",
     "конфликт интересов",
 )
+CULTURAL_HERITAGE_NPA_NOISE_MARKERS = (
+    "культурного наследия",
+    "объект культурного наследия",
+    "объектов культурного наследия",
+    "памятник истории и культуры",
+    "памятники истории и культуры",
+)
 STATIC_BACKGROUND_TITLE_FRAGMENTS = (
     "формы документов",
     "противодействие коррупции",
@@ -120,6 +127,11 @@ def _looks_like_official_agro_order_title(title: str) -> bool:
             or "агропромышлен" in normalized
         )
     )
+
+
+def looks_cultural_heritage_npa_noise(title: str, raw_text: str) -> bool:
+    text = f"{title} {raw_text[:500]}"
+    return any(marker in text for marker in CULTURAL_HERITAGE_NPA_NOISE_MARKERS)
 
 
 def looks_anti_corruption_noise(title: str, raw_text: str) -> bool:

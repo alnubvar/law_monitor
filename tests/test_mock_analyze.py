@@ -1181,6 +1181,79 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         self.assertEqual(result.page_type, "reference_page")
         self.assertEqual(result.action_level, "background")
 
+    def test_cultural_heritage_npa_is_background_not_watchlist(self) -> None:
+        client = MockLLMClient(["субсидии"])
+
+        result = client.analyze_document(
+            "Об установлении зон охраны объектов культурного наследия",
+            (
+                "ПРИКАЗ от 01.04.2026. "
+                "Постановление об утверждении границ зон охраны объектов культурного наследия "
+                "на территории Краснодарского края."
+            ),
+            source_name="Нормативные акты Краснодарского края",
+            url="https://admkrai.krasnodar.ru/upload/iblock/heritage-zones.pdf",
+            level="regional",
+            region="krasnodar",
+        )
+
+        # Early guard fires before section_page/watchlist escalation via "приказ от".
+        self.assertEqual(result.action_level, "background")
+
+    def test_cultural_heritage_npa_with_rule_words_is_background(self) -> None:
+        client = MockLLMClient(["государственная поддержка"])
+
+        result = client.analyze_document(
+            "Об утверждении границ территории объектов культурного наследия",
+            (
+                "ПРИКАЗ от 26.05.2026. "
+                "Приказ об утверждении границ территории объектов культурного наследия, "
+                "памятников истории и культуры краевого значения."
+            ),
+            source_name="Нормативные акты Краснодарского края",
+            url="https://admkrai.krasnodar.ru/upload/iblock/heritage-boundaries.pdf",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertEqual(result.action_level, "background")
+
+    def test_agricultural_regional_npa_remains_watchlist(self) -> None:
+        client = MockLLMClient(["субсидии АПК"])
+
+        result = client.analyze_document(
+            "О внесении изменений в порядок предоставления субсидий сельхозтоваропроизводителям",
+            (
+                "Постановление о внесении изменений в порядок предоставления субсидий "
+                "сельхозтоваропроизводителям Краснодарского края на развитие растениеводства."
+            ),
+            source_name="Нормативные акты Краснодарского края",
+            url="https://admkrai.krasnodar.ru/upload/iblock/agro-subsidy-order.pdf",
+            level="regional",
+            region="krasnodar",
+        )
+
+        # "внесены изменения в порядок предоставления субсидий" → strong signal;
+        # watchlist or requires_attention are both correct agro outcomes.
+        self.assertIn(result.action_level, ("watchlist", "requires_attention"))
+
+    def test_krasnodar_ministry_subsidy_pdf_unaffected_by_heritage_fix(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Приказ о предоставлении субсидий на развитие молочного скотоводства",
+            (
+                "Приказ Министерства сельского хозяйства Краснодарского края "
+                "о предоставлении субсидий на развитие молочного скотоводства."
+            ),
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://msh.krasnodar.ru/upload/prikaz-molochnoe-2026.pdf",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertIn(result.action_level, ("watchlist", "requires_attention"))
+
     def test_admkrai_real_pdf_npa_is_not_unknown_page_type(self) -> None:
         client = MockLLMClient(["субсидии сельское хозяйство"])
 
