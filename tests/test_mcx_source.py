@@ -87,6 +87,49 @@ _MEASURES_HTML_EMPTY_TITLE = """
 </body></html>
 """
 
+_MEASURES_HTML_WITH_NAVIGATION_NOISE = """
+<html><body>
+<nav>
+  <a class="b-siteNavListMobile-3lvl__link"
+     href="/ministry/minister/biography/">Биография</a>
+  <a class="b-siteNavListMobile-3lvl__link"
+     href="/ministry/minister/photos/">Фотоотчеты</a>
+  <a class="b-siteNavListMobile-3lvl__link"
+     href="/ministry/departments/departament-rastenievodstva/">Департамент растениеводства</a>
+  <a class="b-siteNavListMobile-3lvl__link"
+     href="/activity/goals/">Цели и задачи министерства</a>
+  <a class="b-siteNavListMobile-3lvl__link"
+     href="/press-service/news/support-apk/">Субсидии в новостях</a>
+</nav>
+<main>
+  <a class="support-card__title"
+     href="/activity/state-support/measures/preferential-credit-spk/">
+    Льготное кредитование по СПК
+  </a>
+  <a class="support-card__title"
+     href="/activity/state-support/programs/program-2013-2020/">
+    Госпрограмма развития сельского хозяйства
+  </a>
+  <a class="support-card__title"
+     href="/activity/state-support/urgent/">
+    Срочная информация для регионов о предоставлении субсидий
+  </a>
+  <a class="support-card__title"
+     href="/docs/35013/">
+    Льготный лизинг
+  </a>
+  <a class="support-card__title"
+     href="https://example.com/activity/state-support/measures/subsidy/">
+    Внешняя субсидия
+  </a>
+  <a class="support-card__title"
+     href="/activity/state-support/measures/file.pdf">
+    PDF субсидии
+  </a>
+</main>
+</body></html>
+"""
+
 _NEWS_HTML = """
 <html><body>
 <ul>
@@ -243,6 +286,41 @@ class McxSourceMeasuresTest(unittest.TestCase):
             items = source.fetch_items()
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0].title, "Льготный лизинг")
+
+    def test_measures_filters_navigation_and_keeps_support_links(self) -> None:
+        source = self._source(max_items=10)
+        with patch.object(
+            source,
+            "get",
+            return_value=_mock_response(_MEASURES_HTML_WITH_NAVIGATION_NOISE),
+        ):
+            items = source.fetch_items()
+
+        titles = [item.title for item in items]
+        self.assertEqual(
+            titles,
+            [
+                "Льготное кредитование по СПК",
+                "Госпрограмма развития сельского хозяйства",
+                "Срочная информация для регионов о предоставлении субсидий",
+                "Льготный лизинг",
+            ],
+        )
+        self.assertNotIn("Биография", titles)
+        self.assertNotIn("Фотоотчеты", titles)
+        self.assertNotIn("Департамент растениеводства", titles)
+        self.assertNotIn("Цели и задачи министерства", titles)
+        self.assertTrue(all(item.raw_text for item in items))
+
+    def test_measures_noise_fixture_still_uses_one_http_request(self) -> None:
+        source = self._source(max_items=10)
+        with patch.object(
+            source,
+            "get",
+            return_value=_mock_response(_MEASURES_HTML_WITH_NAVIGATION_NOISE),
+        ) as mock_get:
+            source.fetch_items()
+        self.assertEqual(mock_get.call_count, 1)
 
     def test_measures_only_one_http_request(self) -> None:
         source = self._source()
