@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import unittest
 
 from app.llm.facts_extractor import DocumentFacts
@@ -8,6 +9,22 @@ from app.rules.business_signal_rules import detect_action_level
 
 
 class MockAnalyzeSmokeTest(unittest.TestCase):
+    def _regulation_public_discussion_text(self, deadline: datetime, *, agro: bool = True) -> str:
+        target_text = (
+            "Цели проекта: изменение порядка предоставления субсидий сельскохозяйственным "
+            "товаропроизводителям в сфере племенного животноводства."
+            if agro
+            else "Цели проекта: изменение правил ведения реестра туристских маршрутов."
+        )
+        return (
+            "Проект НПА: Об утверждении требований. "
+            "Статус: Идет обсуждение. "
+            "Процедура: Оценка регулирующего воздействия. "
+            "Начало обсуждения: 2026-05-12T11:53:57.098Z. "
+            f"Конец обсуждения: {deadline.strftime('%Y-%m-%d')}T11:53:57.098Z. "
+            f"{target_text}"
+        )
+
     def test_marks_action_document_as_requires_attention(self) -> None:
         client = MockLLMClient(
             [
@@ -1596,6 +1613,73 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
             "Минсельхоз России. Новость АПК: Поздравление Оксаны Лут с Днем Победы.",
             source_name="Минсельхоз России - новости",
             url="https://mcx.gov.ru/press-service/news/pozdravlenie-oksany-lut-s-dnem-pobedy/",
+            level="federal",
+            region="federal",
+        )
+
+        self.assertEqual(result.action_level, "background")
+
+    def test_regulation_near_discussion_deadline_is_requires_attention(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+        deadline = datetime.now(timezone.utc) + timedelta(days=5)
+
+        result = client.analyze_document(
+            "Проект постановления о правилах поддержки сельхозтоваропроизводителей",
+            self._regulation_public_discussion_text(deadline),
+            source_name="Regulation.gov.ru",
+            url="https://regulation.gov.ru/projects/167863",
+            level="federal",
+            region="federal",
+        )
+
+        self.assertEqual(result.action_level, "requires_attention")
+        self.assertIn("Конец обсуждения", result.deadline_text or "")
+        self.assertEqual(result.application_status, "open")
+        self.assertIn("публичного обсуждения", result.impact)
+        self.assertIn("публичном обсуждении", result.business_signal or "")
+
+    def test_regulation_future_discussion_deadline_stays_watchlist(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+        deadline = datetime.now(timezone.utc) + timedelta(days=30)
+
+        result = client.analyze_document(
+            "Проект постановления о правилах поддержки сельхозтоваропроизводителей",
+            self._regulation_public_discussion_text(deadline),
+            source_name="Regulation.gov.ru",
+            url="https://regulation.gov.ru/projects/167864",
+            level="federal",
+            region="federal",
+        )
+
+        self.assertEqual(result.action_level, "watchlist")
+        self.assertIn("Конец обсуждения", result.deadline_text or "")
+
+    def test_regulation_expired_discussion_deadline_does_not_escalate(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+        deadline = datetime.now(timezone.utc) - timedelta(days=2)
+
+        result = client.analyze_document(
+            "Проект постановления о правилах поддержки сельхозтоваропроизводителей",
+            self._regulation_public_discussion_text(deadline),
+            source_name="Regulation.gov.ru",
+            url="https://regulation.gov.ru/projects/167865",
+            level="federal",
+            region="federal",
+        )
+
+        self.assertNotEqual(result.action_level, "requires_attention")
+        self.assertIn(result.action_level, {"watchlist", "background"})
+        self.assertIn("Конец обсуждения", result.deadline_text or "")
+
+    def test_regulation_unrelated_discussion_item_stays_background(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+        deadline = datetime.now(timezone.utc) + timedelta(days=5)
+
+        result = client.analyze_document(
+            "Проект приказа о туристских маршрутах",
+            self._regulation_public_discussion_text(deadline, agro=False),
+            source_name="Regulation.gov.ru",
+            url="https://regulation.gov.ru/projects/167866",
             level="federal",
             region="federal",
         )

@@ -52,11 +52,15 @@ DEADLINE_MARKERS = (
     "приём документов",
     "публичное обсуждение",
     "срок обсуждения",
+    "конец обсуждения",
+    "окончание обсуждения",
+    "завершение обсуждения",
 )
 DEADLINE_PRIORITY_RE = re.compile(
     r"(прием заявок|приём заявок|прием открыт|приём открыт|прием заявок открыт|приём заявок открыт|"
     r"заявки принимаются|подача заявок|срок подачи|конкурсный отбор|отбор заявок|"
-    r"прием документов|приём документов|публичное обсуждение|срок обсуждения)",
+    r"прием документов|приём документов|публичное обсуждение|срок обсуждения|"
+    r"конец обсуждения|окончание обсуждения|завершение обсуждения)",
     re.IGNORECASE,
 )
 DATE_TOKEN_RE = re.compile(
@@ -99,6 +103,20 @@ DEADLINE_RANGE_RE = re.compile(
     r"декабря|декабрь)"
     r"\s+\d{4}(?:\s+г(?:ода|\.))?"
     r")\s+по\s+(?P<end>"
+    r"\d{1,2}[./]\d{1,2}[./]\d{4}"
+    r"|"
+    r"\d{4}-\d{2}-\d{2}"
+    r"|"
+    r"\d{1,2}\s+"
+    r"(?:января|январь|февраля|февраль|марта|март|апреля|апрель|мая|май|июня|июнь|"
+    r"июля|июль|августа|август|сентября|сентябрь|октября|октябрь|ноября|ноябрь|"
+    r"декабря|декабрь)"
+    r"\s+\d{4}(?:\s+г(?:ода|\.))?"
+    r")",
+    re.IGNORECASE,
+)
+DISCUSSION_DEADLINE_RE = re.compile(
+    r"(?:конец|окончание|завершение)\s+(?:публичного\s+)?обсуждени[яй]\s*[:\-]?\s*(?P<date>"
     r"\d{1,2}[./]\d{1,2}[./]\d{4}"
     r"|"
     r"\d{4}-\d{2}-\d{2}"
@@ -304,6 +322,11 @@ def _build_deadline_candidate(sentence: str, lowered: str) -> tuple[int, str] | 
             deadline_match = match
     if deadline_match is None:
         for match in DEADLINE_DATE_RE.finditer(sentence):
+            parsed_date = parse_russian_date(match.group("date"))
+            if parsed_date is not None:
+                deadline_match = match
+    if deadline_match is None:
+        for match in DISCUSSION_DEADLINE_RE.finditer(sentence):
             parsed_date = parse_russian_date(match.group("date"))
             if parsed_date is not None:
                 deadline_match = match

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import date, datetime, timezone
 import re
 
+from app.extractors.date_extractor import parse_russian_date
 from app.llm.facts_extractor import DocumentFacts
 from app.models import SourceRole
 from app.rules.ahstep_domain_rules import (
@@ -49,10 +51,41 @@ TOPIC_RULES = {
 PROJECT_DISCUSSION_SIGNALS = (
     "публичное обсуждение",
     "срок обсуждения",
+    "конец обсуждения",
+    "окончание обсуждения",
+    "завершение обсуждения",
     "изменение порядка",
     "проект постановления",
     "проект приказа",
     "консультац",
+)
+REGULATION_DISCUSSION_NEAR_DAYS = 14
+REGULATION_DISCUSSION_MARKERS = (
+    "конец обсуждения",
+    "окончание обсуждения",
+    "завершение обсуждения",
+    "публичное обсуждение",
+    "оценка регулирующего воздействия",
+    "статус: идет обсуждение",
+    "статус: идёт обсуждение",
+)
+REGULATION_END_DISCUSSION_RE = re.compile(
+    r"(?:конец|окончание|завершение)\s+(?:публичного\s+)?обсуждени[яй]",
+    re.IGNORECASE,
+)
+REGULATION_DATE_TOKEN_RE = re.compile(
+    r"(?<!\d)("
+    r"\d{1,2}[./]\d{1,2}[./]\d{4}"
+    r"|"
+    r"\d{4}-\d{2}-\d{2}"
+    r"|"
+    r"\d{1,2}\s+"
+    r"(?:января|январь|февраля|февраль|марта|март|апреля|апрель|мая|май|июня|июнь|"
+    r"июля|июль|августа|август|сентября|сентябрь|октября|октябрь|ноября|ноябрь|"
+    r"декабря|декабрь)"
+    r"\s+\d{4}(?:\s+г(?:ода|\.))?"
+    r")(?!\d)",
+    re.IGNORECASE,
 )
 SUPPORT_CHANGE_MARKERS = (
     "внесены изменения",
@@ -158,6 +191,11 @@ def build_impact(
                 )
             return "Прием заявок завершен; документ полезен как справка и ориентир для следующих отборов."
         if facts.application_status == "open" and facts.deadline_text:
+            if _is_regulation_discussion_deadline_text(facts.deadline_text):
+                return (
+                    f"Есть действующий срок публичного обсуждения ({facts.deadline_text}); "
+                    "GR-команде стоит проверить проект НПА и возможную позицию."
+                )
             return (
                 f"Есть действующий срок подачи ({facts.deadline_text}); GR-команде стоит проверить "
                 "окно участия, условия меры и ответственных."
@@ -296,6 +334,14 @@ def detect_action_level(
         signal in title_text or signal in lead_text
         for signal in PROJECT_DISCUSSION_SIGNALS
     )
+    regulation_discussion_deadline_status = _regulation_discussion_deadline_status(
+        domain=domain,
+        title_text=title_text,
+        body_text=body_text,
+        facts=facts,
+    )
+    if domain == "regulation.gov.ru" and not has_ahstep_domain_context:
+        return "background"
 
     if page_type in {"registry", "results_protocol", "reference_page"}:
         if source_role == "regional_npa":
@@ -389,18 +435,24 @@ def detect_action_level(
             return "watchlist"
         return "background"
     if source_role == "strategy":
-        if has_project_discussion_signal and facts.deadline_text:
+        if regulation_discussion_deadline_status == "near" and has_project_discussion_signal:
+            return "requires_attention"
+        if regulation_discussion_deadline_status == "future" and has_project_discussion_signal:
+            return "watchlist"
+        if (
+            domain != "regulation.gov.ru"
+            and has_project_discussion_signal
+            and facts.deadline_text
+        ):
             return "requires_attention"
         if has_strategy_signal or has_any_action_signal or explicit_keywords:
             return "watchlist"
         return "background"
     if domain == "regulation.gov.ru":
-        if has_project_discussion_signal and (
-            "срок обсуждения" in title_text
-            or "срок обсуждения" in lead_text
-            or facts.deadline_text
-        ):
+        if regulation_discussion_deadline_status == "near" and has_project_discussion_signal:
             return "requires_attention"
+        if regulation_discussion_deadline_status == "future" and has_project_discussion_signal:
+            return "watchlist"
         if has_project_discussion_signal or has_any_action_signal or explicit_keywords:
             return "watchlist"
         return "background"
@@ -564,6 +616,58 @@ def _has_mcx_official_news_watchlist_signal(
     return any(re.search(pattern, text) for pattern in MCX_NEWS_WATCHLIST_PATTERNS)
 
 
+def _regulation_discussion_deadline_status(
+    *,
+    domain: str,
+    title_text: str,
+    body_text: str,
+    facts: DocumentFacts,
+) -> str | None:
+    if domain != "regulation.gov.ru":
+        return None
+    text = f"{title_text} {body_text[:5000]} {facts.deadline_text or ''}"
+    if not any(marker in text for marker in REGULATION_DISCUSSION_MARKERS):
+        return None
+    deadline_date = _extract_regulation_deadline_date(facts.deadline_text or "")
+    if deadline_date is None:
+        deadline_date = _extract_regulation_deadline_date(text)
+    if deadline_date is None:
+        return None
+    days_left = (deadline_date - _today_utc()).days
+    if days_left < 0:
+        return "expired"
+    if days_left <= REGULATION_DISCUSSION_NEAR_DAYS:
+        return "near"
+    return "future"
+
+
+def _extract_regulation_deadline_date(text: str) -> date | None:
+    if not text:
+        return None
+    end_marker_match = REGULATION_END_DISCUSSION_RE.search(text)
+    if end_marker_match is not None:
+        deadline_fragment = text[end_marker_match.end() : end_marker_match.end() + 180]
+        for match in REGULATION_DATE_TOKEN_RE.finditer(deadline_fragment):
+            parsed_date = parse_russian_date(match.group(1))
+            if parsed_date is not None:
+                return parsed_date
+    candidate_date: date | None = None
+    for match in REGULATION_DATE_TOKEN_RE.finditer(text):
+        parsed_date = parse_russian_date(match.group(1))
+        if parsed_date is not None:
+            candidate_date = parsed_date
+    return candidate_date
+
+
+def _is_regulation_discussion_deadline_text(text: str | None) -> bool:
+    lowered = (text or "").lower()
+    return any(marker in lowered for marker in REGULATION_DISCUSSION_MARKERS)
+
+
+def _today_utc() -> date:
+    return datetime.now(timezone.utc).date()
+
+
 def build_business_signal(
     *,
     action_level: str,
@@ -625,6 +729,8 @@ def build_business_signal(
     if page_type == "reference_page" and "приказ" in title.lower():
         return "Общий раздел документов/приказов; прямой GR-сигнал не выявлен."
     if source_role == "strategy":
+        if domain == "regulation.gov.ru" and _is_regulation_discussion_deadline_text(facts.deadline_text):
+            return "Проект НПА на публичном обсуждении со сроком; проверить влияние и необходимость GR-позиции."
         if facts.deadline_text or "публич" in combined_text:
             return "Стратегический федеральный документ с обсуждением или сроком; держать на контроле."
         return "Стратегический федеральный сигнал по господдержке или порядку регулирования."
