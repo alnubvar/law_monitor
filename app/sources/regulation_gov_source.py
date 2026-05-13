@@ -22,13 +22,22 @@ _FIELD_LABELS: list[tuple[str, str]] = [
     ("rationale", "Обоснование"),
 ]
 
+_DATE_FIELDS = {"publishDate", "startDiscussion", "endDiscussion"}
+
+
+def _format_field_value(tag: str, value: str) -> str:
+    if tag not in _DATE_FIELDS:
+        return value
+    dt = _parse_iso_date(value)
+    return dt.strftime("%d.%m.%Y") if dt is not None else value
+
 
 def _build_synthetic_text(project: ET.Element, pid: str, title: str) -> str:
     lines = [f"Проект НПА: {title}", f"ID: {pid}"]
     for tag, label in _FIELD_LABELS:
         value = (project.findtext(tag) or "").strip()
         if value:
-            lines.append(f"{label}: {value}")
+            lines.append(f"{label}: {_format_field_value(tag, value)}")
     return "\n".join(lines)
 
 

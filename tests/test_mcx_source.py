@@ -301,7 +301,6 @@ class McxSourceMeasuresTest(unittest.TestCase):
             titles,
             [
                 "Льготное кредитование по СПК",
-                "Госпрограмма развития сельского хозяйства",
                 "Срочная информация для регионов о предоставлении субсидий",
                 "Льготный лизинг",
             ],
@@ -310,7 +309,40 @@ class McxSourceMeasuresTest(unittest.TestCase):
         self.assertNotIn("Фотоотчеты", titles)
         self.assertNotIn("Департамент растениеводства", titles)
         self.assertNotIn("Цели и задачи министерства", titles)
+        self.assertNotIn("Госпрограмма развития сельского хозяйства", titles)
         self.assertTrue(all(item.raw_text for item in items))
+
+    def test_measures_filters_fisheries_path(self) -> None:
+        html = """<html><body>
+<a href="/activity/state-support/programs/fish-development/">
+  Развитие рыбохозяйственного комплекса
+</a>
+<a href="/activity/state-support/measures/льготное-кредитование/">
+  Льготное кредитование по СПК
+</a>
+</body></html>"""
+        source = self._source()
+        with patch.object(source, "get", return_value=_mock_response(html)):
+            items = source.fetch_items()
+        titles = [item.title for item in items]
+        self.assertNotIn("Развитие рыбохозяйственного комплекса", titles)
+        self.assertIn("Льготное кредитование по СПК", titles)
+
+    def test_measures_filters_archived_year_range_program(self) -> None:
+        html = """<html><body>
+<a href="/activity/state-support/programs/program-2013-2020/">
+  Госпрограмма развития сельского хозяйства
+</a>
+<a href="/activity/state-support/measures/льготное-кредитование/">
+  Льготное кредитование по СПК
+</a>
+</body></html>"""
+        source = self._source()
+        with patch.object(source, "get", return_value=_mock_response(html)):
+            items = source.fetch_items()
+        titles = [item.title for item in items]
+        self.assertNotIn("Госпрограмма развития сельского хозяйства", titles)
+        self.assertIn("Льготное кредитование по СПК", titles)
 
     def test_measures_noise_fixture_still_uses_one_http_request(self) -> None:
         source = self._source(max_items=10)

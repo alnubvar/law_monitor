@@ -47,6 +47,8 @@ _MEASURE_DENY_PATH_FRAGMENTS = (
     "/video",
     "/reports",
     "/report",
+    "/fish",
+    "/program-2013-",
 )
 _MEASURE_DENY_TITLE_FRAGMENTS = (
     "биография",
@@ -57,6 +59,7 @@ _MEASURE_DENY_TITLE_FRAGMENTS = (
     "цели и задачи",
     "контакты",
     "структура",
+    "рыбохозяйственн",
 )
 _MEASURE_LISTING_PATHS = {
     "/activity/state-support/",

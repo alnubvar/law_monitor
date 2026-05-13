@@ -235,6 +235,27 @@ class RegulationGovSourceTest(unittest.TestCase):
             self.assertIsNotNone(item.raw_text)
             self.assertIn("Проект НПА:", item.raw_text or "")
 
+    def test_date_fields_formatted_as_ddmmyyyy_not_iso(self) -> None:
+        xml_with_dates = """<?xml version="1.0" encoding="utf-8"?>
+<projects offset="0" limit="1" total="1">
+  <project id="999">
+    <title>Проект с датами обсуждения</title>
+    <publishDate>2026-05-12T08:49:21.343Z</publishDate>
+    <startDiscussion>2026-05-13T10:00:00.000Z</startDiscussion>
+    <endDiscussion>2026-05-26T23:59:59.000Z</endDiscussion>
+  </project>
+</projects>""".encode("utf-8")
+        source = _make_source()
+        with patch.object(source, "get", return_value=_mock_response(xml_with_dates)):
+            items = source.fetch_items()
+        raw_text = items[0].raw_text or ""
+        self.assertIn("12.05.2026", raw_text)
+        self.assertIn("13.05.2026", raw_text)
+        self.assertIn("26.05.2026", raw_text)
+        self.assertNotIn("2026-05-12T", raw_text)
+        self.assertNotIn("2026-05-13T", raw_text)
+        self.assertNotIn("2026-05-26T", raw_text)
+
 
 class ParseIsoDateTest(unittest.TestCase):
 
