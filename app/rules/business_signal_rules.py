@@ -520,16 +520,13 @@ def detect_action_level(
             return "requires_attention"
         if facts.support_status == "active" and facts.application_status == "open":
             return "requires_attention"
-        if (
-            facts.support_status == "active"
-            and facts.application_status == "regular"
-            and (
-                facts.deadline_text
-                or has_strict_action_signal
-                or is_important_permanent_measure
-            )
-        ):
-            return "requires_attention"
+        if facts.support_status == "active" and facts.application_status == "regular":
+            # GISP static measure cards (active_support_measures) require a concrete
+            # deadline to be urgent — title keywords alone cause permanent alert fatigue.
+            if source_role == "active_support_measures" and not facts.deadline_text:
+                pass  # fall through to watchlist
+            elif facts.deadline_text or has_strict_action_signal or is_important_permanent_measure:
+                return "requires_attention"
         if has_any_action_signal or has_watch_in_title or has_watch_in_body or explicit_keywords:
             return "watchlist"
         return "background"

@@ -352,7 +352,7 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         self.assertNotEqual(result.action_level, "requires_attention")
         self.assertEqual(result.business_signal, "Неактивная мера поддержки: оставить в справочном блоке")
 
-    def test_gisp_active_regular_measure_card_becomes_requires_attention(self) -> None:
+    def test_gisp_active_regular_measure_card_without_deadline_becomes_watchlist(self) -> None:
         client = MockLLMClient(["льготное кредитование АПК"])
 
         result = client.analyze_document(
@@ -370,6 +370,47 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         self.assertTrue(result.is_active)
         self.assertTrue(result.is_continuous)
         self.assertEqual(result.application_status, "regular")
+        self.assertIsNone(result.deadline_text)
+        self.assertEqual(result.action_level, "watchlist")
+
+    def test_gisp_transportirovka_active_regular_no_deadline_becomes_watchlist(self) -> None:
+        client = MockLLMClient(["господдержка транспортировка товаров АПК"])
+
+        result = client.analyze_document(
+            "Господдержка. Транспортировка товаров АПК",
+            (
+                "Активная мера поддержки. На регулярной основе. "
+                "Компенсация части затрат на транспортировку товаров АПК."
+            ),
+            source_name="ГИСП - меры поддержки АПК",
+            url="https://gisp.gov.ru/nmp/measure/9582761",
+            level="support_measures",
+        )
+
+        self.assertEqual(result.support_status, "active")
+        self.assertEqual(result.application_status, "regular")
+        self.assertIsNone(result.deadline_text)
+        self.assertEqual(result.action_level, "watchlist")
+
+    def test_gisp_active_regular_with_deadline_stays_requires_attention(self) -> None:
+        client = MockLLMClient(["льготное кредитование АПК"])
+
+        result = client.analyze_document(
+            "Льготное кредитование АПК",
+            (
+                "Активная мера поддержки. На регулярной основе. "
+                "Прием заявок до 30 июня 2026 года. Льготное кредитование АПК."
+            ),
+            source_name="ГИСП - меры поддержки АПК",
+            url="https://gisp.gov.ru/nmp/measure/9564204",
+            level="support_measures",
+        )
+
+        self.assertEqual(result.support_status, "active")
+        # Extractor sees "Прием заявок до..." and sets application_status=open,
+        # which is handled by the open branch → requires_attention regardless.
+        self.assertIn(result.application_status, ("open", "regular"))
+        self.assertIsNotNone(result.deadline_text)
         self.assertEqual(result.action_level, "requires_attention")
 
     def test_gisp_measure_url_stays_measure_card_even_with_rule_words(self) -> None:
