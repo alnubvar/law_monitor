@@ -1531,6 +1531,77 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
 
         self.assertEqual(result.action_level, "background")
 
+    def test_mcx_official_support_expansion_news_is_watchlist(self) -> None:
+        client = MockLLMClient(["господдержка АПК", "субсидии"])
+
+        result = client.analyze_document(
+            "Правительство расширило меры господдержки производителей молока",
+            "Минсельхоз России. Новость АПК: Правительство расширило меры господдержки производителей молока.",
+            source_name="Минсельхоз России - новости",
+            url="https://mcx.gov.ru/press-service/news/pravitelstvo-rasshirilo-mery-gospodderzhki-proizvoditeley-moloka/",
+            level="federal",
+            region="federal",
+        )
+
+        self.assertEqual(result.action_level, "watchlist")
+        self.assertIn("Официальная новость Минсельхоза", result.business_signal or "")
+
+    def test_mcx_official_apk_legislation_news_is_watchlist(self) -> None:
+        client = MockLLMClient(["законопроект АПК"])
+
+        result = client.analyze_document(
+            "Совет Федерации одобрил ряд законопроектов в сфере АПК",
+            "Минсельхоз России. Новость АПК: Совет Федерации одобрил ряд законопроектов в сфере АПК.",
+            source_name="Минсельхоз России - новости",
+            url="https://mcx.gov.ru/press-service/news/sovet-federatsii-odobril-ryad-zakonoproektov-v-sfere-apk/",
+            level="federal",
+            region="federal",
+        )
+
+        self.assertEqual(result.action_level, "watchlist")
+
+    def test_mcx_official_export_procedure_news_is_watchlist(self) -> None:
+        client = MockLLMClient(["Поддержка экспорта АПК"])
+
+        result = client.analyze_document(
+            "Минсельхоз и ФТС продолжат совместную работу по упрощению процедур для экспортеров АПК",
+            "Минсельхоз России. Новость АПК: Минсельхоз и ФТС продолжат совместную работу по упрощению процедур для экспортеров АПК.",
+            source_name="Минсельхоз России - новости",
+            url="https://mcx.gov.ru/press-service/news/minselkhoz-i-fts-prodolzhat-sovmestnuyu-rabotu-po-uproshcheniyu-protsedur-dlya-eksporterov-apk/",
+            level="federal",
+            region="federal",
+        )
+
+        self.assertEqual(result.action_level, "watchlist")
+
+    def test_mcx_official_digital_logistics_news_is_watchlist(self) -> None:
+        client = MockLLMClient(["цифровая платформа АПК"])
+
+        result = client.analyze_document(
+            "Оксана Лут и Андрей Никитин обсудили развитие цифровых и логистических решений для АПК",
+            "Минсельхоз России. Новость АПК: Оксана Лут и Андрей Никитин обсудили развитие цифровых и логистических решений для АПК.",
+            source_name="Минсельхоз России - новости",
+            url="https://mcx.gov.ru/press-service/news/oksana-lut-i-andrey-nikitin-obsudili-razvitie-tsifrovykh-i-logisticheskikh-resheniy-dlya-apk/",
+            level="federal",
+            region="federal",
+        )
+
+        self.assertEqual(result.action_level, "watchlist")
+
+    def test_mcx_official_ceremonial_news_stays_background(self) -> None:
+        client = MockLLMClient(["АПК"])
+
+        result = client.analyze_document(
+            "Поздравление Оксаны Лут с Днем Победы",
+            "Минсельхоз России. Новость АПК: Поздравление Оксаны Лут с Днем Победы.",
+            source_name="Минсельхоз России - новости",
+            url="https://mcx.gov.ru/press-service/news/pozdravlenie-oksany-lut-s-dnem-pobedy/",
+            level="federal",
+            region="federal",
+        )
+
+        self.assertEqual(result.action_level, "background")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -99,6 +99,28 @@ NEGATED_ACTION_PATTERNS = (
     r"без(?:\s+\w+){0,3}\s+прием\w*\s+заяв",
     r"без(?:\s+\w+){0,3}\s+приём\w*\s+заяв",
 )
+MCX_NEWS_SOURCE_MARKER = "минсельхоз россии - новости"
+MCX_NEWS_AGRO_CONTEXT_PATTERNS = (
+    r"апк",
+    r"агро",
+    r"сельск",
+    r"молоч",
+    r"молок",
+    r"зерн",
+    r"растениевод",
+    r"животновод",
+    r"фермер",
+)
+MCX_NEWS_WATCHLIST_PATTERNS = (
+    r"(?:правительств|минсельхоз|кабмин).{0,90}(?:расшир|увелич|запуст|продолж|направ|поддерж).{0,90}(?:господдерж|мер[ыа]\s+поддерж|субсид|льготн|кредит)",
+    r"(?:господдерж|мер[ыа]\s+поддерж|субсид|льготн|кредит).{0,90}(?:расшир|увелич|запуст|продолж|финансир)",
+    r"(?:совет федерации|госдум|правительств).{0,90}(?:одобр|принял|приняла|рассмотр).{0,90}(?:законопроект|закон).{0,90}(?:апк|агро|сельск)",
+    r"(?:законопроект|закон).{0,90}(?:апк|агро|сельск)",
+    r"(?:минсельхоз|фтс|тамож).{0,120}(?:упрощ|процедур|экспортер|экспортёр).{0,120}(?:экспорт|апк|агро)",
+    r"(?:экспорт|экспортер|экспортёр|тамож|фтс).{0,120}(?:упрощ|процедур|логист|поддерж|сервис)",
+    r"(?:цифров|платформ|логист).{0,120}(?:апк|агро|сельск)",
+    r"(?:посевн|полев|уборк|урож).{0,120}(?:ставрополь|ростов|краснодар|заседан\w*\s+правительств)",
+)
 
 
 def detect_importance(action_level: str) -> str:
@@ -453,6 +475,12 @@ def detect_action_level(
         and _has_strong_news_action_signal(title_text=title_text, lead_text=lead_text)
     ):
         return "requires_attention"
+    if _has_mcx_official_news_watchlist_signal(
+        source_name=source_name,
+        title_text=title_text,
+        lead_text=lead_text,
+    ):
+        return "watchlist"
     if page_type in WATCHLIST_ONLY_PAGE_TYPES:
         if has_any_action_signal or has_watch_in_title or has_watch_in_body or explicit_keywords:
             return "watchlist"
@@ -520,6 +548,20 @@ def _has_strong_news_action_signal(*, title_text: str, lead_text: str) -> bool:
     ):
         return True
     return False
+
+
+def _has_mcx_official_news_watchlist_signal(
+    *,
+    source_name: str | None,
+    title_text: str,
+    lead_text: str,
+) -> bool:
+    if MCX_NEWS_SOURCE_MARKER not in (source_name or "").lower():
+        return False
+    text = f"{title_text} {lead_text}"
+    if not any(re.search(pattern, text) for pattern in MCX_NEWS_AGRO_CONTEXT_PATTERNS):
+        return False
+    return any(re.search(pattern, text) for pattern in MCX_NEWS_WATCHLIST_PATTERNS)
 
 
 def build_business_signal(
@@ -595,6 +637,12 @@ def build_business_signal(
     if source_role == "support_documents" and page_type in {"reference_page", "section_page", "category_page"}:
         return "Общий раздел/список документов; прямой GR-сигнал не выявлен."
     if source_role == "news_signals":
+        if _has_mcx_official_news_watchlist_signal(
+            source_name=source_name,
+            title_text=title_text,
+            lead_text=raw_text.lower()[:1500],
+        ):
+            return "Официальная новость Минсельхоза с GR-сигналом по господдержке, регулированию, экспорту, логистике или цифровизации АПК."
         if has_news_signal(
             title_text,
             title_text,
