@@ -1448,6 +1448,161 @@ class ReportGenerationSmokeTest(unittest.TestCase):
 
         self.assertEqual(report_view.total_visible, 0)
 
+    def test_report_suppresses_evergreen_support_references_but_keeps_fresh_regional_order(self) -> None:
+        evergreen_measure = self._doc(
+            doc_id=10,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Льготное кредитование АПК",
+            url="https://gisp.gov.ru/nmp/measure/9564204",
+            action_level="watchlist",
+            page_type="measure_card",
+            summary="Мера действует на регулярной основе.",
+        )
+        evergreen_measure.published_at = None
+        evergreen_measure.support_status = "active"
+        evergreen_measure.application_status = "regular"
+        evergreen_measure.is_active = True
+
+        fresh_order = self._doc(
+            doc_id=11,
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            region="krasnodar",
+            title="О внесении изменения в порядок предоставления субсидий на реализацию проектов мелиорации",
+            url="https://npa.krasnodar.ru/rest/files/1233833",
+            action_level="watchlist",
+            page_type="new_rule",
+            summary="Изменен порядок предоставления субсидий на проекты мелиорации.",
+        )
+        fresh_order.business_signal = (
+            "Региональный приказ Минсельхоза Краснодарского края по субсидии, гранту "
+            "или порядку поддержки; держать на наблюдении."
+        )
+
+        markdown = generate_markdown_report(
+            [evergreen_measure, fresh_order],
+            report_date="2026-05-13",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn("Изменены условия субсидирования", markdown)
+        self.assertIn("https://npa.krasnodar.ru/rest/files/1233833", markdown)
+        self.assertNotIn("Льготное кредитование АПК", markdown)
+
+    def test_report_keeps_support_reference_with_change_signal(self) -> None:
+        changed_measure = self._doc(
+            doc_id=12,
+            source_name="Минсельхоз России - меры господдержки",
+            region="federal",
+            title="Субсидии производителям сельскохозяйственной техники",
+            url="https://mcx.gov.ru/activity/state-support/measures/machinery-subsidy/",
+            action_level="watchlist",
+            page_type="new_rule",
+            summary="Внесены изменения в правила предоставления субсидии.",
+        )
+        changed_measure.published_at = None
+        changed_measure.business_signal = "Изменены условия поддержки"
+
+        markdown = generate_markdown_report(
+            [changed_measure],
+            report_date="2026-05-13",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn("Субсидии производителям сельскохозяйственной техники", markdown)
+
+    def test_report_header_counts_rendered_items_after_evergreen_suppression(self) -> None:
+        urgent_document = self._doc(
+            doc_id=20,
+            source_name="Regulation.gov.ru",
+            region="federal",
+            title="Об утверждении требований к видам племенных хозяйств",
+            url="https://regulation.gov.ru/projects/167863",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="Проект НПА по сельскому хозяйству.",
+        )
+        urgent_document.application_status = "open"
+        urgent_document.deadline_text = "Конец обсуждения: 2026-05-26T11:53:57.098Z"
+
+        evergreen_measure = self._doc(
+            doc_id=21,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Гарантия ВЭБ.РФ",
+            url="https://gisp.gov.ru/nmp/measure/12446928",
+            action_level="watchlist",
+            page_type="measure_card",
+            summary="Постоянная федеральная мера поддержки.",
+        )
+        evergreen_measure.published_at = None
+        evergreen_measure.application_status = "regular"
+        evergreen_measure.support_status = "active"
+
+        news_document = self._doc(
+            doc_id=22,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="В ГД предложили создать госпрограмму субсидирования ремонта сельхозтехники",
+            url="https://www.zol.ru/n/41438",
+            action_level="watchlist",
+            page_type="news_background",
+            summary="Предложена программа поддержки ремонта сельхозтехники.",
+        )
+
+        markdown = generate_markdown_report(
+            [urgent_document, evergreen_measure, news_document],
+            report_date="2026-05-13",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn("- Включено в сводку: 2", markdown)
+        self.assertIn("- Требует реакции: 1", markdown)
+        self.assertIn("- На наблюдении: 1", markdown)
+        self.assertNotIn("Гарантия ВЭБ.РФ", markdown)
+
+    def test_regulation_public_discussion_uses_correct_report_wording(self) -> None:
+        document = self._doc(
+            doc_id=30,
+            source_name="Regulation.gov.ru",
+            region="federal",
+            title="Об утверждении требований к видам племенных хозяйств",
+            url="https://regulation.gov.ru/projects/167863",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary=(
+                "Проект Статус: Идет обсуждение Процедура: Оценка регулирующего воздействия "
+                "Начало обсуждения: 2026-05-12T11:53:57.098Z "
+                "Конец обсуждения: 2026-05-26T11:53:57.098Z"
+            ),
+        )
+        document.application_status = "open"
+        document.deadline_text = "Конец обсуждения: 2026-05-26T11:53:57.098Z"
+        document.business_signal = (
+            "Проект НПА на публичном обсуждении со сроком; проверить влияние "
+            "и необходимость GR-позиции."
+        )
+        document.raw_text = (
+            "Проект касается требований к видам племенных хозяйств и "
+            "сельскохозяйственных товаропроизводителей."
+        )
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-13",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn("Проект НПА на публичном обсуждении", markdown)
+        self.assertIn("Проект НПА вынесен на публичное обсуждение.", markdown)
+        self.assertIn("Проверить влияние проекта и необходимость позиции до 26.05.2026.", markdown)
+        self.assertNotIn("Открыт прием заявок", markdown)
+        self.assertNotIn("Проверить сроки подачи", markdown)
+
     def test_telegram_digest_includes_business_facts_for_requires_attention(self) -> None:
         from app.notify import telegram
 

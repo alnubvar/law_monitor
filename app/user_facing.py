@@ -22,6 +22,14 @@ GENERIC_EXECUTIVE_SUMMARY_MARKERS = (
     "требуется проверка условий и сроков",
     "документ содержит изменения в порядке предоставления",
 )
+PARSER_RESIDUE_SUMMARY_MARKERS = (
+    "статус:",
+    "процедура:",
+    "начало обсуждения:",
+    "конец обсуждения:",
+    "id:",
+    "код:",
+)
 
 _NPA_IN_TITLE_RE = re.compile(r"[№#]\s*(\d[\d/.\-]*\d|\d{1,6})")
 _DATE_IN_TITLE_RE = re.compile(r"\b(\d{1,2})\.(\d{2})(?:\.\d{2,4})?\b")
@@ -71,6 +79,10 @@ INTENT_TRADE_REGULATION = "trade_regulation"
 INTENT_SUPPORT_MEASURE = "support_measure"
 INTENT_SUPPORT_ATTENTION = "support_attention"
 INTENT_OCR_PLACEHOLDER = "ocr_placeholder"
+INTENT_REGULATION_DISCUSSION = "regulation_discussion"
+_DISCUSSION_DATE_RE = re.compile(
+    r"(\d{4})-(\d{2})-(\d{2})|\b(\d{1,2})[.](\d{1,2})[.](\d{4})\b"
+)
 
 
 def user_facing_action_level(document: RawDocument) -> str | None:
@@ -255,7 +267,11 @@ def select_executive_summary(
     max_chars: int = EXECUTIVE_SUMMARY_MAX_CHARS,
 ) -> str:
     deterministic = _deterministic_summary(document)
-    if deterministic and (_is_generic_executive_summary(enrichment_text) or _is_generic_executive_summary(fallback_text)):
+    if deterministic and (
+        _is_generic_executive_summary(enrichment_text)
+        or _is_generic_executive_summary(fallback_text)
+        or _looks_like_parser_residue_summary(fallback_text)
+    ):
         return _clip_text(deterministic, max_chars)
     if enrichment_text and is_useful_executive_summary(enrichment_text):
         normalized_enrichment = _normalize_text(enrichment_text)
@@ -313,6 +329,13 @@ def _is_generic_executive_summary(text: str | None) -> bool:
     if not normalized:
         return False
     return any(marker in normalized for marker in GENERIC_EXECUTIVE_SUMMARY_MARKERS)
+
+
+def _looks_like_parser_residue_summary(text: str | None) -> bool:
+    normalized = _normalize_text(text).lower()
+    if not normalized:
+        return False
+    return sum(1 for marker in PARSER_RESIDUE_SUMMARY_MARKERS if marker in normalized) >= 2
 
 
 def has_meaningful_extracted_ocr_text(document: PresentationDocument) -> bool:
@@ -427,6 +450,8 @@ def _deterministic_summary(document: PresentationDocument) -> str:
         return title_summary
 
     intent = _detect_deterministic_intent(document)
+    if intent == INTENT_REGULATION_DISCUSSION:
+        return "Проект НПА вынесен на публичное обсуждение."
     if intent == INTENT_REGIONAL_SUBSIDY:
         region_label = _region_label(document)
         if region_label:
@@ -483,6 +508,8 @@ def _detect_deterministic_intent(
         return INTENT_OCR_PLACEHOLDER
     if _looks_like_selection_announcement(document, combined):
         return INTENT_SELECTION_OPEN
+    if _looks_like_regulation_public_discussion(document, combined):
+        return INTENT_REGULATION_DISCUSSION
     if application_status == "open":
         return INTENT_SELECTION_OPEN
     if source_role == "news_signals" and (action_level == "watchlist" or section == "news_signals"):
@@ -495,6 +522,8 @@ def _detect_deterministic_intent(
         if _looks_like_subsidy(combined):
             return INTENT_REGIONAL_SUBSIDY
         return INTENT_REGIONAL_RULE
+    if source_role == "support_documents" and _region_label(document) and _looks_like_subsidy(combined):
+        return INTENT_REGIONAL_SUBSIDY
     if _looks_like_credit_support_context(combined) and _contains_change_signal(combined):
         return INTENT_CREDIT_SUPPORT
     if _looks_like_selection(combined) and _contains_change_signal(combined):
@@ -543,6 +572,8 @@ def _summary_from_title(document: PresentationDocument) -> str:
 def _reason_for_intent(intent: str) -> str:
     if intent == INTENT_SELECTION_OPEN:
         return "Открыт прием заявок"
+    if intent == INTENT_REGULATION_DISCUSSION:
+        return "Проект НПА на публичном обсуждении"
     if intent == INTENT_MARKET_OBSERVATION:
         return "Рынок оставлен на наблюдении"
     if intent == INTENT_STRATEGY:
@@ -571,6 +602,11 @@ def _action_for_intent(
 ) -> str:
     if intent == INTENT_SELECTION_OPEN:
         return "Проверить сроки подачи и ответственного."
+    if intent == INTENT_REGULATION_DISCUSSION:
+        deadline = _discussion_deadline_label(document)
+        if deadline:
+            return f"Проверить влияние проекта и необходимость позиции до {deadline}."
+        return "Проверить влияние проекта и необходимость позиции."
     if intent == INTENT_MARKET_OBSERVATION:
         return "Оставить как отраслевой фон."
     if intent == INTENT_STRATEGY:
@@ -648,6 +684,35 @@ def _looks_like_export_restriction(text: str) -> bool:
 
 def _looks_like_trade_regulation_context(text: str) -> bool:
     return bool(TRADE_REGULATION_RE.search(text))
+
+
+def _looks_like_regulation_public_discussion(
+    document: PresentationDocument,
+    combined: str,
+) -> bool:
+    if _source_role(document) != "strategy":
+        return False
+    return "обсужден" in combined or "публичн" in combined
+
+
+def _discussion_deadline_label(document: PresentationDocument) -> str:
+    text = " ".join(
+        part
+        for part in (
+            _get_value(document, "deadline_text"),
+            _get_value(document, "summary"),
+        )
+        if part
+    )
+    match = _DISCUSSION_DATE_RE.search(text)
+    if not match:
+        return ""
+    if match.group(1):
+        return f"{match.group(3)}.{match.group(2)}.{match.group(1)}"
+    day = int(match.group(4))
+    month = int(match.group(5))
+    year = int(match.group(6))
+    return f"{day:02d}.{month:02d}.{year:04d}"
 
 
 def _looks_like_credit_support_context(text: str) -> bool:

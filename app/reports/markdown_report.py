@@ -44,6 +44,10 @@ _DISCUSSION_DEADLINE_RE = re.compile(
     r"(конец\s+обсуждения)\s*:\s*(\d{1,2}[.]\d{1,2}[.]\d{4})",
     re.IGNORECASE,
 )
+_SUPPORT_OPERATIONAL_CHANGE_RE = re.compile(
+    r"измен|обнов|новые\s+услов|новый\s+поряд|внесени[ея]\s+измен|утвержден|утверждён",
+    re.IGNORECASE,
+)
 _BUREAUCRATIC_TITLE_PREFIXES = (
     "об утверждении",
     "о внесении изменений",
@@ -183,8 +187,9 @@ def generate_markdown_report(
         include_full_background=include_full_background,
     )
     display_sections = _build_display_sections(report_view.flatten())
+    rendered_documents = _flatten_display_sections(display_sections)
     enrichment_by_url = list_document_enrichments(
-        [document.url for document in report_view.flatten()],
+        [document.url for document in rendered_documents],
         db_path=db_path or config.DB_PATH,
     )
     notices = list(operational_notices or [])
@@ -197,6 +202,7 @@ def generate_markdown_report(
         _format_header_summary(
             document_list,
             report_view=report_view,
+            display_sections=display_sections,
             report_date=report_date,
             period_days=period_days,
             period_label=period_label,
@@ -206,7 +212,7 @@ def generate_markdown_report(
     )
     lines.extend(format_operational_notices_markdown(notices))
     title_by_id = disambiguate_visible_titles(
-        report_view.flatten(), max_chars=REPORT_TITLE_MAX_CHARS
+        rendered_documents, max_chars=REPORT_TITLE_MAX_CHARS
     )
     for section in DISPLAY_SECTION_ORDER:
         lines.append(DISPLAY_SECTION_TITLES[section])
@@ -498,22 +504,88 @@ def _published_timestamp(document: RawDocument) -> float:
 def _build_display_sections(documents: Iterable[RawDocument]) -> dict[str, list[RawDocument]]:
     sections: dict[str, list[RawDocument]] = {section: [] for section in DISPLAY_SECTION_ORDER}
     for document in documents:
+        if _is_evergreen_support_reference(document):
+            continue
         section = visibility_display_section(document)
         if section in sections:
             sections[section].append(document)
     measures = sections.get("measures_and_selections", [])
     if len(measures) > MEASURES_SECTION_DISPLAY_MAX:
         measures.sort(
-            key=lambda d: (
-                d.application_status == "open",
-                bool(d.deadline_text),
-                bool(d.business_signal),
-                d.is_active or False,
-            ),
+            key=_display_priority_key,
             reverse=True,
         )
         sections["measures_and_selections"] = measures[:MEASURES_SECTION_DISPLAY_MAX]
     return sections
+
+
+def _flatten_display_sections(
+    display_sections: dict[str, list[RawDocument]]
+) -> list[RawDocument]:
+    documents: list[RawDocument] = []
+    for section in DISPLAY_SECTION_ORDER:
+        documents.extend(display_sections.get(section, []))
+    return documents
+
+
+def _is_evergreen_support_reference(document: RawDocument) -> bool:
+    if user_facing_action_level(document) == "requires_attention":
+        return False
+    if visibility_display_section(document) != "measures_and_selections":
+        return False
+    if document.deadline_text:
+        return False
+    if document.application_status == "open":
+        return False
+    if document.published_at is not None:
+        return False
+    return not _has_support_change_signal(document)
+
+
+def _has_support_change_signal(document: RawDocument) -> bool:
+    text = " ".join(
+        part
+        for part in (
+            document.title,
+            document.summary,
+            document.business_signal,
+            document.impact,
+        )
+        if part
+    )
+    return bool(_SUPPORT_OPERATIONAL_CHANGE_RE.search(text))
+
+
+def _display_priority_key(document: RawDocument) -> tuple[int, float]:
+    return (
+        _display_priority_score(document),
+        _published_timestamp(document) or _published_timestamp_from_collected(document),
+    )
+
+
+def _display_priority_score(document: RawDocument) -> int:
+    score = 0
+    if user_facing_action_level(document) == "requires_attention":
+        score += 100
+    if document.deadline_text:
+        score += 40
+    if document.application_status == "open":
+        score += 35
+    if document.published_at is not None:
+        score += 25
+    if visibility_bucket(document) == "target_watchlist":
+        score += 20
+    if _has_support_change_signal(document):
+        score += 15
+    if document.is_active:
+        score += 2
+    return score
+
+
+def _published_timestamp_from_collected(document: RawDocument) -> float:
+    if document.collected_at is None:
+        return 0.0
+    return document.collected_at.timestamp()
 
 
 def classify_display_section(document: RawDocument) -> str:
@@ -727,17 +799,19 @@ def _format_header_summary(
     documents: list[RawDocument],
     *,
     report_view: ReportView,
+    display_sections: dict[str, list[RawDocument]],
     report_date: str,
     period_days: int | None,
     period_label: str | None,
     generated_at: datetime,
     period_context_lines: list[str],
 ) -> list[str]:
-    requires_attention_count = sum(
-        1 for document in documents if user_facing_action_level(document) == "requires_attention"
-    )
+    rendered_documents = _flatten_display_sections(display_sections)
+    requires_attention_count = len(display_sections.get("requires_attention", []))
     watchlist_count = sum(
-        1 for document in documents if user_facing_action_level(document) == "watchlist"
+        len(display_sections.get(section, []))
+        for section in DISPLAY_SECTION_ORDER
+        if section != "requires_attention"
     )
     period_spec: PeriodSpec | None = build_rolling_period(period_days) if period_days is not None else None
     period_text = period_label or (
@@ -746,13 +820,13 @@ def _format_header_summary(
         else f"дата отчета, {datetime.strptime(report_date, '%Y-%m-%d').strftime('%d.%m.%Y')}"
     )
     reaction_text = _build_reaction_summary(report_view)
-    source_heat_line = _build_source_heat_line(report_view.flatten())
+    source_heat_line = _build_source_heat_line(rendered_documents)
     lines = [
         "## Сводка",
         f"- Подготовлено: {generated_at.strftime('%Y-%m-%d %H:%M')}",
         f"- Период: {period_text}",
         f"- Проанализировано: {len(documents)}",
-        f"- Включено в сводку: {report_view.total_visible}",
+        f"- Включено в сводку: {len(rendered_documents)}",
         f"- Требует реакции: {requires_attention_count}",
         f"- На наблюдении: {watchlist_count}",
         f"- Главный акцент: {reaction_text}",
