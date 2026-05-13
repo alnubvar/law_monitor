@@ -8,7 +8,7 @@ from bs4 import BeautifulSoup, Tag
 
 from app.extractors.date_extractor import parse_russian_date
 from app.models import CollectedItem
-from app.sources.generic_html_source import GenericHTMLSource
+from app.sources.generic_html_source import GLOBAL_DENY_PATTERNS, GenericHTMLSource
 
 SAFE_PUBLICATION_MARKERS = (
     "дата публикации",
@@ -48,6 +48,7 @@ DATE_CONTEXT_RE = re.compile(
     r"[:\s]+(.{0,80})",
     re.IGNORECASE,
 )
+NPA_KRASNODAR_FILE_RE = re.compile(r"^/rest/files/\d+/?$", re.IGNORECASE)
 
 
 class KrasnodarSource(GenericHTMLSource):
@@ -131,6 +132,18 @@ class KrasnodarSource(GenericHTMLSource):
                 )
                 continue
             soup = BeautifulSoup(response.text, "html.parser")
+            for document_item in soup.select(".document-item"):
+                if max_items is not None and len(harvested_items) >= max_items:
+                    break
+                if not isinstance(document_item, Tag):
+                    continue
+                collected = _extract_msh_document_item_attachment(self, document_item, response.url)
+                if collected is None or collected.url in seen_urls:
+                    continue
+                harvested_items.append(collected)
+                seen_urls.add(collected.url)
+                attachment_counts[collected.document_type] += 1
+
             for link in soup.find_all("a", href=True):
                 if max_items is not None and len(harvested_items) >= max_items:
                     break
@@ -139,13 +152,13 @@ class KrasnodarSource(GenericHTMLSource):
                 normalized_url = self._normalize_url(link.get("href", ""), response.url)
                 if not normalized_url or normalized_url in seen_urls:
                     continue
-                document_type = self._detect_document_type(normalized_url)
+                document_type = _detect_msh_attachment_document_type(self, normalized_url, link)
                 if document_type not in {"pdf", "doc", "docx"}:
                     continue
                 title = _extract_msh_attachment_title(self, link, normalized_url)
                 if not self._should_include_title(title):
                     continue
-                if not self._should_include_url(normalized_url, response.url, title):
+                if not _is_safe_msh_attachment_url(self, normalized_url, response.url, title):
                     continue
                 if not _has_actionable_title(f"{title} {normalized_url.lower()}"):
                     continue
@@ -195,6 +208,63 @@ def _is_msh_attachment_listing_item(item: CollectedItem) -> bool:
     )
 
 
+def _extract_msh_document_item_attachment(
+    source: KrasnodarSource,
+    document_item: Tag,
+    base_url: str,
+) -> CollectedItem | None:
+    title_tag = document_item.select_one(".document-item__title")
+    download_link = document_item.select_one("a.document-info-bar__download-link")
+    if not isinstance(title_tag, Tag) or not isinstance(download_link, Tag):
+        return None
+
+    normalized_url = source._normalize_url(download_link.get("href", ""), base_url)
+    if not normalized_url:
+        return None
+
+    document_type = _extract_msh_document_item_type(source, document_item, normalized_url, download_link)
+    if document_type not in {"pdf", "doc", "docx"}:
+        return None
+
+    title = _extract_msh_document_item_title(title_tag)
+    if not source._should_include_title(title):
+        return None
+    if not _is_safe_msh_attachment_url(source, normalized_url, base_url, title):
+        return None
+    if not _has_actionable_title(f"{title.lower()} {normalized_url.lower()}"):
+        return None
+
+    return CollectedItem(
+        source_name=source.config.name,
+        source_url=source.config.url,
+        level=source.config.level,
+        region=source.config.region,
+        title=title,
+        url=normalized_url,
+        published_at=source._extract_published_at(title_tag, normalized_url),
+        document_type=document_type,
+    )
+
+
+def _extract_msh_document_item_type(
+    source: KrasnodarSource,
+    document_item: Tag,
+    normalized_url: str,
+    download_link: Tag,
+) -> str:
+    type_tag = document_item.select_one(".document-info-bar__type")
+    type_text = " ".join(type_tag.stripped_strings).lower() if isinstance(type_tag, Tag) else ""
+    if type_text in {"pdf", "doc", "docx"}:
+        return type_text
+    return _detect_msh_attachment_document_type(source, normalized_url, download_link)
+
+
+def _extract_msh_document_item_title(title_tag: Tag) -> str:
+    for extra in title_tag.select(".document-item-extra-info"):
+        extra.extract()
+    return " ".join(title_tag.stripped_strings).strip()[:500]
+
+
 def _extract_msh_attachment_title(source: KrasnodarSource, link: Tag, normalized_url: str) -> str:
     link_title = source._extract_title(link, normalized_url)
     if not _is_generic_download_title(link_title):
@@ -208,6 +278,62 @@ def _extract_msh_attachment_title(source: KrasnodarSource, link: Tag, normalized
         if title and not _is_generic_download_title(title):
             return title[:500]
     return link_title
+
+
+def _detect_msh_attachment_document_type(source: KrasnodarSource, normalized_url: str, link: Tag) -> str:
+    document_type = source._detect_document_type(normalized_url)
+    if document_type in {"pdf", "doc", "docx"}:
+        return document_type
+
+    evidence = _msh_attachment_evidence_text(link, normalized_url)
+    if ".pdf" in evidence or re.search(r"(?<![a-zа-я])pdf(?![a-zа-я])", evidence):
+        return "pdf"
+    if ".docx" in evidence or re.search(r"(?<![a-zа-я])docx(?![a-zа-я])", evidence):
+        return "docx"
+    if ".doc" in evidence or re.search(r"(?<![a-zа-я])doc(?![a-zа-я])", evidence):
+        return "doc"
+    return document_type
+
+
+def _msh_attachment_evidence_text(link: Tag, normalized_url: str) -> str:
+    parts = [normalized_url]
+    parts.extend(link.stripped_strings)
+    for ancestor_name in ("tr", "li", "article", "div", "section"):
+        ancestor = link.find_parent(ancestor_name)
+        if not isinstance(ancestor, Tag):
+            continue
+        ancestor_text = " ".join(ancestor.stripped_strings)
+        if len(ancestor_text) <= 800:
+            parts.append(ancestor_text)
+        break
+    return " ".join(parts).lower()
+
+
+def _is_safe_msh_attachment_url(source: KrasnodarSource, url: str, base_url: str, title: str) -> bool:
+    parsed = urlparse(url)
+    base = urlparse(base_url)
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    target_host = parsed.netloc.lower()
+    is_same_host = target_host == base.netloc.lower()
+    is_approved_npa_file = (
+        target_host == "npa.krasnodar.ru"
+        and parsed.scheme == "https"
+        and NPA_KRASNODAR_FILE_RE.fullmatch(parsed.path) is not None
+    )
+    if not (is_same_host or is_approved_npa_file):
+        return False
+    if url.rstrip("/") == base_url.rstrip("/"):
+        return False
+
+    combined = f"{url} {title}".lower()
+    if any(pattern in combined for pattern in GLOBAL_DENY_PATTERNS):
+        return False
+    if source.config.deny_patterns:
+        patterns = [pattern.lower() for pattern in source.config.deny_patterns]
+        if any(pattern in combined for pattern in patterns):
+            return False
+    return True
 
 
 def _is_generic_download_title(title: str) -> bool:

@@ -9,6 +9,7 @@ import requests
 
 from app.models import CollectedItem, ExtractionResult, RawDocument, SourceConfig
 from app.pipeline.collect import run_collect_with_options
+from app.sources.krasnodar_source import KrasnodarSource
 from app.storage import (
     init_db,
     list_ocr_queue,
@@ -782,6 +783,95 @@ class CollectAuditTest(unittest.TestCase):
         self.assertEqual(documents[0].document_type, "html")
         self.assertGreater(len(documents[0].raw_text), 0)
         self.assertIn("Прием заявок", documents[0].raw_text)
+
+    def test_krasnodar_existing_listing_still_allows_harvested_attachment_save(self) -> None:
+        db_path = self._db_path("collect_krasnodar_existing_listing_attachment.db")
+        init_db(db_path)
+        source_config = SourceConfig(
+            name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://msh.krasnodar.ru/documents/subsidirovanie-i-finansirovanie1",
+            level="regional",
+            region="krasnodar",
+            source_role="support_documents",
+            parser="krasnodar",
+            description="test",
+            max_items=10,
+            deny_patterns=["/news", "/department", "/contacts", "/activity", "/serv"],
+            allow_patterns=["subsid", "finans", "document", ".pdf", ".doc", ".docx"],
+        )
+        listing_url = "https://msh.krasnodar.ru/documents/prikazy-minselkhoza-krasnodarskogo-kraya"
+        existing_listing = RawDocument(
+            source_name=source_config.name,
+            source_url=source_config.url,
+            level=source_config.level,
+            region=source_config.region,
+            title="Приказы минсельхоза Краснодарского края",
+            url=listing_url,
+            published_at=datetime.now(timezone.utc),
+            collected_at=datetime.now(timezone.utc),
+            content_hash="existing-krasnodar-listing",
+            raw_text="Существующая строка листинга с приказами минсельхоза Краснодарского края.",
+            document_type="html",
+            status="collected",
+        )
+        save_document(existing_listing, db_path)
+
+        source = KrasnodarSource(source_config)
+        root_html = """
+        <html><body>
+          <a href="/documents/prikazy-minselkhoza-krasnodarskogo-kraya">Приказы минсельхоза Краснодарского края</a>
+        </body></html>
+        """
+        listing_html = """
+        <html><body>
+          <div class="doc-row">
+            <span>№ 167 от 07.05.2026 "Об утверждении Порядка предоставления субсидий на картофель и овощи"</span>
+            <a href="/documents/prikazy-minselkhoza-krasnodarskogo-kraya/download?id=167">pdf, 82.41 КБ скачать документ</a>
+          </div>
+        </body></html>
+        """
+
+        class Response:
+            def __init__(self, text: str, url: str) -> None:
+                self.text = text
+                self.url = url
+
+        def fake_get(url: str):
+            if url == source_config.url:
+                return Response(root_html, source_config.url)
+            if url == listing_url:
+                return Response(listing_html, listing_url)
+            raise AssertionError(f"Unexpected recursive fetch: {url}")
+
+        source.get = fake_get  # type: ignore[method-assign]
+
+        with patch("app.pipeline.collect.load_sources", return_value=[source_config]):
+            with patch("app.pipeline.collect.create_source", return_value=source):
+                with patch(
+                    "app.pipeline.collect.extract_document",
+                    return_value=ExtractionResult(
+                        raw_text="Текст приказа о предоставлении субсидий на картофель и овощи.",
+                        document_type="pdf",
+                        extracted_text_length=62,
+                    ),
+                ):
+                    saved_count = run_collect_with_options(
+                        source_name=source_config.name,
+                        limit=10,
+                        audit_existing=False,
+                        db_path=str(db_path),
+                    )
+
+        documents = list_documents(db_path=db_path)
+        self.assertEqual(saved_count, 1)
+        self.assertEqual(len(documents), 2)
+        urls = {document.url for document in documents}
+        self.assertIn(listing_url, urls)
+        self.assertIn(
+            "https://msh.krasnodar.ru/documents/prikazy-minselkhoza-krasnodarskogo-kraya/download?id=167",
+            urls,
+        )
+        self.assertEqual(source.last_fetch_stats["harvested_attachment_count"], 1)
 
 
 class BaseSourceUserAgentTest(unittest.TestCase):

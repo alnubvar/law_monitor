@@ -159,15 +159,15 @@ class KrasnodarSourceTest(unittest.TestCase):
         self.assertEqual(calls, [source.config.url, listing_url])
         self.assertEqual(
             [item.document_type for item in items],
-            ["html", "pdf", "doc", "docx"],
+            ["html", "pdf", "pdf", "pdf"],
         )
         self.assertEqual(items[0].url, listing_url)
         self.assertEqual(
             [item.url for item in items[1:]],
             [
-                "https://msh.krasnodar.ru/upload/subsidy-potato-2026.pdf",
-                "https://msh.krasnodar.ru/upload/agrotourism-grant-2026.doc",
-                "https://msh.krasnodar.ru/upload/kfh-grant-2026.docx",
+                "https://npa.krasnodar.ru/rest/files/1233707",
+                "https://npa.krasnodar.ru/rest/files/1233677",
+                "https://npa.krasnodar.ru/rest/files/1233654",
             ],
         )
         self.assertIn("Порядка предоставления субсидий", items[1].title)
@@ -177,6 +177,11 @@ class KrasnodarSourceTest(unittest.TestCase):
             "https://msh.krasnodar.ru/documents/prikazy-minselkhoza-krasnodarskogo-kraya/page2",
             {item.url for item in items},
         )
+        self.assertNotIn(
+            "https://msh.krasnodar.ru/documents/prikazy-minselkhoza-krasnodarskogo-kraya/159222",
+            {item.url for item in items},
+        )
+        self.assertNotIn("https://msh.krasnodar.ru/contacts/", {item.url for item in items})
         self.assertEqual(source.last_fetch_stats["harvested_attachment_count"], 3)
 
 
