@@ -50,6 +50,7 @@ EXPORT_CONTEXT_PATTERNS = (
 AGRICULTURE_CONTEXT_PATTERNS = (
     r"апк",
     r"сельск",
+    r"сельхоз",
     r"агропром",
     r"агропрод",
     r"агроэкспорт",

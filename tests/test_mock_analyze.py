@@ -1528,6 +1528,23 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
 
         self.assertEqual(result.action_level, "background")
 
+    def test_zol_selkhoztehnika_subsidy_news_is_watchlist(self) -> None:
+        client = MockLLMClient(["субсидии сельхозтехника"])
+
+        result = client.analyze_document(
+            "В ГД предложили создать госпрограмму субсидирования ремонта сельхозтехники",
+            (
+                "Депутаты Государственной думы предложили создать государственную программу "
+                "субсидирования ремонта сельхозтехники для аграриев."
+            ),
+            source_name="ZOL.ru - зерновые новости",
+            url="https://www.zol.ru/n/41000",
+            level="news",
+            region="federal",
+        )
+
+        self.assertEqual(result.action_level, "watchlist")
+
     def test_zol_government_support_signal_is_requires_attention(self) -> None:
         client = MockLLMClient(["господдержка АПК", "субсидии"])
 
