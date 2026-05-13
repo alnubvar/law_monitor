@@ -33,6 +33,25 @@ from app.visibility import (
 SHORT_SUMMARY_MAX_CHARS = 140
 REPORT_TITLE_MAX_CHARS = 90
 REPORT_REACTION_TITLE_MAX_CHARS = 70
+MEASURES_SECTION_DISPLAY_MAX = 6
+_ISO_DATETIME_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?")
+_ISO_FRAGMENT_RE = re.compile(r"\.\d{1,9}Z\b")
+_DEADLINE_GARBAGE_LABEL_RE = re.compile(
+    r"\s+(?:Проблема|Описание|Решение|Цель|Цели|Процедура|Статус|Текст)\s*:",
+    re.IGNORECASE,
+)
+_DISCUSSION_DEADLINE_RE = re.compile(
+    r"(конец\s+обсуждения)\s*:\s*(\d{1,2}[.]\d{1,2}[.]\d{4})",
+    re.IGNORECASE,
+)
+_BUREAUCRATIC_TITLE_PREFIXES = (
+    "об утверждении",
+    "о внесении изменений",
+    "о признании утратившим",
+    "о внесении дополнений",
+    "об изменении",
+    "о введении",
+)
 BACKGROUND_DEFAULT_LIMIT = 5
 MARKET_BACKGROUND_LIMIT = 5
 REPORT_BUCKET_ORDER = (
@@ -477,11 +496,23 @@ def _published_timestamp(document: RawDocument) -> float:
 
 
 def _build_display_sections(documents: Iterable[RawDocument]) -> dict[str, list[RawDocument]]:
-    sections = {section: [] for section in DISPLAY_SECTION_ORDER}
+    sections: dict[str, list[RawDocument]] = {section: [] for section in DISPLAY_SECTION_ORDER}
     for document in documents:
         section = visibility_display_section(document)
         if section in sections:
             sections[section].append(document)
+    measures = sections.get("measures_and_selections", [])
+    if len(measures) > MEASURES_SECTION_DISPLAY_MAX:
+        measures.sort(
+            key=lambda d: (
+                d.application_status == "open",
+                bool(d.deadline_text),
+                bool(d.business_signal),
+                d.is_active or False,
+            ),
+            reverse=True,
+        )
+        sections["measures_and_selections"] = measures[:MEASURES_SECTION_DISPLAY_MAX]
     return sections
 
 
@@ -493,13 +524,55 @@ def classify_document_bucket(document: RawDocument) -> str:
     return visibility_bucket(document)
 
 
+def _clean_iso_timestamps(text: str) -> str:
+    def _replace(m: re.Match[str]) -> str:
+        try:
+            dt = datetime.strptime(m.group(0)[:19], "%Y-%m-%dT%H:%M:%S")
+            return dt.strftime("%d.%m.%Y")
+        except ValueError:
+            return m.group(0)
+    cleaned = _ISO_DATETIME_RE.sub(_replace, text)
+    cleaned = _ISO_FRAGMENT_RE.sub("", cleaned)
+    return cleaned
+
+
+def _word_boundary_clip(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    clipped = text[: max_chars - 3]
+    last_space = clipped.rfind(" ")
+    if last_space > max_chars // 2:
+        clipped = clipped[:last_space]
+    return f"{clipped.rstrip(' ,.;:-')}..."
+
+
 def _shorten_summary(text: str | None) -> str:
     if not text:
         return "Краткое пояснение пока не добавлено."
-    normalized = re.sub(r"\s+", " ", text).strip()
+    normalized = re.sub(r"\s+", " ", _clean_iso_timestamps(text)).strip()
     if len(normalized) <= SHORT_SUMMARY_MAX_CHARS:
         return normalized
-    return f"{normalized[: SHORT_SUMMARY_MAX_CHARS - 3].rstrip(' ,.;:-')}..."
+    return _word_boundary_clip(normalized, SHORT_SUMMARY_MAX_CHARS)
+
+
+def _format_deadline_hint(text: str | None) -> str | None:
+    if not text:
+        return None
+    normalized = re.sub(r"\s+", " ", _clean_iso_timestamps(text)).strip(" ;,-")
+    if not normalized:
+        return None
+    discussion_match = _DISCUSSION_DEADLINE_RE.search(normalized)
+    if discussion_match:
+        label = discussion_match.group(1).capitalize()
+        return f"{label}: {discussion_match.group(2)}"
+    normalized = _DEADLINE_GARBAGE_LABEL_RE.split(normalized, maxsplit=1)[0].strip(" ;,-")
+    if not normalized:
+        return None
+    discussion_match = _DISCUSSION_DEADLINE_RE.search(normalized)
+    if discussion_match:
+        label = discussion_match.group(1).capitalize()
+        return f"{label}: {discussion_match.group(2)}"
+    return _shorten_summary(normalized)
 
 
 def _format_human_item(
@@ -508,10 +581,11 @@ def _format_human_item(
     require_action: bool,
     enrichment: dict[str, str] | None = None,
 ) -> list[str]:
+    clean_summary = _clean_iso_timestamps(item.summary) if item.summary else None
     summary_text = select_executive_summary(
         item,
         enrichment_text=enrichment.get("executive_summary") if enrichment else None,
-        fallback_text=item.summary,
+        fallback_text=clean_summary,
         max_chars=SHORT_SUMMARY_MAX_CHARS,
     )
     lines = [
@@ -519,9 +593,12 @@ def _format_human_item(
         f"- Почему важно: {_build_human_importance_text(item, enrichment=enrichment)}",
     ]
     if summary_text:
-        lines.append(f"- Кратко: {summary_text}")
-    if enrichment and enrichment.get("deadline_hint"):
-        lines.append(f"- Срок: {_shorten_summary(enrichment['deadline_hint'])}")
+        lines.append(f"- Кратко: {_clean_iso_timestamps(summary_text)}")
+    deadline_text = _format_deadline_hint(
+        enrichment.get("deadline_hint") if enrichment else None
+    )
+    if deadline_text:
+        lines.append(f"- Срок: {deadline_text}")
     action_text = _build_human_action_text(item, enrichment=enrichment)
     if require_action or action_text:
         lines.append(f"- Что проверить: {action_text or 'Оценить влияние и определить следующий шаг.'}")
@@ -737,7 +814,7 @@ def _build_reaction_summary(report_view: ReportView) -> str:
     titles: list[str] = []
     seen_titles: set[str] = set()
     for document in meaningful_documents:
-        title = _report_title(document, max_chars=REPORT_REACTION_TITLE_MAX_CHARS)
+        title = _reaction_title(document)
         if title in seen_titles:
             continue
         seen_titles.add(title)
@@ -751,10 +828,7 @@ def _build_reaction_summary(report_view: ReportView) -> str:
 
 
 def seen_titles_from_documents(documents: list[RawDocument]) -> set[str]:
-    return {
-        _report_title(document, max_chars=REPORT_REACTION_TITLE_MAX_CHARS)
-        for document in documents
-    }
+    return {_reaction_title(document) for document in documents}
 
 
 def _report_title(document: RawDocument, *, max_chars: int = REPORT_TITLE_MAX_CHARS) -> str:
@@ -762,7 +836,17 @@ def _report_title(document: RawDocument, *, max_chars: int = REPORT_TITLE_MAX_CH
     normalized = re.sub(r"\s+", " ", title).strip()
     if len(normalized) <= max_chars:
         return normalized
-    return f"{normalized[: max_chars - 3].rstrip(' ,.;:-')}..."
+    return _word_boundary_clip(normalized, max_chars)
+
+
+def _reaction_title(document: RawDocument) -> str:
+    title = _report_title(document, max_chars=REPORT_REACTION_TITLE_MAX_CHARS)
+    title_lower = title.lower()
+    if document.business_signal and any(
+        title_lower.startswith(prefix) for prefix in _BUREAUCRATIC_TITLE_PREFIXES
+    ):
+        return _word_boundary_clip(document.business_signal, REPORT_REACTION_TITLE_MAX_CHARS)
+    return title
 
 
 def save_markdown_report(markdown: str, path: Path) -> None:

@@ -257,6 +257,46 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertNotIn("AI-оценка влияния:", markdown)
         self.assertNotIn("AI-рекомендация:", markdown)
 
+    def test_report_deadline_hint_strips_extraction_garbage(self) -> None:
+        db_path = self._db_path("report_deadline_hint_garbage.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=506,
+            source_name="Regulation.gov.ru - проекты НПА",
+            region="federal",
+            title="Об утверждении требований к видам племенных хозяйств",
+            url="https://regulation.gov.ru/projects/167863",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="Проект НПА на публичном обсуждении.",
+        )
+        save_document_enrichment(
+            document_id=document.id,
+            document_url=document.url,
+            provider="mock",
+            model="mock-enrichment",
+            enrichment=EnrichmentResult(
+                executive_summary="Проект НПА на публичном обсуждении.",
+                business_impact="Проект НПА на публичном обсуждении со сроком.",
+                recommended_action="Проверить проект и подготовить позицию.",
+                deadline_hint="Конец обсуждения: 26.05.2026 Проблема: замен",
+                confidence=0.8,
+            ),
+            db_path=db_path,
+        )
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-13",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+            db_path=db_path,
+        )
+
+        self.assertIn("- Срок: Конец обсуждения: 26.05.2026", markdown)
+        self.assertNotIn("Проблема:", markdown)
+        self.assertNotIn("замен", markdown)
+
     def test_report_falls_back_when_enrichment_missing(self) -> None:
         document = self._doc(
             doc_id=501,

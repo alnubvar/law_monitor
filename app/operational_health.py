@@ -88,27 +88,27 @@ def _collect_source_error_notices(
     now: datetime,
 ) -> list[OperationalNotice]:
     cutoff = now.timestamp() - SOURCE_ERROR_LOOKBACK_HOURS * 3600
-    errored_sources: dict[str, str] = {}
+    errored_sources: dict[str, bool] = {}
 
     for record in list_recent_source_errors(db_path=db_path, days=1):
         collected_at = _normalize_dt(record.collected_at)
         if collected_at is None or collected_at.timestamp() < cutoff:
             continue
-        errored_sources.setdefault(record.source_name, "ошибки доступа за последние 24 часа")
+        errored_sources.setdefault(record.source_name, True)
 
     for source_name, row in audit_by_source.items():
         error_at = _normalize_dt(row.get("error_at"))
         if error_at is None or error_at.timestamp() < cutoff:
             continue
         if row.get("error_message"):
-            errored_sources.setdefault(source_name, "ошибки доступа за последние 24 часа")
+            errored_sources.setdefault(source_name, True)
 
     return [
         OperationalNotice(
             severity="warning",
-            message=f"{source_name}: были {message}",
+            message=f"{source_name}: источник временно недоступен при последней проверке",
         )
-        for source_name, message in sorted(errored_sources.items())
+        for source_name in sorted(errored_sources)
     ]
 
 

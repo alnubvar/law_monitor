@@ -14,12 +14,68 @@ from app.storage import init_db, save_document
 
 
 class TelegramBotTest(unittest.TestCase):
+    def setUp(self) -> None:
+        telegram_bot._pending_search_chats.clear()
+        telegram_bot._pending_report_period_chats.clear()
+
+    def tearDown(self) -> None:
+        telegram_bot._pending_search_chats.clear()
+        telegram_bot._pending_report_period_chats.clear()
+
     def _offset_path(self, name: str) -> Path:
         path = Path("data/test_artifacts") / name
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists():
             path.unlink()
         return path
+
+    def _run_polling_with_stubs(
+        self,
+        *,
+        offset_path: Path,
+        bootstrap_offset,
+        get_updates,
+        max_cycles: int,
+        sleep_fn,
+        process_update=None,
+    ) -> None:
+        def configure_commands_noop(*, proxies):
+            return None
+
+        def build_proxies_noop():
+            return None
+
+        def is_configured_stub():
+            return True
+
+        def offset_store_path_stub():
+            return offset_path
+
+        replacements = {
+            "_offset_store_path": offset_store_path_stub,
+            "_is_bot_configured": is_configured_stub,
+            "_build_proxies": build_proxies_noop,
+            "_configure_bot_commands": configure_commands_noop,
+            "_bootstrap_offset": bootstrap_offset,
+            "_get_updates": get_updates,
+        }
+        if process_update is not None:
+            replacements["_process_update"] = process_update
+
+        originals = {
+            name: getattr(telegram_bot, name)
+            for name in replacements
+        }
+        try:
+            for name, replacement in replacements.items():
+                setattr(telegram_bot, name, replacement)
+            telegram_bot.run_polling_listener(
+                max_cycles=max_cycles,
+                sleep_fn=sleep_fn,
+            )
+        finally:
+            for name, original in originals.items():
+                setattr(telegram_bot, name, original)
 
     def _doc(self, *, url: str, days_ago: int = 0) -> RawDocument:
         now = datetime.now(timezone.utc) - timedelta(days=days_ago)
@@ -166,62 +222,80 @@ class TelegramBotTest(unittest.TestCase):
     def test_polling_updates_offset_after_processed_update(self) -> None:
         offset_path = self._offset_path("telegram_bot_offset.txt")
 
-        with patch("app.notify.telegram_bot._offset_store_path", return_value=offset_path):
-            with patch("app.notify.telegram_bot._is_bot_configured", return_value=True):
-                with patch("app.notify.telegram_bot._build_proxies", return_value=None):
-                    with patch("app.notify.telegram_bot._configure_bot_commands"):
-                        with patch("app.notify.telegram_bot._bootstrap_offset", return_value=None):
-                            with patch(
-                                "app.notify.telegram_bot._get_updates",
-                                return_value=[{"update_id": 10, "message": {}}],
-                            ):
-                                with patch("app.notify.telegram_bot._process_update"):
-                                    telegram_bot.run_polling_listener(
-                                        max_cycles=1,
-                                        sleep_fn=lambda _: None,
-                                    )
+        def bootstrap_offset_stub(*, proxies):
+            return None
+
+        def get_updates_stub(*, offset, proxies):
+            return [{"update_id": 10, "message": {}}]
+
+        def process_update_noop(update, *, db_path, proxies):
+            return None
+
+        self._run_polling_with_stubs(
+            offset_path=offset_path,
+            bootstrap_offset=bootstrap_offset_stub,
+            get_updates=get_updates_stub,
+            process_update=process_update_noop,
+            max_cycles=1,
+            sleep_fn=lambda _: None,
+        )
 
         self.assertEqual(telegram_bot.load_offset(offset_path), 11)
 
     def test_polling_handles_proxy_error_without_crash(self) -> None:
-        sleep_mock = Mock()
         offset_path = self._offset_path("telegram_bot_proxy_error_offset.txt")
+        sleep_calls = []
+        update_calls = []
 
-        with patch("app.notify.telegram_bot._offset_store_path", return_value=offset_path):
-            with patch("app.notify.telegram_bot._is_bot_configured", return_value=True):
-                with patch("app.notify.telegram_bot._build_proxies", return_value=None):
-                    with patch("app.notify.telegram_bot._configure_bot_commands"):
-                        with patch("app.notify.telegram_bot._bootstrap_offset", return_value=None):
-                            with patch(
-                                "app.notify.telegram_bot._get_updates",
-                                side_effect=[requests.exceptions.ProxyError("proxy"), []],
-                            ):
-                                telegram_bot.run_polling_listener(
-                                    max_cycles=2,
-                                    sleep_fn=sleep_mock,
-                                )
+        def sleep_recorder(seconds):
+            sleep_calls.append(seconds)
 
-        self.assertGreaterEqual(sleep_mock.call_count, 1)
+        def bootstrap_offset_stub(*, proxies):
+            return None
+
+        def get_updates_stub(*, offset, proxies):
+            update_calls.append((offset, proxies))
+            if len(update_calls) == 1:
+                raise requests.exceptions.ProxyError("proxy")
+            return []
+
+        self._run_polling_with_stubs(
+            offset_path=offset_path,
+            bootstrap_offset=bootstrap_offset_stub,
+            get_updates=get_updates_stub,
+            max_cycles=2,
+            sleep_fn=sleep_recorder,
+        )
+
+        self.assertGreaterEqual(len(sleep_calls), 1)
+        self.assertEqual(len(update_calls), 2)
 
     def test_polling_handles_bootstrap_proxy_error_without_crash(self) -> None:
         offset_path = self._offset_path("telegram_bot_bootstrap_offset.txt")
-        sleep_mock = Mock()
 
-        with patch("app.notify.telegram_bot._offset_store_path", return_value=offset_path):
-            with patch("app.notify.telegram_bot._is_bot_configured", return_value=True):
-                with patch("app.notify.telegram_bot._build_proxies", return_value=None):
-                    with patch("app.notify.telegram_bot._configure_bot_commands"):
-                        with patch(
-                            "app.notify.telegram_bot._bootstrap_offset",
-                            side_effect=requests.exceptions.ProxyError("proxy"),
-                        ):
-                            with patch("app.notify.telegram_bot._get_updates", return_value=[]):
-                                telegram_bot.run_polling_listener(
-                                    max_cycles=1,
-                                    sleep_fn=sleep_mock,
-                                )
+        class PollingReached(BaseException):
+            pass
 
-        self.assertGreaterEqual(sleep_mock.call_count, 1)
+        def sleep_noop(_seconds):
+            return None
+
+        def bootstrap_offset_stub(*, proxies):
+            raise requests.exceptions.ProxyError("proxy")
+
+        def get_updates_stub(*, offset, proxies):
+            raise PollingReached
+
+        try:
+            self._run_polling_with_stubs(
+                offset_path=offset_path,
+                bootstrap_offset=bootstrap_offset_stub,
+                get_updates=get_updates_stub,
+                max_cycles=1,
+                sleep_fn=sleep_noop,
+            )
+        except PollingReached:
+            return
+        self.fail("Polling listener did not continue after bootstrap ProxyError")
 
     def test_report_command_sends_document_attachment(self) -> None:
         response = Mock()

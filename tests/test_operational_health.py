@@ -163,7 +163,7 @@ class OperationalHealthTest(unittest.TestCase):
         self.assertTrue(
             any(
                 notice.severity == "warning"
-                and notice.message == "Право Ставропольского края: были ошибки доступа за последние 24 часа"
+                and notice.message == "Право Ставропольского края: источник временно недоступен при последней проверке"
                 for notice in notices
             )
         )

@@ -216,6 +216,18 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         self.assertEqual(result.page_type, "selection_announcement")
         self.assertEqual(result.action_level, "requires_attention")
 
+    def test_legacy_mcx_credit_subsidy_page_is_background(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство", "государственная поддержка АПК"])
+
+        result = client.analyze_document(
+            "Субсидия на возмещение части процентной ставки по инвестиционным кредитам, взятым до 1 января 2017 года",
+            "Минсельхоз России. Мера господдержки АПК: субсидия на возмещение части процентной ставки.",
+            source_name="Минсельхоз России - меры господдержки",
+            url="https://mcx.gov.ru/activity/state-support/measures/subsidy-credit-2017/",
+        )
+
+        self.assertEqual(result.action_level, "background")
+
     def test_rule_change_title_is_requires_attention(self) -> None:
         client = MockLLMClient(["государственная поддержка АПК"])
 

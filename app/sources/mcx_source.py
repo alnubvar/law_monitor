@@ -49,6 +49,7 @@ _MEASURE_DENY_PATH_FRAGMENTS = (
     "/report",
     "/fish",
     "/program-2013-",
+    "/subsidy-credit-2017/",
 )
 _MEASURE_DENY_TITLE_FRAGMENTS = (
     "биография",

@@ -145,6 +145,22 @@ def is_gisp_source(source_name: str | None, url: str | None) -> bool:
     return "gisp.gov.ru" in combined or "гисп" in combined
 
 
+_MCX_OFF_DOMAIN_PATH_FRAGMENTS = (
+    "/fish",
+    "/program-2013-",
+    "/subsidy-credit-2017/",
+)
+
+
+def looks_mcx_off_domain_measure(url: str | None) -> bool:
+    if not url:
+        return False
+    url_lower = url.lower()
+    if "mcx.gov.ru" not in url_lower:
+        return False
+    return any(fragment in url_lower for fragment in _MCX_OFF_DOMAIN_PATH_FRAGMENTS)
+
+
 def collapse_duplicate_title(text: str, title: str) -> str:
     normalized_title = WHITESPACE_RE.sub(" ", title).strip()
     if not normalized_title:

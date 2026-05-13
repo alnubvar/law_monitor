@@ -344,6 +344,25 @@ class McxSourceMeasuresTest(unittest.TestCase):
         self.assertNotIn("Госпрограмма развития сельского хозяйства", titles)
         self.assertIn("Льготное кредитование по СПК", titles)
 
+    def test_measures_filters_legacy_static_credit_subsidy_page(self) -> None:
+        html = """<html><body>
+<a href="/activity/state-support/measures/subsidy-credit-2017/">
+  Субсидия на возмещение части процентной ставки по инвестиционным кредитам, взятым до 1 января 2017 года
+</a>
+<a href="/activity/state-support/measures/machinery-subsidy/">
+  Субсидии производителям сельскохозяйственной техники
+</a>
+</body></html>"""
+        source = self._source()
+        with patch.object(source, "get", return_value=_mock_response(html)):
+            items = source.fetch_items()
+        titles = [item.title for item in items]
+        self.assertNotIn(
+            "Субсидия на возмещение части процентной ставки по инвестиционным кредитам, взятым до 1 января 2017 года",
+            titles,
+        )
+        self.assertIn("Субсидии производителям сельскохозяйственной техники", titles)
+
     def test_measures_noise_fixture_still_uses_one_http_request(self) -> None:
         source = self._source(max_items=10)
         with patch.object(
