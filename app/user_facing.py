@@ -78,6 +78,7 @@ INTENT_SUPPORT_CHANGE = "support_change"
 INTENT_TRADE_REGULATION = "trade_regulation"
 INTENT_SUPPORT_MEASURE = "support_measure"
 INTENT_SUPPORT_ATTENTION = "support_attention"
+INTENT_OFFICIAL_LEGISLATION_WATCHLIST = "official_legislation_watchlist"
 INTENT_OCR_PLACEHOLDER = "ocr_placeholder"
 INTENT_REGULATION_DISCUSSION = "regulation_discussion"
 _DISCUSSION_DATE_RE = re.compile(
@@ -152,8 +153,8 @@ def _choose_group_suffixes(group: Sequence[RawDocument]) -> list[str]:
         _suffix_npa_field,
         _suffix_title_npa,
         _suffix_title_date,
-        _suffix_title_keyword,
         _suffix_url,
+        _suffix_title_keyword,
     ):
         suffixes = [extractor(doc) for doc in group]
         if all(suffixes) and len(set(suffixes)) == len(suffixes):
@@ -182,6 +183,19 @@ def _suffix_title_date(doc: RawDocument) -> str:
     return f"от {m.group(1)}.{m.group(2)}" if m else ""
 
 
+_MEANINGLESS_TITLE_SUFFIX_WORDS = {
+    "агропромышленном",
+    "правитель",
+    "правительства",
+    "постановлениями",
+    "комплексе",
+    "реализации",
+    "территорий",
+    "сельских",
+    "мелиорации",
+}
+
+
 def _suffix_title_keyword(doc: RawDocument) -> str:
     original = _normalize_text(_get_value(doc, "title"))
     if not original or _is_technical_ocr_placeholder(original):
@@ -191,8 +205,9 @@ def _suffix_title_keyword(doc: RawDocument) -> str:
         return ""
     compressed_words = set(re.sub(r"[^\w]", " ", compressed.lower()).split())
     candidates = [
-        w for w in re.sub(r"[^\w]", " ", original.lower()).split()
-        if len(w) >= 5 and w not in compressed_words
+        w
+        for w in re.sub(r"[^\w]", " ", original.lower()).split()
+        if len(w) >= 5 and w not in compressed_words and w not in _MEANINGLESS_TITLE_SUFFIX_WORDS
     ]
     for word in reversed(candidates):
         if len(word) <= 20:
@@ -537,6 +552,10 @@ def _detect_deterministic_intent(
         return INTENT_REGULATION_DISCUSSION
     if application_status == "open":
         return INTENT_SELECTION_OPEN
+    if _looks_like_mcx_official_support_watchlist(document, combined):
+        return INTENT_SUPPORT_CHANGE
+    if _looks_like_mcx_official_legislative_watchlist(document, combined):
+        return INTENT_OFFICIAL_LEGISLATION_WATCHLIST
     if source_role == "news_signals" and (action_level == "watchlist" or section == "news_signals"):
         return INTENT_MARKET_OBSERVATION
     if section == "strategy_signals" or source_role == "strategy":
@@ -611,6 +630,8 @@ def _reason_for_intent(intent: str) -> str:
         return "Обновлены условия льготного кредитования"
     if intent == INTENT_SUPPORT_CHANGE:
         return "Изменены условия поддержки"
+    if intent == INTENT_OFFICIAL_LEGISLATION_WATCHLIST:
+        return "Законодательный сигнал по регулированию АПК"
     if intent == INTENT_TRADE_REGULATION:
         return "Подготовлены экспортные ограничения"
     if intent == INTENT_SELECTION_CHANGE:
@@ -646,6 +667,8 @@ def _action_for_intent(
         if _source_role(document) == "news_signals":
             return "Проверить влияние на условия поддержки."
         return "Проверить условия поддержки."
+    if intent == INTENT_OFFICIAL_LEGISLATION_WATCHLIST:
+        return "Проверить, какие законопроекты одобрены и есть ли влияние на регулирование."
     if intent == INTENT_TRADE_REGULATION:
         return "Проверить влияние пошлины/торгового регулирования на рынок и контрагентов."
     if intent == INTENT_SELECTION_CHANGE:
@@ -672,6 +695,39 @@ def _combined_text(document: PresentationDocument, *, title: str | None = None) 
         )
         if _normalize_text(part)
     )
+
+
+def _is_official_mcx_news(document: PresentationDocument) -> bool:
+    source_name = _get_value(document, "source_name")
+    url = _get_value(document, "url").lower()
+    return source_name == "Минсельхоз России - новости" or "mcx.gov.ru/press-service/news/" in url
+
+
+def _looks_like_mcx_official_support_watchlist(
+    document: PresentationDocument,
+    combined: str,
+) -> bool:
+    if not _is_official_mcx_news(document):
+        return False
+    if _action_level(document) != "watchlist":
+        return False
+    support_markers = ("господдерж", "меры поддержки", "субсид", "льготн", "кредит")
+    change_markers = ("расшир", "измен", "обнов", "утверд", "одобрил", "одобрено")
+    return any(marker in combined for marker in support_markers) and any(
+        marker in combined for marker in change_markers
+    )
+
+
+def _looks_like_mcx_official_legislative_watchlist(
+    document: PresentationDocument,
+    combined: str,
+) -> bool:
+    if not _is_official_mcx_news(document):
+        return False
+    if _action_level(document) != "watchlist":
+        return False
+    legislative_markers = ("законопроект", "совет федерации", "госдум", "федеральн")
+    return "апк" in combined and any(marker in combined for marker in legislative_markers)
 
 
 def _looks_like_selection_announcement(document: PresentationDocument, combined: str) -> bool:

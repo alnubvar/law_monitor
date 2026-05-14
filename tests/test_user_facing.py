@@ -145,6 +145,45 @@ class UserFacingIntentCoherenceTest(unittest.TestCase):
         self.assertEqual(reason, "Стратегический федеральный сигнал по господдержке или порядку регулирования.")
         self.assertEqual(action, "Оценить влияние на регулирование.")
 
+    def test_mcx_official_support_news_uses_specific_watchlist_wording(self) -> None:
+        document = self._doc(
+            doc_id=51,
+            source_name="Минсельхоз России - новости",
+            region="federal",
+            title="Правительство расширило меры господдержки производителей молока",
+            url="https://mcx.gov.ru/press-service/news/pravitelstvo-rasshirilo-mery-gospodderzhki-proizvoditeley-moloka/",
+            action_level="watchlist",
+            page_type="news_background",
+            summary="Официальная новость о расширении мер господдержки производителей молока.",
+        )
+
+        reason = build_executive_reason(document)
+        action = build_executive_action(document)
+
+        self.assertEqual(reason, "Изменены условия поддержки")
+        self.assertEqual(action, "Проверить влияние на условия поддержки.")
+
+    def test_mcx_official_legislative_news_uses_specific_watchlist_wording(self) -> None:
+        document = self._doc(
+            doc_id=52,
+            source_name="Минсельхоз России - новости",
+            region="federal",
+            title="Совет Федерации одобрил ряд законопроектов в сфере АПК",
+            url="https://mcx.gov.ru/press-service/news/sovet-federatsii-odobril-ryad-zakonoproektov-v-sfere-apk/",
+            action_level="watchlist",
+            page_type="news_background",
+            summary="Официальная новость о прохождении законопроектов в сфере АПК.",
+        )
+
+        reason = build_executive_reason(document)
+        action = build_executive_action(document)
+
+        self.assertEqual(reason, "Законодательный сигнал по регулированию АПК")
+        self.assertEqual(
+            action,
+            "Проверить, какие законопроекты одобрены и есть ли влияние на регулирование.",
+        )
+
     def test_ocr_placeholder_uses_manual_review_reason_and_action(self) -> None:
         document = self._doc(
             doc_id=6,

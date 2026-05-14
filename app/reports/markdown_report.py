@@ -10,6 +10,7 @@ from typing import Iterable
 from urllib.parse import urlsplit, urlunsplit
 
 from app import config
+from app.config import get_source_role
 from app.llm.enrichment import get_display_enrichment
 from app.models import DigestItem, RawDocument, SourceErrorRecord
 from app.operational_health import OperationalNotice, format_operational_notices_markdown
@@ -46,6 +47,18 @@ _DISCUSSION_DEADLINE_RE = re.compile(
 )
 _SUPPORT_OPERATIONAL_CHANGE_RE = re.compile(
     r"измен|обнов|новые\s+услов|новый\s+поряд|внесени[ея]\s+измен|утвержден|утверждён",
+    re.IGNORECASE,
+)
+_GENERIC_SUPPORT_REFERENCE_TITLE_RE = re.compile(
+    r"\b(справочник|брошюр\w*|памятк\w*|инструкц\w*|методич\w*)\b",
+    re.IGNORECASE,
+)
+_KRASNODAR_SUPPORT_ORDER_QUOTED_CORE_RE = re.compile(
+    r'["«](?P<core>[^"»]*поряд[^"»]*субсид[^"»]*)["»]',
+    re.IGNORECASE,
+)
+_KRASNODAR_SUPPORT_ORDER_TRAILING_BOILERPLATE_RE = re.compile(
+    r"\b(?:в\s+соответствии\s+с(?:о)?|на\s+основании|приказываю|постановляю|настоящ(?:им|ее)|стать(?:ей|и))\b",
     re.IGNORECASE,
 )
 _BUREAUCRATIC_TITLE_PREFIXES = (
@@ -215,8 +228,8 @@ def generate_markdown_report(
         rendered_documents, max_chars=REPORT_TITLE_MAX_CHARS
     )
     for section in DISPLAY_SECTION_ORDER:
-        lines.append(DISPLAY_SECTION_TITLES[section])
         documents_for_bucket = display_sections.get(section, [])
+        lines.append(DISPLAY_SECTION_TITLES[section])
         if documents_for_bucket:
             for document in documents_for_bucket:
                 digest_item = _to_digest_item(document, title=title_by_id.get(document.id))
@@ -405,14 +418,40 @@ def _select_best_document(documents: list[RawDocument]) -> RawDocument:
     return max(
         documents,
         key=lambda document: (
+            _document_action_level_score(document),
             _document_text_quality_score(document),
             _document_fact_score(document),
             len(document.summary or ""),
             int(_has_informative_title(document.title)),
+            _direct_file_score(document),
+            _krasnodar_source_priority(document),
             _published_timestamp(document),
             document.id or 0,
         ),
     )
+
+
+def _document_action_level_score(document: RawDocument) -> int:
+    return {
+        "requires_attention": 4,
+        "watchlist": 3,
+        "background": 2,
+        "irrelevant": 1,
+    }.get(str(document.action_level or "").strip(), 0)
+
+
+def _direct_file_score(document: RawDocument) -> int:
+    url = (document.url or "").lower()
+    return int(url.endswith(".pdf") or url.endswith(".doc") or url.endswith(".docx"))
+
+
+def _krasnodar_source_priority(document: RawDocument) -> int:
+    url = (document.url or "").lower()
+    if "admkrai.krasnodar.ru" in url:
+        return 2
+    if "npa.krasnodar.ru" in url:
+        return 1
+    return 0
 
 
 def _document_url_key(document: RawDocument) -> str | None:
@@ -434,13 +473,58 @@ def _document_url_key(document: RawDocument) -> str | None:
 
 
 def _document_title_key(document: RawDocument) -> str:
-    return _normalize_title_key(document.title)
+    title = document.title or ""
+    if _is_krasnodar_support_order_document(document):
+        title = _normalize_krasnodar_support_order_title(title)
+    return _normalize_title_key(title)
 
 
 def _normalize_title_key(title: str | None) -> str:
     normalized = re.sub(r"[^0-9a-zа-яё]+", " ", (title or "").lower(), flags=re.IGNORECASE)
     normalized = re.sub(r"\s+", " ", normalized).strip()
     return normalized
+
+
+def _is_krasnodar_support_order_document(document: RawDocument) -> bool:
+    text = " ".join(
+        part
+        for part in (
+            (document.title or "").lower(),
+            (document.summary or "").lower(),
+            (document.url or "").lower(),
+            (document.source_name or "").lower(),
+        )
+        if part
+    )
+    if document.region != "krasnodar" and "краснодар" not in text and "krasnodar" not in text:
+        return False
+    return bool(re.search(r"порядк\w*\s+предоставлен\w*\s+субсид", text))
+
+
+def _normalize_krasnodar_support_order_title(title: str) -> str:
+    normalized = title.replace("«", '"').replace("»", '"').strip()
+    quoted_core_matches = _KRASNODAR_SUPPORT_ORDER_QUOTED_CORE_RE.findall(normalized)
+    if quoted_core_matches:
+        normalized = quoted_core_matches[-1]
+    normalized = _KRASNODAR_SUPPORT_ORDER_TRAILING_BOILERPLATE_RE.split(
+        normalized,
+        maxsplit=1,
+    )[0]
+    normalized = re.sub(r"^№\s*[\d-]+\s*", "", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(
+        r"\bот\s*\d{1,2}[./]\d{1,2}[./]\d{2,4}\b",
+        "",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    normalized = re.sub(
+        r"\b(?:об утверждении|о внесении изменений|о внесении изменения|об изменении|о внесении изменений)\b",
+        "",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    normalized = re.sub(r'\s*"\s*', " ", normalized)
+    return normalized.strip(' "\'.,;:-')
 
 
 def _find_similar_title_group(title_key: str, title_group_keys: list[str]) -> int | None:
@@ -509,13 +593,16 @@ def _build_display_sections(documents: Iterable[RawDocument]) -> dict[str, list[
         section = visibility_display_section(document)
         if section in sections:
             sections[section].append(document)
+    sections = _collapse_cross_section_duplicates(sections)
     measures = sections.get("measures_and_selections", [])
+    measures.sort(
+        key=_display_priority_key,
+        reverse=True,
+    )
     if len(measures) > MEASURES_SECTION_DISPLAY_MAX:
-        measures.sort(
-            key=_display_priority_key,
-            reverse=True,
-        )
         sections["measures_and_selections"] = measures[:MEASURES_SECTION_DISPLAY_MAX]
+    else:
+        sections["measures_and_selections"] = measures
     return sections
 
 
@@ -537,9 +624,51 @@ def _is_evergreen_support_reference(document: RawDocument) -> bool:
         return False
     if document.application_status == "open":
         return False
-    if document.published_at is not None:
+    if _has_support_change_signal(document):
         return False
-    return not _has_support_change_signal(document)
+    if _is_generic_support_reference_document(document):
+        return True
+    return document.published_at is None
+
+
+def _is_generic_support_reference_document(document: RawDocument) -> bool:
+    source_role = get_source_role(document.source_name)
+    if source_role not in {"support_documents", "active_support_measures"}:
+        return False
+    if document.page_type == "reference_page":
+        return True
+    if not _GENERIC_SUPPORT_REFERENCE_TITLE_RE.search(document.title or ""):
+        return False
+    return bool(_direct_file_score(document))
+
+
+def _collapse_cross_section_duplicates(
+    sections: dict[str, list[RawDocument]]
+) -> dict[str, list[RawDocument]]:
+    collapsed: dict[str, list[RawDocument]] = {
+        section: [] for section in DISPLAY_SECTION_ORDER
+    }
+    seen_keys: set[str] = set()
+    for section in DISPLAY_SECTION_ORDER:
+        for document in sections.get(section, []):
+            dedup_key = _cross_section_duplicate_key(document)
+            if dedup_key and dedup_key in seen_keys:
+                continue
+            if dedup_key:
+                seen_keys.add(dedup_key)
+            collapsed[section].append(document)
+    return collapsed
+
+
+def _cross_section_duplicate_key(document: RawDocument) -> str | None:
+    if not _is_krasnodar_support_order_document(document):
+        return None
+    normalized_title = _normalize_title_key(
+        _normalize_krasnodar_support_order_title(document.title or "")
+    )
+    if len(normalized_title) < 24:
+        return None
+    return f"krasnodar-support::{normalized_title}"
 
 
 def _has_support_change_signal(document: RawDocument) -> bool:
@@ -579,7 +708,18 @@ def _display_priority_score(document: RawDocument) -> int:
         score += 15
     if document.is_active:
         score += 2
+    if _has_regulation_subsidy_watchlist_priority(document):
+        score += 30
     return score
+
+
+def _has_regulation_subsidy_watchlist_priority(document: RawDocument) -> bool:
+    if get_source_role(document.source_name) != "strategy":
+        return False
+    if not document.url or "regulation.gov.ru" not in document.url.lower():
+        return False
+    title = (document.title or "").lower()
+    return "порядок предоставления субсид" in title
 
 
 def _published_timestamp_from_collected(document: RawDocument) -> float:

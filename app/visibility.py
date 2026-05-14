@@ -264,6 +264,8 @@ def _should_show_watchlist_document(
     include_registries: bool,
 ) -> bool:
     page_type = document.page_type or "unknown"
+    if _looks_like_regulation_gov_subsidy_watchlist(document):
+        return True
     if include_section_pages:
         return page_type not in {"navigation", "unknown"}
     if page_type in {"registry", "results_protocol"}:
@@ -271,6 +273,15 @@ def _should_show_watchlist_document(
     if page_type == "reference_page":
         return _is_support_reference_document(document)
     return page_type in VISIBLE_WATCHLIST_PAGE_TYPES
+
+
+def _looks_like_regulation_gov_subsidy_watchlist(document: RawDocument) -> bool:
+    if document.action_level != "watchlist":
+        return False
+    if not document.url or "regulation.gov.ru" not in document.url.lower():
+        return False
+    title_text = (document.title or "").lower()
+    return bool(re.search(r"порядк\w*.*субсид", title_text))
 
 
 def _is_support_reference_document(document: RawDocument) -> bool:

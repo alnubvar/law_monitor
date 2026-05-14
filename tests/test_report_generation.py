@@ -568,11 +568,11 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             doc_id=2,
             source_name="Минсельхоз Ставропольского края - господдержка",
             region="stavropol",
-            title="Анкета получателя мер государственной поддержки АПК",
-            url="https://mshsk.ru/anketa.docx",
+            title="Субсидии на возмещение части затрат за реализованные объемы куриных пищевых яиц",
+            url="http://mshsk.ru/gospodderzhka/subsidies-for-reimbursement-egg.php",
             action_level="watchlist",
-            page_type="reference_page",
-            summary="Справочный документ.",
+            page_type="measure_card",
+            summary="Мера поддержки АПК без срочного действия.",
         )
         background_document = self._doc(
             doc_id=3,
@@ -702,11 +702,78 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         )
 
         self.assertIn("Главный акцент:", markdown)
-        self.assertEqual(markdown.count("Изменены условия субсидирования"), 3)
+        self.assertIn(
+            "- Главный акцент: Изменены условия субсидирования; Льготное кредитование АПК",
+            markdown,
+        )
         self.assertNotIn(
             "Главный акцент: Изменены условия субсидирования; Изменены условия субсидирования;",
             markdown,
         )
+
+    def test_regulation_gov_watchlist_document_is_visible_in_report(self) -> None:
+        document = self._doc(
+            doc_id=940,
+            source_name="Regulation.gov.ru - проекты НПА",
+            region="federal",
+            title="Об утверждении Порядка предоставления субсидий сельхозтоваропроизводителям",
+            url="https://regulation.gov.ru/projects/12345",
+            action_level="watchlist",
+            page_type="reference_page",
+            summary="Проект нормативного акта о порядке предоставления субсидий.",
+        )
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-14",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn("Утверждены условия субсидирования", markdown)
+        self.assertIn("regulation.gov.ru", markdown)
+
+    def test_krasnodar_support_order_duplicate_documents_are_collapsed_in_report(self) -> None:
+        document_one = self._doc(
+            doc_id=941,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title=(
+                "Об утверждении Порядка предоставления субсидий на реализацию проектов "
+                "мелиорации» В соответствии со статьей 78 Бюджетного кодекса Российской "
+                "Федерации, постановлениями Правительства Российской Федерации"
+            ),
+            url="https://admkrai.krasnodar.ru/upload/iblock/d2d/or335aa8v3axt3qcujus7xh2qgwz3zwm.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="Изменения порядка предоставления субсидий на проекты мелиорации.",
+        )
+        document_two = self._doc(
+            doc_id=942,
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            region="krasnodar",
+            title=(
+                "№ 183 от 13.05.2026 \"О внесении изменения в приказ министерства "
+                "сельского хозяйства и перерабатывающей промышленности Краснодарского "
+                "края от 19 марта 2018 г. № 70 «Об утверждении Порядка предоставления "
+                "субсидий на реализацию проектов мелиорации»"
+            ),
+            url="https://npa.krasnodar.ru/rest/files/1233833",
+            action_level="watchlist",
+            page_type="new_rule",
+            summary="Изменения порядка предоставления субсидий на проекты мелиорации.",
+        )
+
+        markdown = generate_markdown_report(
+            [document_one, document_two],
+            report_date="2026-05-14",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertEqual(markdown.count("### Субсидии на мелиорацию — Краснодарском крае"), 1)
+        self.assertIn("admkrai.krasnodar.ru", markdown)
+        self.assertNotIn("npa.krasnodar.ru/rest/files/1233833", markdown)
 
     def test_main_focus_excludes_weak_ocr_placeholder_and_keeps_meaningful_items(self) -> None:
         strong_regional = self._doc(
@@ -1490,6 +1557,80 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertIn("https://npa.krasnodar.ru/rest/files/1233833", markdown)
         self.assertNotIn("Льготное кредитование АПК", markdown)
 
+    def test_report_suppresses_stale_handbook_reference_pdf(self) -> None:
+        handbook = self._doc(
+            doc_id=13,
+            source_name="Минсельхоз Ставропольского края - господдержка",
+            region="stavropol",
+            title="Справочник по мерам государственной поддержки",
+            url="https://mshsk.ru/брошюра%202023.pdf",
+            action_level="watchlist",
+            page_type="reference_page",
+            summary="Справочный материал по мерам поддержки.",
+        )
+        handbook.published_at = datetime(2025, 2, 14, tzinfo=timezone.utc)
+
+        fresh_order = self._doc(
+            doc_id=14,
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            region="krasnodar",
+            title="О внесении изменения в порядок предоставления субсидий на реализацию проектов мелиорации",
+            url="https://npa.krasnodar.ru/rest/files/1233833",
+            action_level="watchlist",
+            page_type="new_rule",
+            summary="Изменен порядок предоставления субсидий на проекты мелиорации.",
+        )
+        fresh_order.business_signal = "Изменены условия поддержки."
+
+        markdown = generate_markdown_report(
+            [handbook, fresh_order],
+            report_date="2026-05-14",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertNotIn("Справочник по мерам государственной поддержки", markdown)
+        self.assertIn("https://npa.krasnodar.ru/rest/files/1233833", markdown)
+
+    def test_report_sorts_measures_by_priority_even_when_under_limit(self) -> None:
+        older_measure = self._doc(
+            doc_id=15,
+            source_name="Минсельхоз Ставропольского края - господдержка",
+            region="stavropol",
+            title="Субсидии на возмещение части затрат за реализованные объемы куриных пищевых яиц",
+            url="http://mshsk.ru/gospodderzhka/subsidies-for-reimbursement-egg.php",
+            action_level="watchlist",
+            page_type="measure_card",
+            summary="Мера поддержки АПК без срочного действия.",
+        )
+        older_measure.published_at = datetime(2025, 2, 14, tzinfo=timezone.utc)
+        older_measure.raw_text = "Мера поддержки АПК для производителей яиц."
+
+        fresh_selection = self._doc(
+            doc_id=16,
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            region="krasnodar",
+            title="Объявление о проведении отбора на предоставление субсидии сельхозтоваропроизводителям",
+            url="https://npa.krasnodar.ru/rest/files/1233677",
+            action_level="watchlist",
+            page_type="selection_announcement",
+            summary="Открыт прием заявок.",
+        )
+        fresh_selection.application_status = "open"
+        fresh_selection.deadline_text = "Прием заявок до 20.05.2026."
+
+        markdown = generate_markdown_report(
+            [older_measure, fresh_selection],
+            report_date="2026-05-14",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertLess(
+            markdown.index("https://npa.krasnodar.ru/rest/files/1233677"),
+            markdown.index("http://mshsk.ru/gospodderzhka/subsidies-for-reimbursement-egg.php"),
+        )
+
     def test_report_keeps_support_reference_with_change_signal(self) -> None:
         changed_measure = self._doc(
             doc_id=12,
@@ -2110,6 +2251,31 @@ class TitleDisambiguationReportTest(unittest.TestCase):
         self.assertIsNotNone(doc2.id)
         self.assertIn("документ 9a3", title_map[doc1.id])  # type: ignore[index]
         self.assertIn("документ c24", title_map[doc2.id])  # type: ignore[index]
+
+    def test_bad_lexical_suffixes_are_not_used_when_url_suffix_exists(self) -> None:
+        from app.user_facing import disambiguate_visible_titles
+
+        doc1 = self._doc(
+            doc_id=622,
+            title="Об утверждении порядка предоставления субсидий в агропромышленном комплексе",
+            url="https://admkrai.krasnodar.ru/upload/iblock/9a3/abc.pdf",
+        )
+        doc2 = self._doc(
+            doc_id=623,
+            title=(
+                "Об утверждении порядка предоставления субсидий в агропромышленном "
+                "комплексе постановлениями Правительства Российской Федерации"
+            ),
+            url="https://admkrai.krasnodar.ru/upload/iblock/c24/xyz.pdf",
+        )
+
+        title_map = disambiguate_visible_titles([doc1, doc2], max_chars=90)
+        rendered_titles = list(title_map.values())
+
+        self.assertTrue(any("документ 9a3" in title for title in rendered_titles))
+        self.assertTrue(any("документ c24" in title for title in rendered_titles))
+        self.assertFalse(any("(агропромышленном)" in title for title in rendered_titles))
+        self.assertFalse(any("(мелиорации)" in title for title in rendered_titles))
 
     def test_unique_title_has_no_suffix_appended(self) -> None:
         doc = self._doc(
