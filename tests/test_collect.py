@@ -11,7 +11,9 @@ from app.models import CollectedItem, ExtractionResult, RawDocument, SourceConfi
 from app.pipeline.collect import run_collect_with_options
 from app.sources.generic_html_source import GenericHTMLSource
 from app.sources.krasnodar_source import KrasnodarSource
+from app.pipeline.deduplicate import compute_content_hash
 from app.storage import (
+    get_document_by_url,
     init_db,
     list_ocr_queue,
     list_documents,
@@ -19,6 +21,7 @@ from app.storage import (
     list_recent_document_extraction_audit,
     save_document,
     upsert_ocr_queue_item,
+    update_document_text_by_url,
 )
 
 
@@ -999,6 +1002,214 @@ class BaseSourceUserAgentTest(unittest.TestCase):
 
         source = ConcreteSource(config)
         self.assertEqual(source.session.headers.get("User-Agent"), "from-request-headers")
+
+
+class RefreshExistingUrlTest(unittest.TestCase):
+    def _db_path(self, name: str) -> Path:
+        path = Path(f"data/test_artifacts/{name}")
+        if path.exists():
+            path.unlink()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _source_config(self, source_role: str = "support_documents") -> SourceConfig:
+        return SourceConfig(
+            name="Тестовый источник",
+            url="https://mcx.gov.ru/activity/state-support/measures/",
+            level="federal",
+            region="federal",
+            source_role=source_role,  # type: ignore[arg-type]
+            parser="mcx",
+            description="test",
+        )
+
+    def _saved_doc(self, db_path: Path, url: str, raw_text: str, content_hash: str) -> RawDocument:
+        doc = RawDocument(
+            source_name="Тестовый источник",
+            source_url="https://mcx.gov.ru/activity/state-support/measures/",
+            level="federal",
+            region="federal",
+            title="Мера поддержки",
+            url=url,
+            published_at=None,
+            collected_at=datetime.now(timezone.utc),
+            content_hash=content_hash,
+            raw_text=raw_text,
+            document_type="html",
+            status="collected",
+        )
+        save_document(doc, db_path)
+        return doc
+
+    def _item(self, source_config: SourceConfig, url: str, raw_text: str) -> CollectedItem:
+        return CollectedItem(
+            source_name=source_config.name,
+            source_url=source_config.url,
+            level=source_config.level,
+            region=source_config.region,
+            title="Мера поддержки",
+            url=url,
+            document_type="html",
+            raw_text=raw_text,
+        )
+
+    def test_refresh_updates_document_when_prefilled_raw_text_changed(self) -> None:
+        db_path = self._db_path("collect_refresh_changed.db")
+        init_db(db_path)
+        source_config = self._source_config()
+        url = "https://mcx.gov.ru/activity/state-support/measures/12345/"
+        old_text = "Старый текст меры господдержки"
+        new_text = "Обновлённый текст меры с новыми условиями"
+        old_hash = compute_content_hash(old_text, fallback=f"Мера поддержки\n{url}")
+        self._saved_doc(db_path, url, old_text, old_hash)
+
+        item = self._item(source_config, url, new_text)
+
+        class FakeSource:
+            last_fetch_stats: dict = {}
+
+            def fetch_items(self) -> list[CollectedItem]:
+                return [item]
+
+        with patch("app.pipeline.collect.load_sources", return_value=[source_config]):
+            with patch("app.pipeline.collect.create_source", return_value=FakeSource()):
+                saved = run_collect_with_options(
+                    source_name=source_config.name,
+                    audit_existing=False,
+                    db_path=str(db_path),
+                )
+
+        self.assertEqual(saved, 0)
+        self.assertEqual(len(list_documents(db_path=db_path)), 1)
+        refreshed = get_document_by_url(url, db_path=db_path)
+        assert refreshed is not None
+        self.assertEqual(refreshed.raw_text, new_text)
+        new_hash = compute_content_hash(new_text, fallback=f"Мера поддержки\n{url}")
+        self.assertEqual(refreshed.content_hash, new_hash)
+
+    def test_refresh_skips_update_when_content_unchanged(self) -> None:
+        db_path = self._db_path("collect_refresh_unchanged.db")
+        init_db(db_path)
+        source_config = self._source_config()
+        url = "https://mcx.gov.ru/activity/state-support/measures/12345/"
+        text = "Текст меры господдержки без изменений"
+        content_hash = compute_content_hash(text, fallback=f"Мера поддержки\n{url}")
+        self._saved_doc(db_path, url, text, content_hash)
+
+        item = self._item(source_config, url, text)
+
+        update_calls: list[str] = []
+
+        class FakeSource:
+            last_fetch_stats: dict = {}
+
+            def fetch_items(self) -> list[CollectedItem]:
+                return [item]
+
+        with patch("app.pipeline.collect.load_sources", return_value=[source_config]):
+            with patch("app.pipeline.collect.create_source", return_value=FakeSource()):
+                with patch(
+                    "app.pipeline.collect.update_document_text_by_url",
+                    side_effect=lambda **kw: update_calls.append(kw["document_url"]),
+                ):
+                    run_collect_with_options(
+                        source_name=source_config.name,
+                        audit_existing=False,
+                        db_path=str(db_path),
+                    )
+
+        self.assertEqual(update_calls, [])
+
+    def test_existing_url_not_refreshed_for_non_matching_source(self) -> None:
+        db_path = self._db_path("collect_refresh_no_match.db")
+        init_db(db_path)
+        source_config = self._source_config(source_role="regional_npa")
+        url = "https://example.com/doc.html"
+        self._saved_doc(db_path, url, "Старый текст", "old-hash")
+
+        item = CollectedItem(
+            source_name=source_config.name,
+            source_url=source_config.url,
+            level=source_config.level,
+            region=source_config.region,
+            title="Документ",
+            url=url,
+            document_type="html",
+            raw_text=None,
+        )
+
+        update_calls: list[str] = []
+
+        class FakeSource:
+            last_fetch_stats: dict = {}
+
+            def fetch_items(self) -> list[CollectedItem]:
+                return [item]
+
+        with patch("app.pipeline.collect.load_sources", return_value=[source_config]):
+            with patch("app.pipeline.collect.create_source", return_value=FakeSource()):
+                with patch(
+                    "app.pipeline.collect.update_document_text_by_url",
+                    side_effect=lambda **kw: update_calls.append(kw["document_url"]),
+                ):
+                    run_collect_with_options(
+                        source_name=source_config.name,
+                        audit_existing=False,
+                        db_path=str(db_path),
+                    )
+
+        self.assertEqual(update_calls, [])
+
+    def test_refresh_active_support_measures_updates_on_changed_content(self) -> None:
+        db_path = self._db_path("collect_refresh_gisp.db")
+        init_db(db_path)
+        source_config = self._source_config(source_role="active_support_measures")
+        url = "https://gisp.gov.ru/nmp/measure/12345/"
+        old_text = "Мера: субсидирование процентной ставки. Срок подачи: 01.04.2026."
+        new_text = "Мера: субсидирование процентной ставки. Срок подачи: 01.06.2026."
+        old_hash = compute_content_hash(old_text, fallback=f"Мера поддержки\n{url}")
+        self._saved_doc(db_path, url, old_text, old_hash)
+
+        item = CollectedItem(
+            source_name=source_config.name,
+            source_url=source_config.url,
+            level=source_config.level,
+            region=source_config.region,
+            title="Мера поддержки",
+            url=url,
+            document_type="html",
+            raw_text=None,
+        )
+
+        class FakeSource:
+            last_fetch_stats: dict = {}
+
+            def fetch_items(self) -> list[CollectedItem]:
+                return [item]
+
+        with patch("app.pipeline.collect.load_sources", return_value=[source_config]):
+            with patch("app.pipeline.collect.create_source", return_value=FakeSource()):
+                with patch(
+                    "app.pipeline.collect.extract_document",
+                    return_value=ExtractionResult(
+                        raw_text=new_text,
+                        document_type="html",
+                        extracted_text_length=len(new_text),
+                    ),
+                ):
+                    saved = run_collect_with_options(
+                        source_name=source_config.name,
+                        audit_existing=False,
+                        db_path=str(db_path),
+                    )
+
+        self.assertEqual(saved, 0)
+        self.assertEqual(len(list_documents(db_path=db_path)), 1)
+        refreshed = get_document_by_url(url, db_path=db_path)
+        assert refreshed is not None
+        self.assertEqual(refreshed.raw_text, new_text)
+        new_hash = compute_content_hash(new_text, fallback=f"Мера поддержки\n{url}")
+        self.assertEqual(refreshed.content_hash, new_hash)
 
 
 if __name__ == "__main__":

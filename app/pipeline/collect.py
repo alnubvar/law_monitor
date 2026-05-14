@@ -28,6 +28,7 @@ from app.storage import (
     determine_ocr_priority,
     get_document_by_url,
     update_document_published_at_by_url,
+    update_document_text_by_url,
     clear_source_errors,
     document_exists_by_hash,
     document_exists_by_url,
@@ -187,6 +188,20 @@ def _format_source_access_warning(exc: RequestException) -> str:
     return "source request error"
 
 
+def _should_refresh_existing(item: CollectedItem, source_config: SourceConfig) -> bool:
+    """Return True if an already-stored URL should be re-checked for content changes.
+
+    Two cases qualify:
+    - item.raw_text is already set: the source pre-fetched content (e.g. MCX detail pages,
+      regulation.gov). No extra HTTP request is needed.
+    - source_role is active_support_measures (e.g. GISP measure cards): stable URLs whose
+      deadlines or conditions can change; one re-fetch per item per run is acceptable.
+    """
+    if item.raw_text:
+        return True
+    return source_config.source_role == "active_support_measures"
+
+
 def run_collect(source_name: str | None = None, limit: int | None = None) -> int:
     return run_collect_with_options(
         source_name=source_name,
@@ -332,6 +347,35 @@ def run_collect_with_options(
                                 status="done",
                                 notes="OCR completed automatically",
                                 db_path=resolved_db_path,
+                            )
+                    if not audit_existing and _should_refresh_existing(item, source_config):
+                        try:
+                            if item.raw_text:
+                                new_raw_text = item.raw_text
+                                new_doc_type = item.document_type
+                            else:
+                                refresh_result = extract_document(item, source_config)
+                                new_raw_text = refresh_result.raw_text
+                                new_doc_type = refresh_result.document_type or item.document_type
+                            new_hash = compute_content_hash(
+                                new_raw_text, fallback=f"{item.title}\n{item.url}"
+                            )
+                            existing_doc = get_document_by_url(item.url, db_path=resolved_db_path)
+                            if existing_doc is not None and existing_doc.content_hash != new_hash:
+                                update_document_text_by_url(
+                                    document_url=item.url,
+                                    raw_text=new_raw_text,
+                                    content_hash=new_hash,
+                                    document_type=new_doc_type,
+                                    db_path=resolved_db_path,
+                                )
+                                logger.info("Refreshed changed content for existing URL: %s", item.url)
+                        except Exception as exc:
+                            logger.warning(
+                                "Content refresh failed for source=%s url=%s: %s",
+                                source_config.name,
+                                item.url,
+                                exc,
                             )
                     logger.debug("Skip existing URL: %s", item.url)
                     source_skipped_existing += 1
