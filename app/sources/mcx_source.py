@@ -255,7 +255,11 @@ class McxSource(BaseSource):
                         "McxSource detail fetch HTTP %s for %s", status, item.url
                     )
                 continue
-            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+            except (
+                requests.exceptions.RetryError,
+                requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout,
+            ) as exc:
                 server_errors += 1
                 self.logger.warning(
                     "McxSource detail fetch connectivity error for %s: %s (%d/%d)",

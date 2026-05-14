@@ -797,6 +797,33 @@ class McxSourceCircuitBreakerTest(unittest.TestCase):
         for item in items:
             self.assertIn("Мера господдержки АПК", item.raw_text or "")
 
+    def test_retry_error_503_counts_toward_circuit_breaker(self) -> None:
+        """RetryError (urllib3 exhausted retries for 503) opens the circuit after threshold."""
+        # Reproduces the live-collect failure: requests raises RetryError, not HTTPError,
+        # when the retry adapter exhausts attempts due to repeated 503 responses.
+        retry_error = requests.exceptions.RetryError(
+            "HTTPSConnectionPool: Max retries exceeded with url: /activity/state-support/measures/льготное-кредитование/ "
+            "(Caused by ResponseError('too many 503 error responses'))"
+        )
+        source = self._measures_source(max_items=5)
+        with patch.object(
+            source,
+            "get",
+            side_effect=[
+                _mock_response(_HTML_5_ITEMS),
+                retry_error,  # item 1 → server_errors=1
+                retry_error,  # item 2 → server_errors=2
+                retry_error,  # item 3 → server_errors=3, circuit opens
+                # items 4 and 5 not fetched
+            ],
+        ) as mock_get:
+            items = source.fetch_items()
+        self.assertEqual(mock_get.call_count, 4)  # 1 listing + 3 detail attempts only
+        self.assertEqual(len(items), 5)
+        for item in items:
+            self.assertIn("Мера господдержки АПК", item.raw_text or "")
+            self.assertNotIn("льготных кредитов", item.raw_text or "")
+
 
 if __name__ == "__main__":
     unittest.main()
