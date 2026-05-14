@@ -7,6 +7,8 @@ from app.models import CollectedItem
 from app.sources.base import BaseSource
 
 _API_ENDPOINT = "https://regulation.gov.ru/api/npalist"
+_PAGE_SIZE = 20
+_MAX_PAGES = 5
 
 _FIELD_LABELS: list[tuple[str, str]] = [
     ("projectId", "Код"),
@@ -45,39 +47,77 @@ class RegulationGovSource(BaseSource):
     """Fetches recent NPA projects from the public regulation.gov.ru XML API."""
 
     def fetch_items(self) -> list[CollectedItem]:
-        limit = self.config.max_items or 20
-        url = f"{_API_ENDPOINT}?limit={limit}&sort=desc"
-        response = self.get(url)
-        try:
-            root = ET.fromstring(response.content)
-        except ET.ParseError as exc:
-            self.logger.warning("Failed to parse XML from %s: %s", url, exc)
-            return []
-
+        total_limit = self.config.max_items or _PAGE_SIZE
+        page_size = min(_PAGE_SIZE, total_limit)
         items: list[CollectedItem] = []
-        for project in root.findall("project"):
-            pid = (project.get("id") or "").strip()
-            if not pid:
-                continue
-            title = (project.findtext("title") or "").strip()
-            if not title:
-                continue
-            published_at = _parse_iso_date(project.findtext("publishDate") or "")
-            items.append(
-                CollectedItem(
-                    source_name=self.config.name,
-                    source_url=self.config.url,
-                    level=self.config.level,
-                    region=self.config.region,
-                    title=title,
-                    url=f"https://regulation.gov.ru/projects/{pid}",
-                    published_at=published_at,
-                    document_type="html",
-                    raw_text=_build_synthetic_text(project, pid, title),
+        seen_ids: set[str] = set()
+        offset = 0
+
+        for _ in range(_MAX_PAGES):
+            if len(items) >= total_limit:
+                break
+            request_limit = min(page_size, total_limit - len(items))
+            url = f"{_API_ENDPOINT}?limit={request_limit}&offset={offset}&sort=desc"
+            response = self.get(url)
+            try:
+                root = ET.fromstring(response.content)
+            except ET.ParseError as exc:
+                self.logger.warning("Failed to parse XML from %s: %s", url, exc)
+                return items
+
+            projects = root.findall("project")
+            if not projects:
+                break
+
+            new_items_count = 0
+            for project in projects:
+                if len(items) >= total_limit:
+                    break
+                pid = (project.get("id") or "").strip()
+                if not pid or pid in seen_ids:
+                    continue
+                title = (project.findtext("title") or "").strip()
+                if not title:
+                    continue
+                published_at = _parse_iso_date(project.findtext("publishDate") or "")
+                items.append(
+                    CollectedItem(
+                        source_name=self.config.name,
+                        source_url=self.config.url,
+                        level=self.config.level,
+                        region=self.config.region,
+                        title=title,
+                        url=f"https://regulation.gov.ru/projects/{pid}",
+                        published_at=published_at,
+                        document_type="html",
+                        raw_text=_build_synthetic_text(project, pid, title),
+                    )
                 )
-            )
+                seen_ids.add(pid)
+                new_items_count += 1
+
+            if new_items_count == 0:
+                break
+
+            offset += len(projects)
+            total_count = _parse_int(root.get("total"))
+            if len(projects) < request_limit:
+                break
+            if total_count is not None and offset >= total_count:
+                break
+
         self.logger.info("Fetched %s items from %s", len(items), self.config.name)
         return items
+
+
+def _parse_int(value: str | None) -> int | None:
+    normalized = (value or "").strip()
+    if not normalized:
+        return None
+    try:
+        return int(normalized)
+    except ValueError:
+        return None
 
 
 def _parse_iso_date(value: str) -> datetime | None:

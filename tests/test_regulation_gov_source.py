@@ -86,6 +86,26 @@ _XML_MAX_ITEMS = """<?xml version="1.0" encoding="utf-8"?>
 </projects>
 """.encode("utf-8")
 
+_XML_PAGE_ONE = """<?xml version="1.0" encoding="utf-8"?>
+<projects offset="0" limit="2" total="5">
+  <project id="1"><title>Item one</title><publishDate>2026-01-01T00:00:00Z</publishDate></project>
+  <project id="2"><title>Item two</title><publishDate>2026-01-02T00:00:00Z</publishDate></project>
+</projects>
+""".encode("utf-8")
+
+_XML_PAGE_TWO = """<?xml version="1.0" encoding="utf-8"?>
+<projects offset="2" limit="2" total="5">
+  <project id="3"><title>Item three</title><publishDate>2026-01-03T00:00:00Z</publishDate></project>
+  <project id="4"><title>Item four</title><publishDate>2026-01-04T00:00:00Z</publishDate></project>
+</projects>
+""".encode("utf-8")
+
+_XML_DUPLICATE_PAGE = """<?xml version="1.0" encoding="utf-8"?>
+<projects offset="1" limit="1" total="5">
+  <project id="1"><title>Item one</title><publishDate>2026-01-01T00:00:00Z</publishDate></project>
+</projects>
+""".encode("utf-8")
+
 _XML_MALFORMED = b"<projects><project id=1>broken xml"
 
 
@@ -108,6 +128,23 @@ def _mock_response(content: bytes) -> MagicMock:
     mock.content = content
     mock.text = content.decode("utf-8")
     return mock
+
+
+def _xml_page(*, offset: int, limit: int, total: int, start_id: int, count: int) -> bytes:
+    projects = []
+    for index in range(count):
+        item_id = start_id + index
+        projects.append(
+            f'<project id="{item_id}"><title>Item {item_id}</title>'
+            f"<publishDate>2026-01-{(item_id % 28) + 1:02d}T00:00:00Z</publishDate></project>"
+        )
+    xml = (
+        f'<?xml version="1.0" encoding="utf-8"?>\n'
+        f'<projects offset="{offset}" limit="{limit}" total="{total}">\n'
+        + "\n".join(projects)
+        + "\n</projects>"
+    )
+    return xml.encode("utf-8")
 
 
 class RegulationGovSourceTest(unittest.TestCase):
@@ -173,15 +210,12 @@ class RegulationGovSourceTest(unittest.TestCase):
 
     def test_max_items_limits_result(self) -> None:
         source = _make_source(max_items=3)
-        # The API returns 5 items in the XML; max_items should be sent as param
-        # but the source trusts the API to respect limit — we cap defensively via config
-        # Here we verify the fetch call includes the correct limit param
         with patch.object(source, "get", return_value=_mock_response(_XML_MAX_ITEMS)) as mock_get:
             items = source.fetch_items()
         called_url = mock_get.call_args[0][0]
         self.assertIn("limit=3", called_url)
-        # The XML already has 5 items; source returns all because API is trusted to limit
-        self.assertEqual(len(items), 5)
+        self.assertIn("offset=0", called_url)
+        self.assertEqual(len(items), 3)
 
     def test_malformed_xml_returns_empty(self) -> None:
         source = _make_source()
@@ -196,6 +230,7 @@ class RegulationGovSourceTest(unittest.TestCase):
         called_url = mock_get.call_args[0][0]
         self.assertIn("sort=desc", called_url)
         self.assertIn("api/npalist", called_url)
+        self.assertIn("offset=0", called_url)
 
     def test_raw_text_is_populated_for_all_items(self) -> None:
         source = _make_source()
@@ -255,6 +290,82 @@ class RegulationGovSourceTest(unittest.TestCase):
         self.assertNotIn("2026-05-12T", raw_text)
         self.assertNotIn("2026-05-13T", raw_text)
         self.assertNotIn("2026-05-26T", raw_text)
+
+    def test_fetch_paginates_with_offset_until_max_items_reached(self) -> None:
+        source = _make_source(max_items=25)
+        responses = [
+            _mock_response(_xml_page(offset=0, limit=20, total=40, start_id=1, count=20)),
+            _mock_response(_xml_page(offset=20, limit=5, total=40, start_id=21, count=5)),
+        ]
+        with patch.object(source, "get", side_effect=responses) as mock_get:
+            items = source.fetch_items()
+        self.assertEqual(len(items), 25)
+        called_urls = [call.args[0] for call in mock_get.call_args_list]
+        self.assertEqual(
+            called_urls,
+            [
+                "https://regulation.gov.ru/api/npalist?limit=20&offset=0&sort=desc",
+                "https://regulation.gov.ru/api/npalist?limit=5&offset=20&sort=desc",
+            ],
+        )
+
+    def test_fetch_uses_second_page_when_first_page_returns_fewer_new_items(self) -> None:
+        source = _make_source(max_items=22)
+        first_page_projects = []
+        for item_id in range(1, 21):
+            if item_id in {3, 17}:
+                first_page_projects.append('<project id=""><title>Broken item</title></project>')
+                continue
+            first_page_projects.append(
+                f'<project id="{item_id}"><title>Item {item_id}</title>'
+                f"<publishDate>2026-01-{(item_id % 28) + 1:02d}T00:00:00Z</publishDate></project>"
+            )
+        first_page = (
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            '<projects offset="0" limit="20" total="40">\n'
+            + "\n".join(first_page_projects)
+            + "\n</projects>"
+        ).encode("utf-8")
+        second_page = """<?xml version="1.0" encoding="utf-8"?>
+<projects offset="20" limit="4" total="40">
+  <project id="21"><title>Item twenty one</title><publishDate>2026-01-21T00:00:00Z</publishDate></project>
+  <project id="22"><title>Item twenty two</title><publishDate>2026-01-22T00:00:00Z</publishDate></project>
+</projects>
+""".encode("utf-8")
+        with patch.object(source, "get", side_effect=[_mock_response(first_page), _mock_response(second_page)]) as mock_get:
+            items = source.fetch_items()
+        self.assertEqual(len(items), 20)
+        called_urls = [call.args[0] for call in mock_get.call_args_list]
+        self.assertEqual(
+            called_urls,
+            [
+                "https://regulation.gov.ru/api/npalist?limit=20&offset=0&sort=desc",
+                "https://regulation.gov.ru/api/npalist?limit=4&offset=20&sort=desc",
+            ],
+        )
+        self.assertEqual(items[-1].url, "https://regulation.gov.ru/projects/22")
+
+    def test_fetch_stops_when_page_returns_no_new_items(self) -> None:
+        source = _make_source(max_items=25)
+        with patch.object(
+            source,
+            "get",
+            side_effect=[
+                _mock_response(_xml_page(offset=0, limit=20, total=40, start_id=1, count=20)),
+                _mock_response(_XML_DUPLICATE_PAGE),
+            ],
+        ) as mock_get:
+            items = source.fetch_items()
+        self.assertEqual(len(items), 20)
+        self.assertEqual(mock_get.call_count, 2)
+        called_urls = [call.args[0] for call in mock_get.call_args_list]
+        self.assertEqual(
+            called_urls,
+            [
+                "https://regulation.gov.ru/api/npalist?limit=20&offset=0&sort=desc",
+                "https://regulation.gov.ru/api/npalist?limit=5&offset=20&sort=desc",
+            ],
+        )
 
 
 class ParseIsoDateTest(unittest.TestCase):
