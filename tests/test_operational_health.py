@@ -15,6 +15,7 @@ from app.operational_health import (
 from app.pipeline.digest import run_demo_report
 from app.storage import (
     init_db,
+    mark_runtime_event,
     save_document,
     save_source_audit_record,
     save_source_error,
@@ -102,7 +103,11 @@ class OperationalHealthTest(unittest.TestCase):
         notices = collect_operational_notices(db_path=db_path)
 
         self.assertTrue(
-            any("ZOL.ru - зерновые новости: нет успешного сбора 5 дней" == notice.message for notice in notices)
+            any(
+                "ZOL.ru - зерновые новости: последнее успешное обновление было 5 дней назад"
+                in notice.message
+                for notice in notices
+            )
         )
 
     def test_stale_support_source_detection(self) -> None:
@@ -142,8 +147,8 @@ class OperationalHealthTest(unittest.TestCase):
 
         self.assertTrue(
             any(
-                "Минсельхоз Ставропольского края - господдержка: нет успешного сбора 8 дней"
-                == notice.message
+                "Минсельхоз Ставропольского края - господдержка: последнее успешное обновление было 8 дней назад"
+                in notice.message
                 for notice in notices
             )
         )
@@ -163,7 +168,83 @@ class OperationalHealthTest(unittest.TestCase):
         self.assertTrue(
             any(
                 notice.severity == "warning"
-                and notice.message == "Право Ставропольского края: источник временно недоступен при последней проверке"
+                and "Источник временно недоступен: Право Ставропольского края" in notice.message
+                for notice in notices
+            )
+        )
+
+    def test_latest_failed_source_remains_visible_after_error_lookback(self) -> None:
+        db_path = self._db_path("operational_failed_source_persists.db")
+        init_db(db_path)
+        success_at = datetime.now(timezone.utc) - timedelta(days=2)
+        failed_at = success_at + timedelta(hours=1)
+        save_source_audit_record(
+            source_name="Минсельхоз России - меры господдержки",
+            source_url="https://mcx.gov.ru/activity/state-support/measures/",
+            enabled=True,
+            attempted_at=success_at,
+            success_at=success_at,
+            error_at=None,
+            error_message=None,
+            fetched_count=20,
+            saved_count=1,
+            existing_count=19,
+            duplicates_count=0,
+            item_errors_count=0,
+            db_path=db_path,
+        )
+        save_source_audit_record(
+            source_name="Минсельхоз России - меры господдержки",
+            source_url="https://mcx.gov.ru/activity/state-support/measures/",
+            enabled=True,
+            attempted_at=failed_at,
+            success_at=None,
+            error_at=failed_at,
+            error_message="source connection error",
+            fetched_count=0,
+            saved_count=0,
+            existing_count=0,
+            duplicates_count=0,
+            item_errors_count=0,
+            db_path=db_path,
+        )
+
+        notices = collect_operational_notices(db_path=db_path)
+
+        self.assertTrue(
+            any(
+                "Источник временно недоступен: Минсельхоз России - меры господдержки"
+                in notice.message
+                for notice in notices
+            )
+        )
+
+    def test_old_source_with_no_success_creates_no_success_warning(self) -> None:
+        db_path = self._db_path("operational_no_success_source.db")
+        init_db(db_path)
+        attempted_at = datetime.now(timezone.utc) - timedelta(days=8)
+        save_source_audit_record(
+            source_name="Минсельхоз Ставропольского края - господдержка",
+            source_url="https://mshsk.ru",
+            enabled=True,
+            attempted_at=attempted_at,
+            success_at=None,
+            error_at=attempted_at,
+            error_message="source runtime error",
+            fetched_count=0,
+            saved_count=0,
+            existing_count=0,
+            duplicates_count=0,
+            item_errors_count=0,
+            db_path=db_path,
+        )
+
+        notices = collect_operational_notices(db_path=db_path)
+
+        self.assertTrue(
+            any(
+                "Минсельхоз Ставропольского края - господдержка: успешный сбор не подтвержден 8 дней"
+                in notice.message
                 for notice in notices
             )
         )
@@ -293,7 +374,10 @@ class OperationalHealthTest(unittest.TestCase):
         markdown = path.read_text(encoding="utf-8")
 
         self.assertIn("## ⚠️ На что обратить внимание по системе", markdown)
-        self.assertIn("ZOL.ru - зерновые новости: нет успешного сбора 5 дней", markdown)
+        self.assertIn(
+            "ZOL.ru - зерновые новости: последнее успешное обновление было 5 дней назад",
+            markdown,
+        )
 
     def test_telegram_digest_rendering_includes_operational_notices(self) -> None:
         document = self._doc(
@@ -360,6 +444,37 @@ class OperationalHealthTest(unittest.TestCase):
         self.assertNotIn("На что обратить внимание по системе", today_text)
         self.assertNotIn("На что обратить внимание по системе", urgent_text)
         self.assertNotIn("На что обратить внимание по системе", watchlist_text)
+
+    def test_status_does_not_mark_fresh_when_source_success_is_stale(self) -> None:
+        db_path = self._db_path("operational_status_stale_source_success.db")
+        init_db(db_path)
+        stale_success = datetime.now(timezone.utc) - timedelta(hours=30)
+        save_source_audit_record(
+            source_name="Regulation.gov.ru",
+            source_url="https://regulation.gov.ru/",
+            enabled=True,
+            attempted_at=stale_success,
+            success_at=stale_success,
+            error_at=None,
+            error_message=None,
+            fetched_count=20,
+            saved_count=0,
+            existing_count=20,
+            duplicates_count=0,
+            item_errors_count=0,
+            db_path=db_path,
+        )
+        mark_runtime_event(
+            "report",
+            details="fresh report",
+            occurred_at=datetime.now(timezone.utc),
+            db_path=db_path,
+        )
+
+        status_text = build_command_response("/status", db_path=db_path)
+
+        self.assertIn("Данные могут быть не полностью свежими", status_text)
+        self.assertNotIn("✅ Данные свежие", status_text)
 
 
 if __name__ == "__main__":

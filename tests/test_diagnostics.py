@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.models import RawDocument
@@ -758,6 +758,50 @@ class DiagnosticsSmokeTest(unittest.TestCase):
         self.assertIn("Operational warnings:", output)
         self.assertIn("WARN:", output)
         self.assertIn("source access blocked", output)
+
+    def test_diagnostics_surfaces_failed_source_and_true_prior_success(self) -> None:
+        db_path = self._db_path("diagnostics_truthfulness_failed_source.db")
+        init_db(db_path)
+        success_at = datetime.now(timezone.utc) - timedelta(days=2)
+        failed_at = datetime.now(timezone.utc) - timedelta(days=1)
+        save_source_audit_record(
+            source_name="Минсельхоз России - меры господдержки",
+            source_url="https://mcx.gov.ru/activity/state-support/measures/",
+            enabled=True,
+            attempted_at=success_at,
+            success_at=success_at,
+            error_at=None,
+            error_message=None,
+            fetched_count=20,
+            saved_count=1,
+            existing_count=19,
+            duplicates_count=0,
+            item_errors_count=0,
+            db_path=db_path,
+        )
+        save_source_audit_record(
+            source_name="Минсельхоз России - меры господдержки",
+            source_url="https://mcx.gov.ru/activity/state-support/measures/",
+            enabled=True,
+            attempted_at=failed_at,
+            success_at=None,
+            error_at=failed_at,
+            error_message="source runtime error",
+            fetched_count=0,
+            saved_count=0,
+            existing_count=0,
+            duplicates_count=0,
+            item_errors_count=0,
+            db_path=db_path,
+        )
+
+        output = run_diagnostics(db_path=db_path)
+
+        self.assertIn("Operational freshness:", output)
+        self.assertIn("failed_source_count: 1", output)
+        self.assertIn("latest_successful_source_collect_at:", output)
+        self.assertIn("latest source check failed", output)
+        self.assertIn("last_success_age=2d ago", output)
 
     def test_operational_warnings_section_appears_for_missing_published_at(self) -> None:
         db_path = self._db_path("diagnostics_op_warnings_dates.db")

@@ -17,6 +17,7 @@ from app.models import RawDocument
 from app.notify.telegram_formatter import build_digest_message
 from app.operational_health import (
     OperationalNotice,
+    build_source_health_summary,
     collect_operational_notices,
     format_operational_notices_telegram,
 )
@@ -954,15 +955,29 @@ def _build_freshness_lines(db_path: Path | str) -> list[str]:
     collect_event = get_runtime_event("collect", db_path=db_path)
     analyze_event = get_runtime_event("analyze", db_path=db_path)
     report_event = get_runtime_event("report", db_path=db_path)
+    source_health = build_source_health_summary(db_path=db_path)
     collect_at = collect_event["updated_at"] if collect_event else None
     analyze_at = analyze_event["updated_at"] if analyze_event else None
     report_at = report_event["updated_at"] if report_event else None
-    latest = max((dt for dt in (collect_at, analyze_at, report_at) if dt is not None), default=None)
+    source_success_at = source_health.latest_success_at
     lines = [
         f"Последний collect: {_fmt_dt(collect_at) or 'дата не определена'}",
+        f"Последний успешный сбор источников: {_fmt_dt(source_success_at) or 'дата не определена'}",
         f"Последний analyze: {_fmt_dt(analyze_at) or 'дата не определена'}",
         f"Последний report: {_fmt_dt(report_at) or 'дата не определена'}",
     ]
+    degraded_source_count = len(
+        set(source_health.failed_sources)
+        | {source.source_name for source in source_health.stale_sources}
+    )
+    if degraded_source_count:
+        lines.append(f"⚠️ Есть проблемные источники: {degraded_source_count}")
+    if source_health.latest_attempt_at is not None and source_success_at is None:
+        lines.append("⚠️ Данные могут быть неполными: успешный сбор источников пока не подтвержден.")
+        return lines
+    latest = source_success_at
+    if latest is None:
+        latest = max((dt for dt in (collect_at, analyze_at, report_at) if dt is not None), default=None)
     if latest is None:
         lines.append("⚠️ Свежесть данных не определена.")
         return lines
@@ -970,10 +985,14 @@ def _build_freshness_lines(db_path: Path | str) -> list[str]:
         latest = latest.replace(tzinfo=timezone.utc)
     delta = datetime.now(timezone.utc) - latest.astimezone(timezone.utc)
     minutes = int(delta.total_seconds() // 60)
-    if minutes <= 60:
+    hours = max(1, minutes // 60)
+    if degraded_source_count:
+        lines.append("⚠️ Данные могут быть неполными: часть источников не прошла последнюю проверку")
+    elif source_health.latest_attempt_at is not None and minutes > 24 * 60:
+        lines.append(f"⚠️ Данные могут быть не полностью свежими: последний успешный сбор был {hours} часов назад")
+    elif minutes <= 60:
         lines.append(f"✅ Данные свежие: обновлены {minutes} минут назад")
     else:
-        hours = max(1, minutes // 60)
         lines.append(f"⚠️ Данные устарели: последнее обновление было {hours} часов назад")
     return lines
 

@@ -1111,6 +1111,33 @@ def list_latest_source_audit(
     return results
 
 
+def list_source_audit_records(
+    db_path: Path | str = DB_PATH,
+    *,
+    limit: int = 10000,
+) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(int(limit), 10000))
+    with _connect_db(db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM source_audit
+            ORDER BY attempted_at DESC, id DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        payload = dict(row)
+        payload["attempted_at"] = _parse_dt(payload.get("attempted_at"))
+        payload["success_at"] = _parse_dt(payload.get("success_at"))
+        payload["error_at"] = _parse_dt(payload.get("error_at"))
+        payload["enabled"] = bool(payload.get("enabled"))
+        results.append(payload)
+    return results
+
+
 def save_document_extraction_audit(
     *,
     source_name: str,

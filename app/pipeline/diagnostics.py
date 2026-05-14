@@ -10,6 +10,7 @@ from typing import Iterable
 from app.config import DB_PATH, OCR_ENABLED, get_source_role, load_sources
 from app.extractors.ocr_extractor import get_ocr_runtime_status
 from app.models import RawDocument
+from app.operational_health import build_source_health_summary
 from app.storage import (
     get_runtime_event,
     get_sqlite_runtime_settings,
@@ -381,6 +382,19 @@ def _build_operational_warnings(
     Called in run_diagnostics() — reads DB but does NOT write anything.
     """
     warnings: list[str] = []
+    source_health = build_source_health_summary(db_path=db_path)
+    if source_health.latest_attempt_at is not None and source_health.latest_success_at is None:
+        warnings.append(
+            "WARN: no successful source collect is recorded; reports may be incomplete."
+        )
+    for source_name in source_health.failed_sources:
+        warnings.append(
+            f"WARN: {source_name}: latest source check failed; data may be incomplete."
+        )
+    for stale_source in source_health.stale_sources:
+        warnings.append(
+            f"WARN: {stale_source.source_name}: no successful source collect for {stale_source.stale_days} days."
+        )
 
     if snapshot.total_documents > 0:
         missing_ratio = snapshot.missing_published_at_total / snapshot.total_documents
@@ -392,11 +406,14 @@ def _build_operational_warnings(
             )
 
     audit_rows = list_latest_source_audit(db_path=db_path)
+    failed_source_names = set(source_health.failed_sources)
     for row in audit_rows:
+        source_name = str(row.get("source_name") or "")
+        if source_name in failed_source_names:
+            continue
         error_msg = str(row.get("error_message") or "")
         warning_text = _source_access_warning_text(error_msg)
         if warning_text:
-            source_name = str(row.get("source_name") or "")
             warnings.append(f"WARN: {source_name}: {warning_text}")
 
     unresolved_rows = list_unresolved_scan_candidate_audit(db_path=db_path, limit=5000)
@@ -414,6 +431,28 @@ def _build_operational_warnings(
         )
 
     return warnings
+
+
+def format_operational_truthfulness_diagnostics(*, db_path: Path | str) -> str:
+    source_health = build_source_health_summary(db_path=db_path)
+    lines = [
+        "Operational freshness:",
+        f"- latest_collect_attempt_at: {_fmt_dt(source_health.latest_attempt_at)}",
+        f"- latest_successful_source_collect_at: {_fmt_dt(source_health.latest_success_at)}",
+        f"- failed_source_count: {len(source_health.failed_sources)}",
+        f"- stale_key_source_count: {len(source_health.stale_sources)}",
+    ]
+    if source_health.failed_sources:
+        lines.append("- failed_sources: " + ", ".join(source_health.failed_sources[:5]))
+    if source_health.stale_sources:
+        lines.append(
+            "- stale_sources: "
+            + ", ".join(
+                f"{source.source_name} ({source.stale_days}d)"
+                for source in source_health.stale_sources[:5]
+            )
+        )
+    return "\n".join(lines)
 
 
 _SYSTEM_PROXY_ENV_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")
@@ -458,6 +497,7 @@ def run_diagnostics(
     diagnostics_text = format_diagnostics(snapshot)
     sqlite_text = format_sqlite_runtime_diagnostics(db_path=resolved_db_path)
     deadline_text = format_deadline_extraction_diagnostics(db_path=resolved_db_path)
+    freshness_text = format_operational_truthfulness_diagnostics(db_path=resolved_db_path)
     audit_text = format_source_coverage_audit(db_path=resolved_db_path)
     extraction_text = format_document_extraction_quality_audit(
         db_path=resolved_db_path,
@@ -494,6 +534,7 @@ def run_diagnostics(
         [
             network_note,
             sqlite_text,
+            freshness_text,
             deadline_text,
             diagnostics_text,
             audit_text,
@@ -547,9 +588,11 @@ def format_deadline_extraction_diagnostics(*, db_path: Path | str) -> str:
 def format_source_coverage_audit(*, db_path: Path | str) -> str:
     rows = list_latest_source_audit(db_path=db_path)
     by_name = {row["source_name"]: row for row in rows}
+    source_health = build_source_health_summary(db_path=db_path)
     lines = ["Source coverage audit:"]
     for source in load_sources():
         row = by_name.get(source.name)
+        last_success_at = source_health.source_last_success_at.get(source.name)
         if row is None:
             lines.append(
                 f"- [NO DATA] {source.name} | enabled={source.enabled} | url={source.url} | "
@@ -565,8 +608,8 @@ def format_source_coverage_audit(*, db_path: Path | str) -> str:
         lines.append(
             f"- {status_prefix}{source.name} | enabled={source.enabled} | url={source.url} | "
             f"last_attempt_at={_fmt_dt(row.get('attempted_at'))} | "
-            f"last_success_at={_fmt_dt(row.get('success_at'))} | "
-            f"last_success_age={_format_age(row.get('success_at'))} | "
+            f"last_success_at={_fmt_dt(last_success_at or row.get('success_at'))} | "
+            f"last_success_age={_format_age(last_success_at or row.get('success_at'))} | "
             f"last_error_at={_fmt_dt(row.get('error_at'))} | "
             f"last_error_message={str(row.get('error_message') or 'n/a')[:120]} | "
             f"fetched_count={row.get('fetched_count', 0)} | "
