@@ -149,7 +149,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             summary="Новость по Липецкой области.",
         )
         self.assertEqual(classify_document_bucket(target_document), "target_watchlist")
-        self.assertEqual(classify_document_bucket(non_target_document), "non_target_background")
+        self.assertEqual(
+            classify_document_bucket(non_target_document), "non_target_background"
+        )
 
     def test_report_uses_short_summary(self) -> None:
         document = self._doc(
@@ -212,7 +214,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         )
 
         self.assertIn("Executive summary для руководителя.", markdown)
-        self.assertIn("Новая редакция меры меняет условия участия для заемщиков АПК.", markdown)
+        self.assertIn(
+            "Новая редакция меры меняет условия участия для заемщиков АПК.", markdown
+        )
         self.assertIn("Проверить применимость меры, сроки и ответственного.", markdown)
         self.assertIn("До 30 июня 2026 года.", markdown)
 
@@ -309,7 +313,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             summary="Базовая summary.",
         )
 
-        with patch("app.reports.markdown_report.list_document_enrichments", return_value={}):
+        with patch(
+            "app.reports.markdown_report.list_document_enrichments", return_value={}
+        ):
             markdown = generate_markdown_report(
                 [document],
                 report_date="2026-05-07",
@@ -318,7 +324,10 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             )
 
         self.assertIn("Почему важно: impact", markdown)
-        self.assertIn("Что проверить: Проверить применимость меры, сроки и ответственного.", markdown)
+        self.assertIn(
+            "Что проверить: Проверить применимость меры, сроки и ответственного.",
+            markdown,
+        )
 
     def test_report_ignores_errored_or_low_confidence_enrichment(self) -> None:
         db_path = self._db_path("report_enrichment_low_conf.db")
@@ -436,7 +445,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertIn("...", markdown)
         self.assertNotIn(long_text.strip(), markdown)
 
-    def test_generic_mock_enrichment_does_not_override_specific_reason_and_action(self) -> None:
+    def test_generic_mock_enrichment_does_not_override_specific_reason_and_action(
+        self,
+    ) -> None:
         db_path = self._db_path("report_enrichment_generic_preference.db")
         init_db(db_path)
         document = self._doc(
@@ -471,14 +482,21 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             db_path=db_path,
         )
 
-        self.assertIn("Кратко: Изменён порядок предоставления субсидий в Ставропольском крае.", markdown)
+        self.assertIn(
+            "Кратко: Изменён порядок предоставления субсидий в Ставропольском крае.",
+            markdown,
+        )
         self.assertIn("### Изменены условия субсидирования", markdown)
         self.assertIn("Почему важно: Изменены условия субсидирования", markdown)
-        self.assertIn("Проверить изменения порядка субсидирования и сроки вступления.", markdown)
+        self.assertIn(
+            "Проверить изменения порядка субсидирования и сроки вступления.", markdown
+        )
         self.assertNotIn("Сигнал может повлиять на контекст господдержки", markdown)
         self.assertNotIn("Оценить срочность сигнала", markdown)
 
-    def test_urgent_regional_npa_report_uses_stronger_reason_and_specific_hint(self) -> None:
+    def test_urgent_regional_npa_report_uses_stronger_reason_and_specific_hint(
+        self,
+    ) -> None:
         document = self._doc(
             doc_id=150,
             source_name="Право Ставропольского края",
@@ -489,7 +507,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             page_type="new_rule",
             summary="Изменения порядка предоставления субсидий.",
         )
-        document.business_signal = "Региональный НПА по профильной теме: оставить в наблюдении."
+        document.business_signal = (
+            "Региональный НПА по профильной теме: оставить в наблюдении."
+        )
 
         markdown = generate_markdown_report(
             [document],
@@ -500,7 +520,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
 
         self.assertIn("### Изменены условия субсидирования", markdown)
         self.assertIn("Почему важно: Изменены условия субсидирования", markdown)
-        self.assertIn("Проверить изменения порядка субсидирования и сроки вступления.", markdown)
+        self.assertIn(
+            "Проверить изменения порядка субсидирования и сроки вступления.", markdown
+        )
         self.assertNotIn("оставить в наблюдении", markdown)
 
     def test_urgent_news_report_does_not_use_background_hint(self) -> None:
@@ -514,7 +536,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             page_type="news_background",
             summary="Экспортная новость с прямым GR-сигналом.",
         )
-        document.business_signal = "Есть признаки изменения экспортных условий для российского рынка."
+        document.business_signal = (
+            "Есть признаки изменения экспортных условий для российского рынка."
+        )
 
         markdown = generate_markdown_report(
             [document],
@@ -523,7 +547,10 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             action_levels=["requires_attention", "watchlist"],
         )
 
-        self.assertIn("Проверить влияние пошлины/торгового регулирования на рынок и контрагентов.", markdown)
+        self.assertIn(
+            "Проверить влияние пошлины/торгового регулирования на рынок и контрагентов.",
+            markdown,
+        )
         self.assertNotIn("Оставить как отраслевой фон.", markdown)
 
     def test_credit_news_report_keeps_credit_action_even_with_trade_words(self) -> None:
@@ -549,9 +576,17 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             action_levels=["requires_attention", "watchlist"],
         )
 
-        self.assertIn("Почему важно: Обновлены условия льготного кредитования", markdown)
-        self.assertIn("Что проверить: Проверить условия кредитования, сроки и применимость для АПК.", markdown)
-        self.assertNotIn("Проверить влияние пошлины/торгового регулирования на рынок и контрагентов.", markdown)
+        self.assertIn(
+            "Почему важно: Обновлены условия льготного кредитования", markdown
+        )
+        self.assertIn(
+            "Что проверить: Проверить условия кредитования, сроки и применимость для АПК.",
+            markdown,
+        )
+        self.assertNotIn(
+            "Проверить влияние пошлины/торгового регулирования на рынок и контрагентов.",
+            markdown,
+        )
 
     def test_report_header_contains_key_counters(self) -> None:
         requires_attention_document = self._doc(
@@ -617,7 +652,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertIn("По источникам:", markdown)
         self.assertIn("## 📢 Меры и отборы", markdown)
 
-    def test_report_summary_includes_source_heat_line_for_visible_documents_only(self) -> None:
+    def test_report_summary_includes_source_heat_line_for_visible_documents_only(
+        self,
+    ) -> None:
         visible_one = self._doc(
             doc_id=801,
             source_name="Нормативные акты Краснодарского края",
@@ -733,7 +770,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertIn("Утверждены условия субсидирования", markdown)
         self.assertIn("regulation.gov.ru", markdown)
 
-    def test_krasnodar_support_order_duplicate_documents_are_collapsed_in_report(self) -> None:
+    def test_krasnodar_support_order_duplicate_documents_are_collapsed_in_report(
+        self,
+    ) -> None:
         document_one = self._doc(
             doc_id=941,
             source_name="Нормативные акты Краснодарского края",
@@ -753,7 +792,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
             region="krasnodar",
             title=(
-                "№ 183 от 13.05.2026 \"О внесении изменения в приказ министерства "
+                '№ 183 от 13.05.2026 "О внесении изменения в приказ министерства '
                 "сельского хозяйства и перерабатывающей промышленности Краснодарского "
                 "края от 19 марта 2018 г. № 70 «Об утверждении Порядка предоставления "
                 "субсидий на реализацию проектов мелиорации»"
@@ -771,11 +810,15 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             action_levels=["requires_attention", "watchlist"],
         )
 
-        self.assertEqual(markdown.count("### Субсидии на мелиорацию — Краснодарском крае"), 1)
+        self.assertEqual(
+            markdown.count("### Субсидии на мелиорацию — Краснодарском крае"), 1
+        )
         self.assertIn("admkrai.krasnodar.ru", markdown)
         self.assertNotIn("npa.krasnodar.ru/rest/files/1233833", markdown)
 
-    def test_main_focus_excludes_weak_ocr_placeholder_and_keeps_meaningful_items(self) -> None:
+    def test_main_focus_excludes_weak_ocr_placeholder_and_keeps_meaningful_items(
+        self,
+    ) -> None:
         strong_regional = self._doc(
             doc_id=913,
             source_name="Нормативные акты Краснодарского края",
@@ -820,10 +863,14 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             "Главный акцент: Изменены условия субсидирования; Минсельхоз предложил новые условия льготного кредитования АПК",
             markdown,
         )
-        self.assertNotIn("Главный акцент: НПА Краснодарского края: документ после OCR", markdown)
+        self.assertNotIn(
+            "Главный акцент: НПА Краснодарского края: документ после OCR", markdown
+        )
         self.assertNotIn("документ после OCR; Минсельхоз", markdown)
 
-    def test_report_hides_non_agro_sport_subsidy_but_keeps_agriculture_subsidy(self) -> None:
+    def test_report_hides_non_agro_sport_subsidy_but_keeps_agriculture_subsidy(
+        self,
+    ) -> None:
         sport_subsidy = self._doc(
             doc_id=916,
             source_name="Нормативные акты Краснодарского края",
@@ -867,7 +914,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertNotIn("физической культуры", markdown)
         self.assertNotIn("спорта Краснодарского края", markdown)
 
-    def test_main_focus_falls_back_to_no_urgent_when_only_weak_placeholder_exists(self) -> None:
+    def test_main_focus_falls_back_to_no_urgent_when_only_weak_placeholder_exists(
+        self,
+    ) -> None:
         weak_ocr = self._doc(
             doc_id=918,
             source_name="Нормативные акты Краснодарского края",
@@ -891,8 +940,12 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             action_levels=["requires_attention", "watchlist"],
         )
 
-        self.assertIn("Главный акцент: Срочных поводов для GR-реакции не выявлено.", markdown)
-        self.assertNotIn("Главный акцент: НПА Краснодарского края: документ после OCR", markdown)
+        self.assertIn(
+            "Главный акцент: Срочных поводов для GR-реакции не выявлено.", markdown
+        )
+        self.assertNotIn(
+            "Главный акцент: НПА Краснодарского края: документ после OCR", markdown
+        )
 
     def test_weak_strategy_items_are_hidden_from_executive_report(self) -> None:
         weak_strategy = self._doc(
@@ -970,14 +1023,30 @@ class ReportGenerationSmokeTest(unittest.TestCase):
                 summary="Итоги заявочной кампании образовательной программы.",
             ),
         ]
-        documents[0].business_signal = "Стратегический федеральный сигнал по господдержке или порядку регулирования."
-        documents[0].impact = "Документ стоит держать на наблюдении: тема может затронуть АПК."
-        documents[1].business_signal = "Стратегический федеральный сигнал по господдержке или порядку регулирования."
-        documents[1].impact = "Документ стоит держать на наблюдении: тема может затронуть АПК."
-        documents[2].business_signal = "Стратегический федеральный сигнал по господдержке или порядку регулирования."
-        documents[2].impact = "Документ стоит держать на наблюдении: тема может затронуть АПК."
-        documents[3].business_signal = "Стратегический федеральный сигнал по господдержке или порядку регулирования."
-        documents[3].impact = "Документ стоит держать на наблюдении: тема может затронуть АПК."
+        documents[0].business_signal = (
+            "Стратегический федеральный сигнал по господдержке или порядку регулирования."
+        )
+        documents[0].impact = (
+            "Документ стоит держать на наблюдении: тема может затронуть АПК."
+        )
+        documents[1].business_signal = (
+            "Стратегический федеральный сигнал по господдержке или порядку регулирования."
+        )
+        documents[1].impact = (
+            "Документ стоит держать на наблюдении: тема может затронуть АПК."
+        )
+        documents[2].business_signal = (
+            "Стратегический федеральный сигнал по господдержке или порядку регулирования."
+        )
+        documents[2].impact = (
+            "Документ стоит держать на наблюдении: тема может затронуть АПК."
+        )
+        documents[3].business_signal = (
+            "Стратегический федеральный сигнал по господдержке или порядку регулирования."
+        )
+        documents[3].impact = (
+            "Документ стоит держать на наблюдении: тема может затронуть АПК."
+        )
 
         markdown = generate_markdown_report(
             documents,
@@ -994,7 +1063,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertNotIn("ситуации в экономике", markdown)
         self.assertNotIn("Земский учитель", markdown)
 
-    def test_markdown_strategy_section_hides_budget_credit_and_naukograd_noise(self) -> None:
+    def test_markdown_strategy_section_hides_budget_credit_and_naukograd_noise(
+        self,
+    ) -> None:
         documents = [
             self._doc(
                 doc_id=935,
@@ -1017,8 +1088,12 @@ class ReportGenerationSmokeTest(unittest.TestCase):
                 summary="Финансирование наукоградов и городской инфраструктуры.",
             ),
         ]
-        documents[0].business_signal = "Стратегический федеральный сигнал по господдержке или порядку регулирования."
-        documents[1].business_signal = "Стратегический федеральный сигнал по господдержке или порядку регулирования."
+        documents[0].business_signal = (
+            "Стратегический федеральный сигнал по господдержке или порядку регулирования."
+        )
+        documents[1].business_signal = (
+            "Стратегический федеральный сигнал по господдержке или порядку регулирования."
+        )
 
         markdown = generate_markdown_report(
             documents,
@@ -1053,9 +1128,13 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         )
 
         self.assertIn("## 🏛 Стратегические сигналы", markdown)
-        self.assertIn("Правительство расширило программу господдержки экспортеров АПК", markdown)
+        self.assertIn(
+            "Правительство расширило программу господдержки экспортеров АПК", markdown
+        )
 
-    def test_markdown_strategy_section_hides_novak_macro_meeting_with_food_in_raw_text(self) -> None:
+    def test_markdown_strategy_section_hides_novak_macro_meeting_with_food_in_raw_text(
+        self,
+    ) -> None:
         document = self._doc(
             doc_id=937,
             source_name="Правительство РФ - новости",
@@ -1080,7 +1159,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         )
 
         self.assertIn("Новых стратегических сигналов не найдено.", markdown)
-        self.assertNotIn("Александр Новак провёл совещание по ситуации в экономике", markdown)
+        self.assertNotIn(
+            "Александр Новак провёл совещание по ситуации в экономике", markdown
+        )
 
     def test_report_header_uses_explicit_period_label_for_seven_days(self) -> None:
         document = self._doc(
@@ -1199,7 +1280,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             visible_documents[0].title,
             "О внесении изменений в порядок предоставления субсидий сельхозтоваропроизводителям",
         )
-        self.assertEqual(visible_documents[0].deadline_text, "Срок подачи заявок до 30.06.2026.")
+        self.assertEqual(
+            visible_documents[0].deadline_text, "Срок подачи заявок до 30.06.2026."
+        )
 
     def test_report_deduplicates_documents_with_same_title(self) -> None:
         short_document = self._doc(
@@ -1233,7 +1316,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
 
         visible_documents = report_view.flatten()
         self.assertEqual(len(visible_documents), 1)
-        self.assertEqual(visible_documents[0].url, "https://msh.krasnodar.ru/documents/subsidy-full")
+        self.assertEqual(
+            visible_documents[0].url, "https://msh.krasnodar.ru/documents/subsidy-full"
+        )
 
     def test_report_deduplicates_government_news_and_docs_by_shared_id(self) -> None:
         news_document = self._doc(
@@ -1392,9 +1477,13 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         document.npa_number = "22-68850-00258-Р"
         document.deadline_text = "Прием заявок до 30.06.2026."
         document.terms_text = "Срок кредита: До 12 месяцев."
-        document.business_signal = "Активная федеральная мера поддержки, действует на регулярной основе"
+        document.business_signal = (
+            "Активная федеральная мера поддержки, действует на регулярной основе"
+        )
 
-        with patch("app.reports.markdown_report.list_document_enrichments", return_value={}):
+        with patch(
+            "app.reports.markdown_report.list_document_enrichments", return_value={}
+        ):
             markdown = generate_markdown_report(
                 [document],
                 report_date="2026-04-30",
@@ -1467,7 +1556,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         document.support_status = "inactive"
         document.application_status = "open"
         document.deadline_text = "Прием заявок до 30.06.2026."
-        document.risk_notes = "Срок найден в описании неактивной меры; не является текущим окном подачи."
+        document.risk_notes = (
+            "Срок найден в описании неактивной меры; не является текущим окном подачи."
+        )
 
         markdown = generate_markdown_report(
             [document],
@@ -1479,7 +1570,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertNotIn("Action level", markdown)
         self.assertIn("Почему важно:", markdown)
 
-    def test_background_gisp_measures_are_hidden_from_visible_watchlist_report(self) -> None:
+    def test_background_gisp_measures_are_hidden_from_visible_watchlist_report(
+        self,
+    ) -> None:
         inactive_document = self._doc(
             doc_id=1,
             source_name="ГИСП - меры поддержки АПК",
@@ -1491,7 +1584,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             summary="Неактивная мера поддержки.",
         )
         inactive_document.support_status = "inactive"
-        inactive_document.business_signal = "Неактивная мера поддержки: оставить в справочном блоке"
+        inactive_document.business_signal = (
+            "Неактивная мера поддержки: оставить в справочном блоке"
+        )
 
         non_target_document = self._doc(
             doc_id=2,
@@ -1505,7 +1600,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         )
         non_target_document.support_status = "active"
         non_target_document.application_status = "regular"
-        non_target_document.business_signal = "Активная мера поддержки вне целевой географии; оставлена для справки."
+        non_target_document.business_signal = (
+            "Активная мера поддержки вне целевой географии; оставлена для справки."
+        )
 
         report_view = build_report_view(
             [inactive_document, non_target_document],
@@ -1515,7 +1612,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
 
         self.assertEqual(report_view.total_visible, 0)
 
-    def test_report_suppresses_evergreen_support_references_but_keeps_fresh_regional_order(self) -> None:
+    def test_report_suppresses_evergreen_support_references_but_keeps_fresh_regional_order(
+        self,
+    ) -> None:
         evergreen_measure = self._doc(
             doc_id=10,
             source_name="ГИСП - меры поддержки АПК",
@@ -1628,7 +1727,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
 
         self.assertLess(
             markdown.index("https://npa.krasnodar.ru/rest/files/1233677"),
-            markdown.index("http://mshsk.ru/gospodderzhka/subsidies-for-reimbursement-egg.php"),
+            markdown.index(
+                "http://mshsk.ru/gospodderzhka/subsidies-for-reimbursement-egg.php"
+            ),
         )
 
     def test_report_keeps_support_reference_with_change_signal(self) -> None:
@@ -1654,7 +1755,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
 
         self.assertIn("Субсидии производителям сельскохозяйственной техники", markdown)
 
-    def test_report_header_counts_rendered_items_after_evergreen_suppression(self) -> None:
+    def test_report_header_counts_rendered_items_after_evergreen_suppression(
+        self,
+    ) -> None:
         urgent_document = self._doc(
             doc_id=20,
             source_name="Regulation.gov.ru",
@@ -1740,11 +1843,15 @@ class ReportGenerationSmokeTest(unittest.TestCase):
 
         self.assertIn("Проект НПА на публичном обсуждении", markdown)
         self.assertIn("Проект НПА вынесен на публичное обсуждение.", markdown)
-        self.assertIn("Проверить влияние проекта и необходимость позиции до 26.05.2026.", markdown)
+        self.assertIn(
+            "Проверить влияние проекта и необходимость позиции до 26.05.2026.", markdown
+        )
         self.assertNotIn("Открыт прием заявок", markdown)
         self.assertNotIn("Проверить сроки подачи", markdown)
 
-    def test_telegram_digest_includes_business_facts_for_requires_attention(self) -> None:
+    def test_telegram_digest_includes_business_facts_for_requires_attention(
+        self,
+    ) -> None:
         from app.notify import telegram
 
         document = self._doc(
@@ -1761,7 +1868,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         document.application_status = "regular"
         document.deadline_text = None
         document.terms_text = "Срок кредита: До 12 месяцев."
-        document.business_signal = "Активная федеральная мера поддержки, действует на регулярной основе"
+        document.business_signal = (
+            "Активная федеральная мера поддержки, действует на регулярной основе"
+        )
 
         captured: list[str] = []
 
@@ -1770,7 +1879,10 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             return True
 
         with patch("app.notify.telegram.send_message", side_effect=_capture):
-            with patch("app.notify.telegram_formatter.list_document_enrichments", return_value={}):
+            with patch(
+                "app.notify.telegram_formatter.list_document_enrichments",
+                return_value={},
+            ):
                 sent = telegram.send_digest([document])
 
         self.assertTrue(sent)
@@ -1852,10 +1964,14 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertIn("Новых пунктов, требующих внимания, не найдено.", markdown)
         self.assertIn("## ⚖️ Региональные изменения", markdown)
         self.assertIn("НПА Краснодарского края: документ после OCR", markdown)
-        urgent_block = markdown.split("## 🚨 Требует внимания", 1)[1].split("## 📢 Меры и отборы", 1)[0]
+        urgent_block = markdown.split("## 🚨 Требует внимания", 1)[1].split(
+            "## 📢 Меры и отборы", 1
+        )[0]
         self.assertNotIn("НПА Краснодарского края: документ после OCR", urgent_block)
 
-    def test_fallback_titled_weak_ocr_placeholder_is_not_rendered_in_urgent_section(self) -> None:
+    def test_fallback_titled_weak_ocr_placeholder_is_not_rendered_in_urgent_section(
+        self,
+    ) -> None:
         document = self._doc(
             doc_id=3,
             source_name="Нормативные акты Краснодарского края",
@@ -1878,8 +1994,12 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             action_levels=["requires_attention", "watchlist"],
         )
 
-        urgent_block = markdown.split("## 🚨 Требует внимания", 1)[1].split("## 📢 Меры и отборы", 1)[0]
-        regional_block = markdown.split("## ⚖️ Региональные изменения", 1)[1].split("## 🏛 Стратегические сигналы", 1)[0]
+        urgent_block = markdown.split("## 🚨 Требует внимания", 1)[1].split(
+            "## 📢 Меры и отборы", 1
+        )[0]
+        regional_block = markdown.split("## ⚖️ Региональные изменения", 1)[1].split(
+            "## 🏛 Стратегические сигналы", 1
+        )[0]
         self.assertNotIn("НПА Краснодарского края: документ после OCR", urgent_block)
         self.assertIn("НПА Краснодарского края: документ после OCR", regional_block)
 
@@ -1894,7 +2014,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             page_type="news_background",
             summary="Рыночная новость.",
         )
-        document.business_signal = "Рыночный или отраслевой фон без прямого регуляторного сигнала."
+        document.business_signal = (
+            "Рыночный или отраслевой фон без прямого регуляторного сигнала."
+        )
 
         markdown = generate_markdown_report(
             [document],
@@ -1918,7 +2040,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             summary="Обзор рынка, фрахта и экспортных отгрузок.",
         )
         noisy_document.business_signal = "Новостной предвестник возможных изменений господдержки, экспорта или регулирования."
-        noisy_document.raw_text = "Еженедельный обзор рынка зерна, ставки фрахта и оценки аналитиков."
+        noisy_document.raw_text = (
+            "Еженедельный обзор рынка зерна, ставки фрахта и оценки аналитиков."
+        )
 
         signal_document = self._doc(
             doc_id=2,
@@ -1941,7 +2065,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         )
 
         self.assertNotIn("Рейтинг экспортных отгрузок", markdown)
-        self.assertIn("Правительство расширило программу господдержки экспортеров АПК", markdown)
+        self.assertIn(
+            "Правительство расширило программу господдержки экспортеров АПК", markdown
+        )
 
     def test_report_uses_role_specific_action_hints(self) -> None:
         support_document = self._doc(
@@ -1988,7 +2114,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         )
 
         self.assertIn("Проверить сроки подачи и ответственного.", markdown)
-        self.assertIn("Проверить изменения порядка субсидирования и сроки вступления.", markdown)
+        self.assertIn(
+            "Проверить изменения порядка субсидирования и сроки вступления.", markdown
+        )
         self.assertIn("Оставить как отраслевой фон.", markdown)
 
     def test_report_clips_long_titles_cleanly(self) -> None:
@@ -2087,7 +2215,9 @@ class StrategyNoiseMdRegressionTest(unittest.TestCase):
             action_levels=["requires_attention", "watchlist"],
         )
 
-    def test_passenger_rail_with_tariff_in_raw_text_absent_from_strategy_section(self) -> None:
+    def test_passenger_rail_with_tariff_in_raw_text_absent_from_strategy_section(
+        self,
+    ) -> None:
         document = self._strategy_doc(
             doc_id=500,
             title="Правительство утвердило Концепцию развития перевозок пассажиров железнодорожным транспортом",
@@ -2101,7 +2231,9 @@ class StrategyNoiseMdRegressionTest(unittest.TestCase):
         self.assertIn("Новых стратегических сигналов не найдено.", markdown)
         self.assertNotIn("пассажиров железнодорожным", markdown)
 
-    def test_regional_budget_credits_with_finance_in_raw_text_absent_from_strategy_section(self) -> None:
+    def test_regional_budget_credits_with_finance_in_raw_text_absent_from_strategy_section(
+        self,
+    ) -> None:
         document = self._strategy_doc(
             doc_id=501,
             title="Правительство списало задолженность по бюджетным кредитам ещё 21 региону",
@@ -2115,7 +2247,9 @@ class StrategyNoiseMdRegressionTest(unittest.TestCase):
         self.assertIn("Новых стратегических сигналов не найдено.", markdown)
         self.assertNotIn("бюджетным кредитам", markdown)
 
-    def test_apk_export_support_with_selkhozprodukt_in_raw_text_visible_in_strategy_section(self) -> None:
+    def test_apk_export_support_with_selkhozprodukt_in_raw_text_visible_in_strategy_section(
+        self,
+    ) -> None:
         document = self._strategy_doc(
             doc_id=502,
             title="Правительство расширило программу поддержки экспорта АПК",
@@ -2126,10 +2260,14 @@ class StrategyNoiseMdRegressionTest(unittest.TestCase):
             ),
         )
         markdown = self._generate([document])
-        self.assertIn("Правительство расширило программу поддержки экспорта АПК", markdown)
+        self.assertIn(
+            "Правительство расширило программу поддержки экспорта АПК", markdown
+        )
         self.assertNotIn("Новых стратегических сигналов не найдено.", markdown)
 
-    def test_fertilizer_regulation_with_udobrenie_in_raw_text_visible_in_strategy_section(self) -> None:
+    def test_fertilizer_regulation_with_udobrenie_in_raw_text_visible_in_strategy_section(
+        self,
+    ) -> None:
         document = self._strategy_doc(
             doc_id=503,
             title="Правительство ввело квоты на экспорт азотных удобрений",
@@ -2139,7 +2277,9 @@ class StrategyNoiseMdRegressionTest(unittest.TestCase):
             ),
         )
         markdown = self._generate([document])
-        self.assertIn("Правительство ввело квоты на экспорт азотных удобрений", markdown)
+        self.assertIn(
+            "Правительство ввело квоты на экспорт азотных удобрений", markdown
+        )
 
 
 class TitleDisambiguationReportTest(unittest.TestCase):
@@ -2193,7 +2333,9 @@ class TitleDisambiguationReportTest(unittest.TestCase):
             action_levels=["requires_attention", "watchlist"],
         )
 
-    def test_two_documents_colliding_on_compressed_title_render_with_distinct_headings(self) -> None:
+    def test_two_documents_colliding_on_compressed_title_render_with_distinct_headings(
+        self,
+    ) -> None:
         doc1 = self._doc(
             doc_id=601,
             title="Об утверждении порядка предоставления субсидий на молочное скотоводство",
@@ -2274,7 +2416,9 @@ class TitleDisambiguationReportTest(unittest.TestCase):
 
         self.assertTrue(any("документ 9a3" in title for title in rendered_titles))
         self.assertTrue(any("документ c24" in title for title in rendered_titles))
-        self.assertFalse(any("(агропромышленном)" in title for title in rendered_titles))
+        self.assertFalse(
+            any("(агропромышленном)" in title for title in rendered_titles)
+        )
         self.assertFalse(any("(мелиорации)" in title for title in rendered_titles))
 
     def test_unique_title_has_no_suffix_appended(self) -> None:
@@ -2289,7 +2433,9 @@ class TitleDisambiguationReportTest(unittest.TestCase):
         self.assertNotIn("(№", markdown)
 
     def test_original_document_title_is_not_mutated(self) -> None:
-        original_title = "Об утверждении порядка предоставления субсидий на молочное скотоводство"
+        original_title = (
+            "Об утверждении порядка предоставления субсидий на молочное скотоводство"
+        )
         doc1 = self._doc(
             doc_id=640,
             title=original_title,

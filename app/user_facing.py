@@ -35,7 +35,9 @@ _NPA_IN_TITLE_RE = re.compile(r"[№#]\s*(\d[\d/.\-]*\d|\d{1,6})")
 _DATE_IN_TITLE_RE = re.compile(r"\b(\d{1,2})\.(\d{2})(?:\.\d{2,4})?\b")
 _IBLOCK_URL_RE = re.compile(r"/iblock/([a-zA-Z0-9]{2,8})/")
 
-SUBSIDY_RE = re.compile(r"субсид|грант|финансир|кредит|лизинг|возмещ|льготн", re.IGNORECASE)
+SUBSIDY_RE = re.compile(
+    r"субсид|грант|финансир|кредит|лизинг|возмещ|льготн", re.IGNORECASE
+)
 SELECTION_RE = re.compile(r"отбор|заяв|конкурс|прием", re.IGNORECASE)
 SUPPORT_RE = re.compile(r"поддержк|мер(а|ы)", re.IGNORECASE)
 EXPORT_RESTRICTION_RE = re.compile(
@@ -110,7 +112,11 @@ def compress_visible_title(
     if not title:
         title = "Документ требует проверки"
     compressed = _compress_bureaucratic_title(document, title)
-    return _clip_text(compressed, max_chars or TITLE_MAX_CHARS) if max_chars is not None else compressed
+    return (
+        _clip_text(compressed, max_chars or TITLE_MAX_CHARS)
+        if max_chars is not None
+        else compressed
+    )
 
 
 def disambiguate_visible_titles(
@@ -207,7 +213,9 @@ def _suffix_title_keyword(doc: RawDocument) -> str:
     candidates = [
         w
         for w in re.sub(r"[^\w]", " ", original.lower()).split()
-        if len(w) >= 5 and w not in compressed_words and w not in _MEANINGLESS_TITLE_SUFFIX_WORDS
+        if len(w) >= 5
+        and w not in compressed_words
+        and w not in _MEANINGLESS_TITLE_SUFFIX_WORDS
     ]
     for word in reversed(candidates):
         if len(word) <= 20:
@@ -253,7 +261,9 @@ def build_executive_reason(
         if compressed:
             return _clip_text(compressed, max_chars)
     if fallback_text:
-        return _clip_text(_compress_freeform_reason(fallback_text, document=document), max_chars)
+        return _clip_text(
+            _compress_freeform_reason(fallback_text, document=document), max_chars
+        )
     return ""
 
 
@@ -350,7 +360,9 @@ def _looks_like_parser_residue_summary(text: str | None) -> bool:
     normalized = _normalize_text(text).lower()
     if not normalized:
         return False
-    return sum(1 for marker in PARSER_RESIDUE_SUMMARY_MARKERS if marker in normalized) >= 2
+    return (
+        sum(1 for marker in PARSER_RESIDUE_SUMMARY_MARKERS if marker in normalized) >= 2
+    )
 
 
 def has_meaningful_extracted_ocr_text(document: PresentationDocument) -> bool:
@@ -400,7 +412,11 @@ def _compress_bureaucratic_title(document: PresentationDocument, title: str) -> 
     if _looks_like_selection_announcement(document, combined):
         return "Открыт прием заявок"
     if "о реализации мероприятий" in lowered:
-        return "Запущены новые меры поддержки" if _is_support_context(combined) else "Запущены новые меры"
+        return (
+            "Запущены новые меры поддержки"
+            if _is_support_context(combined)
+            else "Запущены новые меры"
+        )
     if "об утверждении порядка" in lowered or "утверждении порядка" in lowered:
         return _approval_headline(document, combined)
     if "о внесении изменений" in lowered or "внесении изменений" in lowered:
@@ -483,7 +499,9 @@ def _deterministic_action(
 
 def _deterministic_summary(document: PresentationDocument) -> str:
     if is_weak_ocr_placeholder_document(document):
-        return "Текст после OCR недостаточен для уверенного выделения условий документа."
+        return (
+            "Текст после OCR недостаточен для уверенного выделения условий документа."
+        )
 
     title_summary = _summary_from_title(document)
     if title_summary:
@@ -556,19 +574,29 @@ def _detect_deterministic_intent(
         return INTENT_SUPPORT_CHANGE
     if _looks_like_mcx_official_legislative_watchlist(document, combined):
         return INTENT_OFFICIAL_LEGISLATION_WATCHLIST
-    if source_role == "news_signals" and (action_level == "watchlist" or section == "news_signals"):
+    if source_role == "news_signals" and (
+        action_level == "watchlist" or section == "news_signals"
+    ):
         return INTENT_MARKET_OBSERVATION
     if section == "strategy_signals" or source_role == "strategy":
         return INTENT_STRATEGY
     if source_role == "regional_npa" and page_type == "new_rule":
-        if _looks_like_credit_support_context(combined) and _contains_change_signal(combined):
+        if _looks_like_credit_support_context(combined) and _contains_change_signal(
+            combined
+        ):
             return INTENT_CREDIT_SUPPORT
         if _looks_like_subsidy(combined):
             return INTENT_REGIONAL_SUBSIDY
         return INTENT_REGIONAL_RULE
-    if source_role == "support_documents" and _region_label(document) and _looks_like_subsidy(combined):
+    if (
+        source_role == "support_documents"
+        and _region_label(document)
+        and _looks_like_subsidy(combined)
+    ):
         return INTENT_REGIONAL_SUBSIDY
-    if _looks_like_credit_support_context(combined) and _contains_change_signal(combined):
+    if _looks_like_credit_support_context(combined) and _contains_change_signal(
+        combined
+    ):
         return INTENT_CREDIT_SUPPORT
     if _looks_like_selection(combined) and _contains_change_signal(combined):
         return INTENT_SELECTION_CHANGE
@@ -591,18 +619,34 @@ def _summary_from_title(document: PresentationDocument) -> str:
     region_label = _region_label(document)
 
     if "льготн" in lowered and "кредит" in lowered:
-        if "минсельхоз" in lowered and any(marker in lowered for marker in ("предлож", "обнов", "новые условия")):
+        if "минсельхоз" in lowered and any(
+            marker in lowered for marker in ("предлож", "обнов", "новые условия")
+        ):
             return "Минсельхоз предложил обновить условия льготного кредитования АПК."
         return "Обновляются условия льготного кредитования АПК."
-    if "субсид" in lowered and any(marker in lowered for marker in ("внесении изменений", "о внесении изменений", "изменени")):
+    if "субсид" in lowered and any(
+        marker in lowered
+        for marker in ("внесении изменений", "о внесении изменений", "изменени")
+    ):
         if region_label:
             return f"Изменён порядок предоставления субсидий в {region_label}."
         return "Изменён порядок предоставления субсидий."
-    if "субсид" in lowered and any(marker in lowered for marker in ("утвержден", "утверждён", "утверждены")):
+    if "субсид" in lowered and any(
+        marker in lowered for marker in ("утвержден", "утверждён", "утверждены")
+    ):
         if region_label:
             return f"Утверждены условия субсидирования в {region_label}."
         return "Утверждены условия субсидирования."
-    if any(marker in lowered for marker in ("прием заявок", "приём заявок", "отбор заявок", "конкурсный отбор", "объявлен отбор")):
+    if any(
+        marker in lowered
+        for marker in (
+            "прием заявок",
+            "приём заявок",
+            "отбор заявок",
+            "конкурсный отбор",
+            "объявлен отбор",
+        )
+    ):
         if "субсид" in lowered:
             return "Открыт приём заявок на субсидии для АПК."
         return "Открыт приём заявок по профильной мере поддержки."
@@ -670,7 +714,9 @@ def _action_for_intent(
     if intent == INTENT_OFFICIAL_LEGISLATION_WATCHLIST:
         return "Проверить, какие законопроекты одобрены и есть ли влияние на регулирование."
     if intent == INTENT_TRADE_REGULATION:
-        return "Проверить влияние пошлины/торгового регулирования на рынок и контрагентов."
+        return (
+            "Проверить влияние пошлины/торгового регулирования на рынок и контрагентов."
+        )
     if intent == INTENT_SELECTION_CHANGE:
         return "Проверить условия и сроки отбора."
     if intent == INTENT_SUPPORT_MEASURE:
@@ -700,7 +746,10 @@ def _combined_text(document: PresentationDocument, *, title: str | None = None) 
 def _is_official_mcx_news(document: PresentationDocument) -> bool:
     source_name = _get_value(document, "source_name")
     url = _get_value(document, "url").lower()
-    return source_name == "Минсельхоз России - новости" or "mcx.gov.ru/press-service/news/" in url
+    return (
+        source_name == "Минсельхоз России - новости"
+        or "mcx.gov.ru/press-service/news/" in url
+    )
 
 
 def _looks_like_mcx_official_support_watchlist(
@@ -727,10 +776,14 @@ def _looks_like_mcx_official_legislative_watchlist(
     if _action_level(document) != "watchlist":
         return False
     legislative_markers = ("законопроект", "совет федерации", "госдум", "федеральн")
-    return "апк" in combined and any(marker in combined for marker in legislative_markers)
+    return "апк" in combined and any(
+        marker in combined for marker in legislative_markers
+    )
 
 
-def _looks_like_selection_announcement(document: PresentationDocument, combined: str) -> bool:
+def _looks_like_selection_announcement(
+    document: PresentationDocument, combined: str
+) -> bool:
     if _page_type(document) == "selection_announcement":
         return True
     title = _normalize_text(_get_value(document, "title")).lower()
@@ -755,7 +808,11 @@ def _is_support_measure_context(document: PresentationDocument, text: str) -> bo
     return (
         _source_role(document) in {"active_support_measures", "support_documents"}
         or _page_type(document) in {"measure_card", "selection_announcement"}
-        or (_is_support_context(text) and _get_value(document, "application_status").lower() in {"open", "regular"})
+        or (
+            _is_support_context(text)
+            and _get_value(document, "application_status").lower()
+            in {"open", "regular"}
+        )
     )
 
 
@@ -797,19 +854,29 @@ def _discussion_deadline_label(document: PresentationDocument) -> str:
 
 
 def _looks_like_credit_support_context(text: str) -> bool:
-    return bool(re.search(r"льготн\w*\s+кредит|кредитован|заем|займ", text, re.IGNORECASE))
+    return bool(
+        re.search(r"льготн\w*\s+кредит|кредитован|заем|займ", text, re.IGNORECASE)
+    )
 
 
 def _contains_change_signal(text: str) -> bool:
     return any(
         marker in text
-        for marker in ("измен", "обнов", "новые условия", "новый порядок", "новые правила")
+        for marker in (
+            "измен",
+            "обнов",
+            "новые условия",
+            "новый порядок",
+            "новые правила",
+        )
     )
 
 
 def _is_technical_ocr_placeholder(title: str) -> bool:
     normalized = title.lower()
-    return normalized.startswith("document '") and "requires ocr extraction" in normalized
+    return (
+        normalized.startswith("document '") and "requires ocr extraction" in normalized
+    )
 
 
 def _ocr_fallback_title(document: PresentationDocument) -> str:
@@ -824,7 +891,9 @@ def _ocr_fallback_title(document: PresentationDocument) -> str:
         if _normalize_text(part)
     )
     if _source_role(document) == "regional_npa" and (
-        _get_value(document, "region") == "krasnodar" or "краснодар" in haystack or "krasnodar" in haystack
+        _get_value(document, "region") == "krasnodar"
+        or "краснодар" in haystack
+        or "krasnodar" in haystack
     ):
         return OCR_FALLBACK_KRASNODAR_TITLE
     return OCR_FALLBACK_GENERIC_TITLE

@@ -50,20 +50,129 @@ SHORT_TITLE_SKIP_VALUES = {
     "далее",
 }
 NUMERIC_TITLE_REGEX = re.compile(r"^\d{1,3}$")
+GISP_LISTING_PATH_RE = re.compile(r"^/nmp/main/(?P<page>\d+)/?$", re.IGNORECASE)
+GISP_MEASURE_PATH_RE = re.compile(r"^/nmp/measure/[^/?#]+/?$", re.IGNORECASE)
+GISP_MAX_PAGINATION_PAGES = 5
 
 
 class GenericHTMLSource(BaseSource):
     def fetch_items(self) -> list[CollectedItem]:
+        if self._is_gisp_source():
+            return self._fetch_gisp_items()
         response = self.get(self.config.url)
         soup = BeautifulSoup(response.text, "html.parser")
         return self._extract_items_from_soup(soup, response.url)
 
-    def _extract_items_from_soup(
-        self, soup: BeautifulSoup, base_url: str
-    ) -> list[CollectedItem]:
+    def _fetch_gisp_items(self) -> list[CollectedItem]:
         items: list[CollectedItem] = []
         seen_urls: set[str] = set()
+        aggregated_stats: dict[str, int | str] = {}
+        next_url = self.config.url
+        visited_pages: set[str] = set()
+
+        for _ in range(GISP_MAX_PAGINATION_PAGES):
+            remaining = self._remaining_item_budget(items)
+            if remaining == 0:
+                break
+            response = self.get(next_url)
+            if response.url in visited_pages:
+                break
+            visited_pages.add(response.url)
+            soup = BeautifulSoup(response.text, "html.parser")
+            page_items = self._extract_items_from_soup(
+                soup,
+                response.url,
+                seen_urls=seen_urls,
+                max_items_override=remaining,
+            )
+            self._merge_fetch_stats(aggregated_stats, self.last_fetch_stats)
+            items.extend(page_items)
+            if not page_items:
+                break
+            if self._remaining_item_budget(items) == 0:
+                break
+            next_page_url = self._next_gisp_page_url(response.url)
+            if next_page_url is None or next_page_url in visited_pages:
+                break
+            next_url = next_page_url
+
+        if aggregated_stats:
+            aggregated_stats["items_collected_count"] = len(items)
+            self.last_fetch_stats = aggregated_stats
+        return items
+
+    def _remaining_item_budget(self, items: list[CollectedItem]) -> int | None:
         max_items = self.config.max_items
+        if max_items is None:
+            return None
+        return max(0, max_items - len(items))
+
+    def _next_gisp_page_url(self, url: str) -> str | None:
+        parsed = urlparse(url)
+        match = GISP_LISTING_PATH_RE.fullmatch(parsed.path)
+        if match is None:
+            return None
+        current_page = int(match.group("page"))
+        next_path = GISP_LISTING_PATH_RE.sub(f"/nmp/main/{current_page + 1}", parsed.path)
+        return parsed._replace(path=next_path).geturl()
+
+    def _merge_fetch_stats(
+        self,
+        aggregate: dict[str, int | str],
+        page_stats: dict[str, int | str],
+    ) -> None:
+        if not page_stats:
+            return
+        sample_keys = ("navigation", "archive", "external", "duplicate", "unsupported", "pdf_filtered", "docx_filtered")
+        existing_samples = self._decode_filtered_samples(str(aggregate.get("filtered_samples", "")))
+        new_samples = self._decode_filtered_samples(str(page_stats.get("filtered_samples", "")))
+        for key, value in page_stats.items():
+            if key == "filtered_samples":
+                continue
+            if isinstance(value, int):
+                aggregate[key] = int(aggregate.get(key, 0)) + value
+        for key in sample_keys:
+            bucket = existing_samples.setdefault(key, [])
+            for sample in new_samples.get(key, []):
+                if sample in bucket:
+                    continue
+                if len(bucket) >= 2:
+                    break
+                bucket.append(sample)
+        filtered_payload = {key: value for key, value in existing_samples.items() if value}
+        aggregate["filtered_samples"] = json.dumps(filtered_payload, ensure_ascii=False) if filtered_payload else ""
+
+    @staticmethod
+    def _decode_filtered_samples(raw_value: str) -> dict[str, list[str]]:
+        if not raw_value:
+            return {}
+        try:
+            payload = json.loads(raw_value)
+        except json.JSONDecodeError:
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        decoded: dict[str, list[str]] = {}
+        for key, value in payload.items():
+            if isinstance(value, list):
+                decoded[str(key)] = [str(item) for item in value[:2]]
+        return decoded
+
+    def _is_gisp_source(self) -> bool:
+        parsed = urlparse(self.config.url.lower())
+        return parsed.netloc == "gisp.gov.ru" and GISP_LISTING_PATH_RE.fullmatch(parsed.path) is not None
+
+    def _extract_items_from_soup(
+        self,
+        soup: BeautifulSoup,
+        base_url: str,
+        *,
+        seen_urls: set[str] | None = None,
+        max_items_override: int | None = None,
+    ) -> list[CollectedItem]:
+        items: list[CollectedItem] = []
+        local_seen_urls = seen_urls if seen_urls is not None else set()
+        max_items = self.config.max_items if max_items_override is None else max_items_override
         links_found_count = 0
         links_filtered_count = 0
         document_type_counts: dict[str, int] = {"pdf": 0, "docx": 0, "doc": 0, "html": 0, "xml": 0, "unknown": 0}
@@ -89,7 +198,7 @@ class GenericHTMLSource(BaseSource):
                 links_filtered_count += 1
                 self._track_filter(filtered_reason_counts, filtered_samples, "unsupported", link.get("href", ""))
                 continue
-            if normalized_url in seen_urls:
+            if normalized_url in local_seen_urls:
                 links_filtered_count += 1
                 self._track_filter(filtered_reason_counts, filtered_samples, "duplicate", normalized_url)
                 continue
@@ -120,7 +229,7 @@ class GenericHTMLSource(BaseSource):
                     document_type=document_type,
                 )
             )
-            seen_urls.add(normalized_url)
+            local_seen_urls.add(normalized_url)
             if max_items is not None and len(items) >= max_items:
                 break
 
@@ -228,6 +337,8 @@ class GenericHTMLSource(BaseSource):
         return "unknown"
 
     def _should_include_url(self, url: str, base_url: str, title: str) -> bool:
+        if self._is_gisp_source():
+            return self._should_include_gisp_url(url, base_url)
         base_host = urlparse(base_url).netloc.lower()
         target = urlparse(url)
         target_host = target.netloc.lower()
@@ -249,6 +360,16 @@ class GenericHTMLSource(BaseSource):
             if any(pattern in combined for pattern in patterns):
                 return False
         return True
+
+    def _should_include_gisp_url(self, url: str, base_url: str) -> bool:
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"}:
+            return False
+        if parsed.netloc.lower() != "gisp.gov.ru":
+            return False
+        if url.rstrip("/") == base_url.rstrip("/"):
+            return False
+        return GISP_MEASURE_PATH_RE.fullmatch(parsed.path) is not None
 
     def _should_include_title(self, title: str) -> bool:
         normalized = title.strip().lower()

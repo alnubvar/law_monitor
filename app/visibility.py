@@ -102,7 +102,10 @@ def effective_user_action_level(document: RawDocument) -> str | None:
     )
     if _is_ahstep_domain_excluded(document, action_level=guarded_action_level):
         return "background"
-    if guarded_action_level == "requires_attention" and is_weak_ocr_placeholder_document(document):
+    if (
+        guarded_action_level == "requires_attention"
+        and is_weak_ocr_placeholder_document(document)
+    ):
         return "watchlist"
     return guarded_action_level
 
@@ -185,7 +188,9 @@ def should_show_document(
         action_level=display_action_level,
     ) or _is_ahstep_domain_excluded(document, action_level=document.action_level):
         return False
-    if get_source_role(document.source_name) == "strategy" and not _is_executive_strategy_relevant(document):
+    if get_source_role(
+        document.source_name
+    ) == "strategy" and not _is_executive_strategy_relevant(document):
         return False
 
     if surface == "report":
@@ -197,7 +202,10 @@ def should_show_document(
             include_registries=include_registries,
         ):
             return False
-        if visibility_bucket(document) == "market_background" and not include_market_background:
+        if (
+            visibility_bucket(document) == "market_background"
+            and not include_market_background
+        ):
             return False
         return True
 
@@ -210,7 +218,10 @@ def should_show_document(
             return False
         if display_action_level == "requires_attention":
             return visibility_bucket(document) == "requires_attention"
-        return display_action_level == "watchlist" and visibility_bucket(document) in TELEGRAM_WATCHLIST_BUCKETS
+        return (
+            display_action_level == "watchlist"
+            and visibility_bucket(document) in TELEGRAM_WATCHLIST_BUCKETS
+        )
 
     if display_action_level == "requires_attention":
         return visibility_bucket(document) == "requires_attention"
@@ -222,7 +233,9 @@ def should_show_document(
         include_registries=include_registries,
     ):
         return False
-    return visibility_bucket(document) != "market_background" or include_market_background
+    return (
+        visibility_bucket(document) != "market_background" or include_market_background
+    )
 
 
 def _is_executive_strategy_relevant(document: RawDocument) -> bool:
@@ -232,7 +245,9 @@ def _is_executive_strategy_relevant(document: RawDocument) -> bool:
     title_summary_text = " ".join(part for part in (title, summary) if part)
     if not has_ahstep_domain_relevance(title, summary, raw_text):
         return False
-    if MACRO_STRATEGY_TITLE_NOISE_RE.search(title_summary_text) and not has_ahstep_domain_relevance(title_summary_text):
+    if MACRO_STRATEGY_TITLE_NOISE_RE.search(
+        title_summary_text
+    ) and not has_ahstep_domain_relevance(title_summary_text):
         return False
     return True
 
@@ -397,7 +412,9 @@ def _prefer_user_facing_document(left: RawDocument, right: RawDocument) -> RawDo
     return left
 
 
-def _user_facing_document_score(document: RawDocument) -> tuple[int, int, int, int, int]:
+def _user_facing_document_score(
+    document: RawDocument,
+) -> tuple[int, int, int, int, int]:
     return (
         _government_docs_preference(document),
         _document_text_quality_score(document),

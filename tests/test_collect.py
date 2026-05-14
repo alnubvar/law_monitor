@@ -9,6 +9,7 @@ import requests
 
 from app.models import CollectedItem, ExtractionResult, RawDocument, SourceConfig
 from app.pipeline.collect import run_collect_with_options
+from app.sources.generic_html_source import GenericHTMLSource
 from app.sources.krasnodar_source import KrasnodarSource
 from app.storage import (
     init_db,
@@ -872,6 +873,85 @@ class CollectAuditTest(unittest.TestCase):
             urls,
         )
         self.assertEqual(source.last_fetch_stats["harvested_attachment_count"], 1)
+
+    def test_gisp_collect_saves_only_measure_cards_from_noisy_paginated_listing(self) -> None:
+        db_path = self._db_path("collect_gisp_measure_cards_only.db")
+        init_db(db_path)
+        source_config = SourceConfig(
+            name="ГИСП - меры поддержки АПК",
+            url="https://gisp.gov.ru/nmp/main/1?recommended=0&searchstr=%D0%90%D0%9F%D0%9A",
+            level="support_measures",
+            region="federal",
+            source_role="active_support_measures",
+            parser="generic_html",
+            description="test",
+            max_items=3,
+            deny_patterns=["recommended=", "page="],
+            allow_patterns=["nmp", "support", "measure", "apk"],
+        )
+        source = GenericHTMLSource(source_config)
+        page_one_url = source_config.url
+        page_two_url = "https://gisp.gov.ru/nmp/main/2?recommended=0&searchstr=%D0%90%D0%9F%D0%9A"
+        page_one_html = """
+        <html><body>
+          <a href="/nmp/compare/">Сравнить</a>
+          <a href="/nmp/sso?BACKURL=https://gisp.gov.ru/nmp/measure/9512857">Войти</a>
+          <a href="/nmp/measure/9564204">Льготное кредитование АПК</a>
+        </body></html>
+        """
+        page_two_html = """
+        <html><body>
+          <a href="/nmp/measure/9512857">Поддержка экспорта</a>
+          <a href="/nmp/measure/12446930">Субсидия на кооперацию</a>
+          <a href="/nmp/main/3?recommended=0&searchstr=%D0%90%D0%9F%D0%9A">Следующая</a>
+        </body></html>
+        """
+
+        class Response:
+            def __init__(self, text: str, url: str) -> None:
+                self.text = text
+                self.url = url
+
+        def fake_get(url: str):
+            if url == page_one_url:
+                return Response(page_one_html, page_one_url)
+            if url == page_two_url:
+                return Response(page_two_html, page_two_url)
+            raise AssertionError(f"Unexpected GISP page fetch: {url}")
+
+        source.get = fake_get  # type: ignore[method-assign]
+
+        def fake_extract_document(item: CollectedItem, source_config: SourceConfig) -> ExtractionResult:
+            return ExtractionResult(
+                raw_text=f"Карточка меры поддержки: {item.title}",
+                document_type="html",
+                extracted_text_length=len(item.title),
+            )
+
+        with patch("app.pipeline.collect.load_sources", return_value=[source_config]):
+            with patch("app.pipeline.collect.create_source", return_value=source):
+                with patch("app.pipeline.collect.extract_document", side_effect=fake_extract_document):
+                    saved_count = run_collect_with_options(
+                        source_name=source_config.name,
+                        limit=10,
+                        audit_existing=False,
+                        db_path=str(db_path),
+                    )
+
+        self.assertEqual(saved_count, 3)
+        documents = list_documents(db_path=db_path)
+        self.assertEqual(
+            {document.url for document in documents},
+            {
+                "https://gisp.gov.ru/nmp/measure/9564204",
+                "https://gisp.gov.ru/nmp/measure/9512857",
+                "https://gisp.gov.ru/nmp/measure/12446930",
+            },
+        )
+        audit_rows = list_latest_source_audit(db_path=db_path)
+        self.assertEqual(len(audit_rows), 1)
+        self.assertEqual(audit_rows[0]["fetched_count"], 3)
+        self.assertGreaterEqual(int(audit_rows[0]["links_filtered_count"] or 0), 2)
 
 
 class BaseSourceUserAgentTest(unittest.TestCase):

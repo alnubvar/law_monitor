@@ -13,7 +13,10 @@ from app import config
 from app.config import get_source_role
 from app.llm.enrichment import get_display_enrichment
 from app.models import DigestItem, RawDocument, SourceErrorRecord
-from app.operational_health import OperationalNotice, format_operational_notices_markdown
+from app.operational_health import (
+    OperationalNotice,
+    format_operational_notices_markdown,
+)
 from app.periods import PeriodSpec, build_rolling_period, format_period_label
 from app.storage import list_document_enrichments
 from app.user_facing import (
@@ -31,6 +34,7 @@ from app.visibility import (
     should_show_document,
     visibility_bucket,
 )
+
 SHORT_SUMMARY_MAX_CHARS = 140
 REPORT_TITLE_MAX_CHARS = 90
 REPORT_REACTION_TITLE_MAX_CHARS = 70
@@ -232,12 +236,16 @@ def generate_markdown_report(
         lines.append(DISPLAY_SECTION_TITLES[section])
         if documents_for_bucket:
             for document in documents_for_bucket:
-                digest_item = _to_digest_item(document, title=title_by_id.get(document.id))
+                digest_item = _to_digest_item(
+                    document, title=title_by_id.get(document.id)
+                )
                 lines.extend(
                     _format_human_item(
                         digest_item,
                         require_action=section == "requires_attention",
-                        enrichment=get_display_enrichment(enrichment_by_url.get(document.url)),
+                        enrichment=get_display_enrichment(
+                            enrichment_by_url.get(document.url)
+                        ),
                     )
                 )
         else:
@@ -313,7 +321,10 @@ def build_report_view(
                 overflow = len(raw_buckets[bucket]) - BACKGROUND_DEFAULT_LIMIT
                 hidden_background_overflow_count += overflow
                 raw_buckets[bucket] = raw_buckets[bucket][:BACKGROUND_DEFAULT_LIMIT]
-    if include_market_background and len(raw_buckets["market_background"]) > MARKET_BACKGROUND_LIMIT:
+    if (
+        include_market_background
+        and len(raw_buckets["market_background"]) > MARKET_BACKGROUND_LIMIT
+    ):
         overflow = len(raw_buckets["market_background"]) - MARKET_BACKGROUND_LIMIT
         hidden_market_count += overflow
         raw_buckets["market_background"] = raw_buckets["market_background"][
@@ -480,7 +491,9 @@ def _document_title_key(document: RawDocument) -> str:
 
 
 def _normalize_title_key(title: str | None) -> str:
-    normalized = re.sub(r"[^0-9a-zа-яё]+", " ", (title or "").lower(), flags=re.IGNORECASE)
+    normalized = re.sub(
+        r"[^0-9a-zа-яё]+", " ", (title or "").lower(), flags=re.IGNORECASE
+    )
     normalized = re.sub(r"\s+", " ", normalized).strip()
     return normalized
 
@@ -496,7 +509,11 @@ def _is_krasnodar_support_order_document(document: RawDocument) -> bool:
         )
         if part
     )
-    if document.region != "krasnodar" and "краснодар" not in text and "krasnodar" not in text:
+    if (
+        document.region != "krasnodar"
+        and "краснодар" not in text
+        and "krasnodar" not in text
+    ):
         return False
     return bool(re.search(r"порядк\w*\s+предоставлен\w*\s+субсид", text))
 
@@ -524,10 +541,12 @@ def _normalize_krasnodar_support_order_title(title: str) -> str:
         flags=re.IGNORECASE,
     )
     normalized = re.sub(r'\s*"\s*', " ", normalized)
-    return normalized.strip(' "\'.,;:-')
+    return normalized.strip(" \"'.,;:-")
 
 
-def _find_similar_title_group(title_key: str, title_group_keys: list[str]) -> int | None:
+def _find_similar_title_group(
+    title_key: str, title_group_keys: list[str]
+) -> int | None:
     if len(title_key) < 24:
         return None
     for index, existing_key in enumerate(title_group_keys):
@@ -537,7 +556,10 @@ def _find_similar_title_group(title_key: str, title_group_keys: list[str]) -> in
             return index
         if _numeric_tokens(title_key) != _numeric_tokens(existing_key):
             continue
-        if SequenceMatcher(None, title_key, existing_key).ratio() >= TITLE_SIMILARITY_THRESHOLD:
+        if (
+            SequenceMatcher(None, title_key, existing_key).ratio()
+            >= TITLE_SIMILARITY_THRESHOLD
+        ):
             return index
     return None
 
@@ -585,8 +607,12 @@ def _published_timestamp(document: RawDocument) -> float:
     return document.published_at.timestamp()
 
 
-def _build_display_sections(documents: Iterable[RawDocument]) -> dict[str, list[RawDocument]]:
-    sections: dict[str, list[RawDocument]] = {section: [] for section in DISPLAY_SECTION_ORDER}
+def _build_display_sections(
+    documents: Iterable[RawDocument],
+) -> dict[str, list[RawDocument]]:
+    sections: dict[str, list[RawDocument]] = {
+        section: [] for section in DISPLAY_SECTION_ORDER
+    }
     for document in documents:
         if _is_evergreen_support_reference(document):
             continue
@@ -607,7 +633,7 @@ def _build_display_sections(documents: Iterable[RawDocument]) -> dict[str, list[
 
 
 def _flatten_display_sections(
-    display_sections: dict[str, list[RawDocument]]
+    display_sections: dict[str, list[RawDocument]],
 ) -> list[RawDocument]:
     documents: list[RawDocument] = []
     for section in DISPLAY_SECTION_ORDER:
@@ -643,7 +669,7 @@ def _is_generic_support_reference_document(document: RawDocument) -> bool:
 
 
 def _collapse_cross_section_duplicates(
-    sections: dict[str, list[RawDocument]]
+    sections: dict[str, list[RawDocument]],
 ) -> dict[str, list[RawDocument]]:
     collapsed: dict[str, list[RawDocument]] = {
         section: [] for section in DISPLAY_SECTION_ORDER
@@ -743,6 +769,7 @@ def _clean_iso_timestamps(text: str) -> str:
             return dt.strftime("%d.%m.%Y")
         except ValueError:
             return m.group(0)
+
     cleaned = _ISO_DATETIME_RE.sub(_replace, text)
     cleaned = _ISO_FRAGMENT_RE.sub("", cleaned)
     return cleaned
@@ -777,7 +804,9 @@ def _format_deadline_hint(text: str | None) -> str | None:
     if discussion_match:
         label = discussion_match.group(1).capitalize()
         return f"{label}: {discussion_match.group(2)}"
-    normalized = _DEADLINE_GARBAGE_LABEL_RE.split(normalized, maxsplit=1)[0].strip(" ;,-")
+    normalized = _DEADLINE_GARBAGE_LABEL_RE.split(normalized, maxsplit=1)[0].strip(
+        " ;,-"
+    )
     if not normalized:
         return None
     discussion_match = _DISCUSSION_DEADLINE_RE.search(normalized)
@@ -813,7 +842,9 @@ def _format_human_item(
         lines.append(f"- Срок: {deadline_text}")
     action_text = _build_human_action_text(item, enrichment=enrichment)
     if require_action or action_text:
-        lines.append(f"- Что проверить: {action_text or 'Оценить влияние и определить следующий шаг.'}")
+        lines.append(
+            f"- Что проверить: {action_text or 'Оценить влияние и определить следующий шаг.'}"
+        )
     lines.extend(
         [
             f"- Источник: {item.url}",
@@ -869,7 +900,9 @@ def _format_stats(
     medium_count = sum(1 for document in documents if document.importance == "medium")
     low_count = sum(1 for document in documents if document.importance == "low")
     requires_attention_count = sum(
-        1 for document in documents if user_facing_action_level(document) == "requires_attention"
+        1
+        for document in documents
+        if user_facing_action_level(document) == "requires_attention"
     )
     watchlist_count = sum(
         1 for document in documents if user_facing_action_level(document) == "watchlist"
@@ -953,7 +986,9 @@ def _format_header_summary(
         for section in DISPLAY_SECTION_ORDER
         if section != "requires_attention"
     )
-    period_spec: PeriodSpec | None = build_rolling_period(period_days) if period_days is not None else None
+    period_spec: PeriodSpec | None = (
+        build_rolling_period(period_days) if period_days is not None else None
+    )
     period_text = period_label or (
         format_period_label(period_spec)
         if period_spec is not None
@@ -978,7 +1013,9 @@ def _format_header_summary(
     return lines
 
 
-def _build_source_heat_line(documents: list[RawDocument], *, max_sources: int = 4) -> str:
+def _build_source_heat_line(
+    documents: list[RawDocument], *, max_sources: int = 4
+) -> str:
     counts: Counter[str] = Counter()
     for document in documents:
         label = _source_heat_label(document)
@@ -986,7 +1023,9 @@ def _build_source_heat_line(documents: list[RawDocument], *, max_sources: int = 
             counts[label] += 1
     if not counts:
         return ""
-    return "; ".join(f"{name}: {count}" for name, count in counts.most_common(max_sources))
+    return "; ".join(
+        f"{name}: {count}" for name, count in counts.most_common(max_sources)
+    )
 
 
 def _source_heat_label(document: RawDocument) -> str:
@@ -1003,7 +1042,12 @@ def _format_human_outro(display_sections: dict[str, list[RawDocument]]) -> list[
     total_requires_attention = len(display_sections.get("requires_attention", []))
     total_other = sum(
         len(display_sections.get(section, []))
-        for section in ("measures_and_selections", "regional_npa", "strategy_signals", "news_signals")
+        for section in (
+            "measures_and_selections",
+            "regional_npa",
+            "strategy_signals",
+            "news_signals",
+        )
     )
     if total_requires_attention:
         result = "Есть приоритетные вопросы для GR-реакции в ближайшее время."
@@ -1015,7 +1059,9 @@ def _format_human_outro(display_sections: dict[str, list[RawDocument]]) -> list[
 
 
 def _build_reaction_summary(report_view: ReportView) -> str:
-    requires_attention_documents = report_view.shown_buckets.get("requires_attention", [])
+    requires_attention_documents = report_view.shown_buckets.get(
+        "requires_attention", []
+    )
     if not requires_attention_documents:
         return "Срочных поводов для GR-реакции не выявлено."
     meaningful_documents = [
@@ -1035,7 +1081,9 @@ def _build_reaction_summary(report_view: ReportView) -> str:
         titles.append(title)
         if len(titles) >= 3:
             break
-    extra_count = max(len(seen_titles_from_documents(meaningful_documents)) - len(titles), 0)
+    extra_count = max(
+        len(seen_titles_from_documents(meaningful_documents)) - len(titles), 0
+    )
     if extra_count > 0:
         return f"{'; '.join(titles)}; и еще {extra_count}."
     return "; ".join(titles)
@@ -1045,7 +1093,9 @@ def seen_titles_from_documents(documents: list[RawDocument]) -> set[str]:
     return {_reaction_title(document) for document in documents}
 
 
-def _report_title(document: RawDocument, *, max_chars: int = REPORT_TITLE_MAX_CHARS) -> str:
+def _report_title(
+    document: RawDocument, *, max_chars: int = REPORT_TITLE_MAX_CHARS
+) -> str:
     title = user_facing_title(document)
     normalized = re.sub(r"\s+", " ", title).strip()
     if len(normalized) <= max_chars:
@@ -1059,7 +1109,9 @@ def _reaction_title(document: RawDocument) -> str:
     if document.business_signal and any(
         title_lower.startswith(prefix) for prefix in _BUREAUCRATIC_TITLE_PREFIXES
     ):
-        return _word_boundary_clip(document.business_signal, REPORT_REACTION_TITLE_MAX_CHARS)
+        return _word_boundary_clip(
+            document.business_signal, REPORT_REACTION_TITLE_MAX_CHARS
+        )
     return title
 
 
