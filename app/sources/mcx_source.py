@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime, time, timezone
 from pathlib import PurePosixPath
 from urllib.parse import urljoin, urlparse
@@ -67,13 +68,14 @@ _MEASURE_LISTING_PATHS = {
     "/activity/state-support/measures/",
     "/activity/state-support/programs/",
 }
+_DETAIL_NOISE_TAGS = ("script", "style", "nav", "footer", "header", "noscript", "svg", "form", "aside")
+_DETAIL_WHITESPACE_RE = re.compile(r"\s+")
+_DETAIL_TEXT_MAX_LENGTH = 4000
+_DETAIL_LINKS_MAX_COUNT = 3
 
 
 class McxSource(BaseSource):
-    """Fetches mcx.gov.ru listing pages and builds CollectedItem with synthetic raw_text.
-
-    Makes exactly one HTTP request (the listing page). Never fetches detail pages.
-    """
+    """Fetches mcx.gov.ru listing pages and selectively enriches shortlisted HTML items."""
 
     def fetch_items(self) -> list[CollectedItem]:
         response = self.get(self.config.url)
@@ -110,10 +112,7 @@ class McxSource(BaseSource):
             if not self._should_include_measure_link(title, url):
                 links_filtered_count += 1
                 continue
-            raw_text = (
-                f"Минсельхоз России. Мера господдержки АПК: {title}\n"
-                f"Источник: {url}"
-            )
+            raw_text = self._build_measure_raw_text(title, url)
             seen_urls.add(url)
             items.append(
                 CollectedItem(
@@ -137,6 +136,7 @@ class McxSource(BaseSource):
             "duplicate_filtered_count": duplicate_filtered_count,
             "html_links_count": len(items),
         }
+        self._enrich_items_with_details(items)
         self.logger.info("Fetched %s measures from %s", len(items), self.config.name)
         return items
 
@@ -199,14 +199,7 @@ class McxSource(BaseSource):
             if date_obj is not None:
                 published_at = datetime.combine(date_obj, time.min, tzinfo=timezone.utc)
 
-            date_line = (
-                f"\nДата: {date_obj.strftime('%d.%m.%Y')}" if date_obj else ""
-            )
-            raw_text = (
-                f"Минсельхоз России. Новость АПК: {title}"
-                f"{date_line}\n"
-                f"Источник: {url}"
-            )
+            raw_text = self._build_news_raw_text(title, url, date_obj)
 
             items.append(
                 CollectedItem(
@@ -224,5 +217,112 @@ class McxSource(BaseSource):
             if max_items is not None and len(items) >= max_items:
                 break
 
+        self._enrich_items_with_details(items)
         self.logger.info("Fetched %s news items from %s", len(items), self.config.name)
         return items
+
+    def _enrich_items_with_details(self, items: list[CollectedItem]) -> None:
+        for item in items:
+            if item.document_type != "html":
+                continue
+            item.raw_text = self._enrich_raw_text_from_detail(
+                base_raw_text=item.raw_text or "",
+                title=item.title,
+                url=item.url,
+            )
+
+    def _enrich_raw_text_from_detail(self, *, base_raw_text: str, title: str, url: str) -> str:
+        if not self._should_fetch_detail(url):
+            return base_raw_text
+        try:
+            response = self.get(url)
+        except Exception as exc:
+            self.logger.warning("McxSource detail fetch failed for %s: %s", url, exc)
+            return base_raw_text
+        soup = BeautifulSoup(response.text, "html.parser")
+        detail_text = self._extract_detail_text(soup, title)
+        related_links = self._extract_safe_related_links(soup, url, current_url=url)
+        if not detail_text and not related_links:
+            return base_raw_text
+        parts = [base_raw_text]
+        if detail_text:
+            parts.append(detail_text)
+        if related_links:
+            parts.append("Связанные документы: " + "; ".join(related_links))
+        return "\n".join(part for part in parts if part)
+
+    def _should_fetch_detail(self, url: str) -> bool:
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"}:
+            return False
+        if parsed.netloc.lower() != urlparse(_MCX_BASE).netloc:
+            return False
+        suffix = PurePosixPath(parsed.path).suffix.lower()
+        return suffix not in {".pdf", ".doc", ".docx"}
+
+    def _extract_detail_text(self, soup: BeautifulSoup, title: str) -> str:
+        for tag_name in _DETAIL_NOISE_TAGS:
+            for tag in soup.find_all(tag_name):
+                tag.decompose()
+        container = soup.select_one("article") or soup.select_one("main") or soup.body or soup
+        text = _DETAIL_WHITESPACE_RE.sub(" ", " ".join(container.stripped_strings)).strip()
+        if not text:
+            return ""
+        normalized_title = _DETAIL_WHITESPACE_RE.sub(" ", title).strip()
+        lowered_title = normalized_title.lower()
+        while normalized_title and text.lower().startswith(lowered_title):
+            text = text[len(normalized_title):].strip(" .:-")
+        if len(text) > _DETAIL_TEXT_MAX_LENGTH:
+            text = text[:_DETAIL_TEXT_MAX_LENGTH].rsplit(" ", 1)[0].rstrip(" .,:;") + "..."
+        return text
+
+    def _extract_safe_related_links(
+        self,
+        soup: BeautifulSoup,
+        base_url: str,
+        *,
+        current_url: str,
+    ) -> list[str]:
+        links: list[str] = []
+        seen: set[str] = set()
+        for link in soup.find_all("a", href=True):
+            href = (link.get("href") or "").strip()
+            if not href:
+                continue
+            normalized_url = urljoin(base_url, href)
+            if normalized_url == current_url or normalized_url in seen:
+                continue
+            parsed = urlparse(normalized_url)
+            if parsed.scheme not in {"http", "https"}:
+                continue
+            if parsed.netloc.lower() != urlparse(_MCX_BASE).netloc:
+                continue
+            path = parsed.path.lower()
+            suffix = PurePosixPath(path).suffix.lower()
+            is_document_file = suffix in {".pdf", ".doc", ".docx"}
+            is_document_page = path.startswith("/docs/")
+            if not (is_document_file or is_document_page):
+                continue
+            seen.add(normalized_url)
+            links.append(normalized_url)
+            if len(links) >= _DETAIL_LINKS_MAX_COUNT:
+                break
+        return links
+
+    @staticmethod
+    def _build_measure_raw_text(title: str, url: str) -> str:
+        return (
+            f"Минсельхоз России. Мера господдержки АПК: {title}\n"
+            f"Источник: {url}"
+        )
+
+    @staticmethod
+    def _build_news_raw_text(title: str, url: str, date_obj) -> str:
+        date_line = (
+            f"\nДата: {date_obj.strftime('%d.%m.%Y')}" if date_obj else ""
+        )
+        return (
+            f"Минсельхоз России. Новость АПК: {title}"
+            f"{date_line}\n"
+            f"Источник: {url}"
+        )

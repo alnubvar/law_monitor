@@ -182,6 +182,15 @@ _NEWS_HTML_NO_TITLE_TAG = """
 </body></html>
 """
 
+_DETAIL_HTML = """
+<html><body>
+<article>
+<p>Программа предоставления льготных кредитов по ставке не выше 5% годовых.</p>
+<a href="/docs/35013/">Постановление Правительства №512</a>
+</article>
+</body></html>
+"""
+
 
 def _mock_response(html: str) -> MagicMock:
     mock = MagicMock()
@@ -368,23 +377,32 @@ class McxSourceMeasuresTest(unittest.TestCase):
         )
         self.assertIn("Субсидии производителям сельскохозяйственной техники", titles)
 
-    def test_measures_noise_fixture_still_uses_one_http_request(self) -> None:
+    def test_measures_noise_fixture_detail_fetch_skips_pdf(self) -> None:
+        # Noise fixture yields 3 HTML items + 1 PDF item.
+        # Expects 1 listing call + 3 detail calls (PDF not detail-fetched).
         source = self._source(max_items=10)
+        listing_resp = _mock_response(_MEASURES_HTML_WITH_NAVIGATION_NOISE)
+        detail_resp = _mock_response(_DETAIL_HTML)
         with patch.object(
             source,
             "get",
-            return_value=_mock_response(_MEASURES_HTML_WITH_NAVIGATION_NOISE),
+            side_effect=[listing_resp, detail_resp, detail_resp, detail_resp],
         ) as mock_get:
             source.fetch_items()
-        self.assertEqual(mock_get.call_count, 1)
+        self.assertEqual(mock_get.call_count, 4)
 
-    def test_measures_only_one_http_request(self) -> None:
+    def test_measures_detail_fetches_one_per_html_item(self) -> None:
+        # _MEASURES_HTML has 3 HTML items → 1 listing call + 3 detail calls.
         source = self._source()
+        listing_resp = _mock_response(_MEASURES_HTML)
+        detail_resp = _mock_response(_DETAIL_HTML)
         with patch.object(
-            source, "get", return_value=_mock_response(_MEASURES_HTML)
+            source,
+            "get",
+            side_effect=[listing_resp, detail_resp, detail_resp, detail_resp],
         ) as mock_get:
             source.fetch_items()
-        self.assertEqual(mock_get.call_count, 1)
+        self.assertEqual(mock_get.call_count, 4)
 
     def test_measures_source_metadata(self) -> None:
         source = self._source()
@@ -499,13 +517,18 @@ class McxSourceNewsTest(unittest.TestCase):
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0].title, "Нормальная новость")
 
-    def test_news_only_one_http_request(self) -> None:
+    def test_news_detail_fetches_one_per_html_item(self) -> None:
+        # _NEWS_HTML has 2 HTML items → 1 listing call + 2 detail calls.
         source = self._source()
+        listing_resp = _mock_response(_NEWS_HTML)
+        detail_resp = _mock_response(_DETAIL_HTML)
         with patch.object(
-            source, "get", return_value=_mock_response(_NEWS_HTML)
+            source,
+            "get",
+            side_effect=[listing_resp, detail_resp, detail_resp],
         ) as mock_get:
             source.fetch_items()
-        self.assertEqual(mock_get.call_count, 1)
+        self.assertEqual(mock_get.call_count, 3)
 
     def test_news_document_type_html(self) -> None:
         source = self._source()
@@ -548,6 +571,106 @@ class McxSourceUnknownUrlTest(unittest.TestCase):
         with patch.object(source, "get", return_value=_mock_response(_MEASURES_HTML)):
             items = source.fetch_items()
         self.assertEqual(items, [])
+
+
+class McxSourceDetailFetchTest(unittest.TestCase):
+
+    def _measures_source(self, max_items: int | None = 1) -> McxSource:
+        return McxSource(
+            SourceConfig(
+                name=_MEASURES_CONFIG.name,
+                url=_MEASURES_CONFIG.url,
+                level=_MEASURES_CONFIG.level,
+                region=_MEASURES_CONFIG.region,
+                source_role=_MEASURES_CONFIG.source_role,
+                parser="mcx",
+                max_items=max_items,
+                description="test",
+            )
+        )
+
+    def test_detail_body_text_appended(self) -> None:
+        source = self._measures_source(max_items=1)
+        with patch.object(
+            source,
+            "get",
+            side_effect=[_mock_response(_MEASURES_HTML), _mock_response(_DETAIL_HTML)],
+        ):
+            items = source.fetch_items()
+        raw = items[0].raw_text or ""
+        self.assertIn("Мера господдержки АПК", raw)
+        self.assertIn("льготных кредитов", raw)
+
+    def test_detail_fallback_on_http_error(self) -> None:
+        source = self._measures_source(max_items=1)
+        with patch.object(
+            source,
+            "get",
+            side_effect=[_mock_response(_MEASURES_HTML), Exception("network error")],
+        ):
+            items = source.fetch_items()
+        raw = items[0].raw_text or ""
+        self.assertIn("Мера господдержки АПК", raw)
+        self.assertIn("Льготное кредитование по СПК", raw)
+        self.assertNotIn("льготных кредитов", raw)
+
+    def test_detail_empty_page_preserves_base_raw_text(self) -> None:
+        source = self._measures_source(max_items=1)
+        with patch.object(
+            source,
+            "get",
+            side_effect=[
+                _mock_response(_MEASURES_HTML),
+                _mock_response("<html><body><article></article></body></html>"),
+            ],
+        ):
+            items = source.fetch_items()
+        raw = items[0].raw_text or ""
+        self.assertIn("Мера господдержки АПК", raw)
+        self.assertIn("Льготное кредитование по СПК", raw)
+
+    def test_detail_pdf_items_not_fetched(self) -> None:
+        html = """<html><body>
+<a href="/activity/state-support/measures/file.pdf">PDF субсидии</a>
+</body></html>"""
+        source = self._measures_source(max_items=10)
+        with patch.object(source, "get", side_effect=[_mock_response(html)]) as mock_get:
+            source.fetch_items()
+        self.assertEqual(mock_get.call_count, 1)
+
+    def test_detail_related_docs_links_appended(self) -> None:
+        detail_with_link = """<html><body>
+<article>
+<p>Условия отбора для льготного кредитования.</p>
+<a href="/docs/35013/">Постановление Правительства №512</a>
+</article>
+</body></html>"""
+        source = self._measures_source(max_items=1)
+        with patch.object(
+            source,
+            "get",
+            side_effect=[_mock_response(_MEASURES_HTML), _mock_response(detail_with_link)],
+        ):
+            items = source.fetch_items()
+        raw = items[0].raw_text or ""
+        self.assertIn("Связанные документы:", raw)
+        self.assertIn("/docs/35013/", raw)
+
+    def test_should_fetch_detail_rejects_external_domain(self) -> None:
+        source = self._measures_source()
+        self.assertFalse(source._should_fetch_detail("https://example.com/page/"))
+
+    def test_should_fetch_detail_rejects_pdf(self) -> None:
+        source = self._measures_source()
+        self.assertFalse(source._should_fetch_detail("https://mcx.gov.ru/docs/file.pdf"))
+
+    def test_should_fetch_detail_accepts_html_page(self) -> None:
+        source = self._measures_source()
+        self.assertTrue(
+            source._should_fetch_detail(
+                "https://mcx.gov.ru/activity/state-support/measures/льготное-кредитование/"
+            )
+        )
 
 
 if __name__ == "__main__":
