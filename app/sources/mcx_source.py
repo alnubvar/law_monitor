@@ -151,7 +151,8 @@ class McxSource(BaseSource):
         normalized_path = path.rstrip("/") + "/"
         if normalized_path in _MEASURE_LISTING_PATHS:
             return False
-        if PurePosixPath(path).suffix:
+        suffix = PurePosixPath(path).suffix.lower()
+        if suffix and suffix not in {".pdf", ".doc", ".docx"}:
             return False
 
         title_text = " ".join(title.lower().split())

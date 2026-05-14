@@ -275,14 +275,18 @@ class McxSourceMeasuresTest(unittest.TestCase):
 
     def test_measures_skips_empty_href(self) -> None:
         source = self._source()
-        with patch.object(source, "get", return_value=_mock_response(_MEASURES_HTML_EMPTY_HREF)):
+        with patch.object(
+            source, "get", return_value=_mock_response(_MEASURES_HTML_EMPTY_HREF)
+        ):
             items = source.fetch_items()
         self.assertEqual(len(items), 1)
         self.assertIn("Льготный лизинг", items[0].title)
 
     def test_measures_skips_empty_title(self) -> None:
         source = self._source()
-        with patch.object(source, "get", return_value=_mock_response(_MEASURES_HTML_EMPTY_TITLE)):
+        with patch.object(
+            source, "get", return_value=_mock_response(_MEASURES_HTML_EMPTY_TITLE)
+        ):
             items = source.fetch_items()
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0].title, "Льготный лизинг")
@@ -303,6 +307,7 @@ class McxSourceMeasuresTest(unittest.TestCase):
                 "Льготное кредитование по СПК",
                 "Срочная информация для регионов о предоставлении субсидий",
                 "Льготный лизинг",
+                "PDF субсидии",
             ],
         )
         self.assertNotIn("Биография", titles)
@@ -375,7 +380,9 @@ class McxSourceMeasuresTest(unittest.TestCase):
 
     def test_measures_only_one_http_request(self) -> None:
         source = self._source()
-        with patch.object(source, "get", return_value=_mock_response(_MEASURES_HTML)) as mock_get:
+        with patch.object(
+            source, "get", return_value=_mock_response(_MEASURES_HTML)
+        ) as mock_get:
             source.fetch_items()
         self.assertEqual(mock_get.call_count, 1)
 
@@ -389,7 +396,9 @@ class McxSourceMeasuresTest(unittest.TestCase):
 
     def test_measures_empty_page_returns_nothing(self) -> None:
         source = self._source()
-        with patch.object(source, "get", return_value=_mock_response("<html><body></body></html>")):
+        with patch.object(
+            source, "get", return_value=_mock_response("<html><body></body></html>")
+        ):
             items = source.fetch_items()
         self.assertEqual(items, [])
 
@@ -420,7 +429,9 @@ class McxSourceNewsTest(unittest.TestCase):
         with patch.object(source, "get", return_value=_mock_response(_NEWS_HTML)):
             items = source.fetch_items()
         titles = [item.title for item in items]
-        self.assertIn("Объём реализации молока в сельхозорганизациях вырос на 2,6%", titles)
+        self.assertIn(
+            "Объём реализации молока в сельхозорганизациях вырос на 2,6%", titles
+        )
         self.assertIn("Субсидии на поддержку АПК увеличены", titles)
 
     def test_news_urls_absolute(self) -> None:
@@ -465,7 +476,9 @@ class McxSourceNewsTest(unittest.TestCase):
 
     def test_news_no_date_item(self) -> None:
         source = self._source()
-        with patch.object(source, "get", return_value=_mock_response(_NEWS_HTML_NO_DATE)):
+        with patch.object(
+            source, "get", return_value=_mock_response(_NEWS_HTML_NO_DATE)
+        ):
             items = source.fetch_items()
         self.assertEqual(len(items), 1)
         self.assertIsNone(items[0].published_at)
@@ -479,14 +492,18 @@ class McxSourceNewsTest(unittest.TestCase):
 
     def test_news_skips_item_without_title_link(self) -> None:
         source = self._source()
-        with patch.object(source, "get", return_value=_mock_response(_NEWS_HTML_NO_TITLE_TAG)):
+        with patch.object(
+            source, "get", return_value=_mock_response(_NEWS_HTML_NO_TITLE_TAG)
+        ):
             items = source.fetch_items()
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0].title, "Нормальная новость")
 
     def test_news_only_one_http_request(self) -> None:
         source = self._source()
-        with patch.object(source, "get", return_value=_mock_response(_NEWS_HTML)) as mock_get:
+        with patch.object(
+            source, "get", return_value=_mock_response(_NEWS_HTML)
+        ) as mock_get:
             source.fetch_items()
         self.assertEqual(mock_get.call_count, 1)
 
@@ -507,7 +524,9 @@ class McxSourceNewsTest(unittest.TestCase):
 
     def test_news_empty_page_returns_nothing(self) -> None:
         source = self._source()
-        with patch.object(source, "get", return_value=_mock_response("<html><body></body></html>")):
+        with patch.object(
+            source, "get", return_value=_mock_response("<html><body></body></html>")
+        ):
             items = source.fetch_items()
         self.assertEqual(items, [])
 
