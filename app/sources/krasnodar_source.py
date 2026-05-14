@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, time, timezone
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
 
@@ -53,6 +53,8 @@ MSH_LEADING_ORDER_DATE_RE = re.compile(
     re.IGNORECASE,
 )
 NPA_KRASNODAR_FILE_RE = re.compile(r"^/rest/files/\d+/?$", re.IGNORECASE)
+_MSH_PAGINATION_PATH_RE = re.compile(r"/page\d+/?$", re.IGNORECASE)
+_MSH_MAX_EXTRA_PAGES = 4  # follow at most pages 2-5 per listing
 
 
 class KrasnodarSource(GenericHTMLSource):
@@ -126,60 +128,80 @@ class KrasnodarSource(GenericHTMLSource):
                 break
             if not _is_msh_attachment_listing_item(item):
                 continue
-            try:
-                response = self.get(item.url)
-            except Exception as exc:
-                self.logger.warning(
-                    "Could not harvest attachments from %s: %s",
-                    item.url,
-                    exc,
-                )
-                continue
-            soup = BeautifulSoup(response.text, "html.parser")
-            for document_item in soup.select(".document-item"):
-                if max_items is not None and len(harvested_items) >= max_items:
-                    break
-                if not isinstance(document_item, Tag):
-                    continue
-                collected = _extract_msh_document_item_attachment(self, document_item, response.url)
-                if collected is None or collected.url in seen_urls:
-                    continue
-                harvested_items.append(collected)
-                seen_urls.add(collected.url)
-                attachment_counts[collected.document_type] += 1
 
-            for link in soup.find_all("a", href=True):
+            listing_url: str = item.url
+            extra_pages = 0
+
+            while True:
                 if max_items is not None and len(harvested_items) >= max_items:
                     break
-                if not isinstance(link, Tag):
-                    continue
-                normalized_url = self._normalize_url(link.get("href", ""), response.url)
-                if not normalized_url or normalized_url in seen_urls:
-                    continue
-                document_type = _detect_msh_attachment_document_type(self, normalized_url, link)
-                if document_type not in {"pdf", "doc", "docx"}:
-                    continue
-                title = _extract_msh_attachment_title(self, link, normalized_url)
-                if not self._should_include_title(title):
-                    continue
-                if not _is_safe_msh_attachment_url(self, normalized_url, response.url, title):
-                    continue
-                if not _has_actionable_title(f"{title} {normalized_url.lower()}"):
-                    continue
-                harvested_items.append(
-                    CollectedItem(
-                        source_name=self.config.name,
-                        source_url=self.config.url,
-                        level=self.config.level,
-                        region=self.config.region,
-                        title=title,
-                        url=normalized_url,
-                        published_at=self._extract_published_at(link, normalized_url),
-                        document_type=document_type,
+                try:
+                    response = self.get(listing_url)
+                except Exception as exc:
+                    self.logger.warning(
+                        "Could not harvest attachments from %s: %s",
+                        listing_url,
+                        exc,
                     )
-                )
-                seen_urls.add(normalized_url)
-                attachment_counts[document_type] += 1
+                    break
+                soup = BeautifulSoup(response.text, "html.parser")
+                count_before = len(harvested_items)
+
+                for document_item in soup.select(".document-item"):
+                    if max_items is not None and len(harvested_items) >= max_items:
+                        break
+                    if not isinstance(document_item, Tag):
+                        continue
+                    collected = _extract_msh_document_item_attachment(self, document_item, response.url)
+                    if collected is None or collected.url in seen_urls:
+                        continue
+                    harvested_items.append(collected)
+                    seen_urls.add(collected.url)
+                    attachment_counts[collected.document_type] += 1
+
+                for link in soup.find_all("a", href=True):
+                    if max_items is not None and len(harvested_items) >= max_items:
+                        break
+                    if not isinstance(link, Tag):
+                        continue
+                    normalized_url = self._normalize_url(link.get("href", ""), response.url)
+                    if not normalized_url or normalized_url in seen_urls:
+                        continue
+                    document_type = _detect_msh_attachment_document_type(self, normalized_url, link)
+                    if document_type not in {"pdf", "doc", "docx"}:
+                        continue
+                    title = _extract_msh_attachment_title(self, link, normalized_url)
+                    if not self._should_include_title(title):
+                        continue
+                    if not _is_safe_msh_attachment_url(self, normalized_url, response.url, title):
+                        continue
+                    if not _has_actionable_title(f"{title} {normalized_url.lower()}"):
+                        continue
+                    harvested_items.append(
+                        CollectedItem(
+                            source_name=self.config.name,
+                            source_url=self.config.url,
+                            level=self.config.level,
+                            region=self.config.region,
+                            title=title,
+                            url=normalized_url,
+                            published_at=self._extract_published_at(link, normalized_url),
+                            document_type=document_type,
+                        )
+                    )
+                    seen_urls.add(normalized_url)
+                    attachment_counts[document_type] += 1
+
+                new_items_this_page = len(harvested_items) - count_before
+                if extra_pages >= _MSH_MAX_EXTRA_PAGES or new_items_this_page == 0:
+                    break
+                if max_items is not None and len(harvested_items) >= max_items:
+                    break
+                next_url = _find_msh_next_page_url(soup, response.url, extra_pages + 2)
+                if next_url is None:
+                    break
+                listing_url = next_url
+                extra_pages += 1
 
         if attachment_counts:
             stats = dict(getattr(self, "last_fetch_stats", {}) or {})
@@ -190,6 +212,26 @@ class KrasnodarSource(GenericHTMLSource):
             stats["doc_links_count"] = int(stats.get("doc_links_count", 0)) + attachment_counts["doc"]
             self.last_fetch_stats = stats
         return harvested_items
+
+
+def _find_msh_next_page_url(soup: BeautifulSoup, page_url: str, next_page: int) -> str | None:
+    """Return the next listing page URL if a /pageN link matching next_page is in soup."""
+    parsed_base = urlparse(page_url)
+    base_path = _MSH_PAGINATION_PATH_RE.sub("", parsed_base.path).rstrip("/")
+    expected_path = f"{base_path}/page{next_page}".lower()
+    for link in soup.find_all("a", href=True):
+        if not isinstance(link, Tag):
+            continue
+        href = (link.get("href") or "").strip()
+        if not href:
+            continue
+        normalized = urljoin(page_url, href)
+        parsed = urlparse(normalized)
+        if parsed.netloc.lower() != parsed_base.netloc.lower():
+            continue
+        if parsed.path.rstrip("/").lower() == expected_path:
+            return normalized
+    return None
 
 
 def _has_actionable_title(text: str) -> bool:

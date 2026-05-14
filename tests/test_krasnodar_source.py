@@ -142,6 +142,9 @@ class KrasnodarSourceTest(unittest.TestCase):
         listing_html = (FIXTURES_DIR / "msh_krasnodar_prikazy_listing_with_attachments.html").read_text(
             encoding="utf-8"
         )
+        # Fixture has a /page2 link; page2 is empty so traversal stops after it.
+        page2_url = "https://msh.krasnodar.ru/documents/prikazy-minselkhoza-krasnodarskogo-kraya/page2"
+        page2_html = "<html><body></body></html>"
         calls: list[str] = []
 
         def fake_get(url: str):
@@ -150,13 +153,15 @@ class KrasnodarSourceTest(unittest.TestCase):
                 return self._response(root_html, source.config.url)
             if url == listing_url:
                 return self._response(listing_html, listing_url)
+            if url == page2_url:
+                return self._response(page2_html, page2_url)
             raise AssertionError(f"Unexpected recursive fetch: {url}")
 
         source.get = fake_get  # type: ignore[method-assign]
 
         items = source.fetch_items()
 
-        self.assertEqual(calls, [source.config.url, listing_url])
+        self.assertEqual(calls, [source.config.url, listing_url, page2_url])
         self.assertEqual(
             [item.document_type for item in items],
             ["html", "pdf", "pdf", "pdf"],
@@ -177,16 +182,87 @@ class KrasnodarSourceTest(unittest.TestCase):
         self.assertEqual(normalize_date_to_iso(items[1].published_at), "2026-04-30")
         self.assertEqual(normalize_date_to_iso(items[2].published_at), "2026-04-29")
         self.assertEqual(normalize_date_to_iso(items[3].published_at), "2026-04-28")
-        self.assertNotIn(
-            "https://msh.krasnodar.ru/documents/prikazy-minselkhoza-krasnodarskogo-kraya/page2",
-            {item.url for item in items},
-        )
+        self.assertNotIn(page2_url, {item.url for item in items})
         self.assertNotIn(
             "https://msh.krasnodar.ru/documents/prikazy-minselkhoza-krasnodarskogo-kraya/159222",
             {item.url for item in items},
         )
         self.assertNotIn("https://msh.krasnodar.ru/contacts/", {item.url for item in items})
         self.assertEqual(source.last_fetch_stats["harvested_attachment_count"], 3)
+
+    def test_msh_krasnodar_fetch_harvests_page2_attachments(self) -> None:
+        """Verify that page2+ listing pages are traversed and their attachments collected."""
+        source = self._source(
+            name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://msh.krasnodar.ru/documents/subsidirovanie-i-finansirovanie1",
+            source_role="support_documents",
+        )
+        source.config.max_items = 10
+        root_html = """
+        <html><body>
+          <a href="/documents/prikazy-minselkhoza-krasnodarskogo-kraya">Приказы минсельхоза</a>
+        </body></html>
+        """
+        listing_url = "https://msh.krasnodar.ru/documents/prikazy-minselkhoza-krasnodarskogo-kraya"
+        page2_url = "https://msh.krasnodar.ru/documents/prikazy-minselkhoza-krasnodarskogo-kraya/page2"
+
+        page1_html = """
+        <html><body>
+          <div class="document-item">
+            <div class="document-item__title-wrap">
+              <a class="document-item__title" href="/documents/prikazy/159300">
+                №170 от 07.05.2026 "Об утверждении Порядка предоставления субсидий фермерским хозяйствам"
+                <div class="document-item-extra-info">Вид документа: Приказ;</div>
+              </a>
+            </div>
+            <span class="document-info-bar__type">pdf</span>
+            <a class="document-info-bar__download-link" href="https://npa.krasnodar.ru/rest/files/1234100">
+              <span class="document-info-bar__download-text">скачать документ</span>
+            </a>
+          </div>
+          <a href="/documents/prikazy-minselkhoza-krasnodarskogo-kraya/page2">Следующая</a>
+        </body></html>
+        """
+        page2_html = """
+        <html><body>
+          <div class="document-item">
+            <div class="document-item__title-wrap">
+              <a class="document-item__title" href="/documents/prikazy/159200">
+                №160 от 27.04.2026 "О внесении изменений в приказ об утверждении Порядка предоставления субсидий"
+                <div class="document-item-extra-info">Вид документа: Приказ;</div>
+              </a>
+            </div>
+            <span class="document-info-bar__type">pdf</span>
+            <a class="document-info-bar__download-link" href="https://npa.krasnodar.ru/rest/files/1234050">
+              <span class="document-info-bar__download-text">скачать документ</span>
+            </a>
+          </div>
+        </body></html>
+        """
+        calls: list[str] = []
+
+        def fake_get(url: str):
+            calls.append(url)
+            if url == source.config.url:
+                return self._response(root_html, source.config.url)
+            if url == listing_url:
+                return self._response(page1_html, listing_url)
+            if url == page2_url:
+                return self._response(page2_html, page2_url)
+            raise AssertionError(f"Unexpected fetch: {url}")
+
+        source.get = fake_get  # type: ignore[method-assign]
+        items = source.fetch_items()
+
+        self.assertEqual(calls, [source.config.url, listing_url, page2_url])
+        urls = [item.url for item in items]
+        self.assertIn(listing_url, urls)
+        self.assertIn("https://npa.krasnodar.ru/rest/files/1234100", urls)
+        self.assertIn("https://npa.krasnodar.ru/rest/files/1234050", urls)
+        self.assertEqual(len(items), 3)
+        self.assertEqual(source.last_fetch_stats["harvested_attachment_count"], 2)
+        self.assertEqual(normalize_date_to_iso(items[1].published_at), "2026-05-07")
+        self.assertEqual(normalize_date_to_iso(items[2].published_at), "2026-04-27")
 
     def test_msh_krasnodar_document_item_ignores_referenced_internal_date(self) -> None:
         source = self._source(
