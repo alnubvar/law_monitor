@@ -1,0 +1,14 @@
+{
+  "id": "regional_npa_requires_attention_signal",
+  "source_name": "Нормативные акты Краснодарского края",
+  "source_role": "regional_npa",
+  "expected_source_role": "regional_npa",
+  "level": "regional",
+  "region": "krasnodar",
+  "title": "Постановление о внесении изменений в порядок предоставления субсидий сельхозтоваропроизводителям",
+  "url": "https://admkrai.krasnodar.ru/upload/iblock/abc/subsidy-amendment.pdf",
+  "raw_text": "Постановление Правительства Краснодарского края. О внесении изменений в порядок предоставления субсидий сельскохозяйственным товаропроизводителям. Субсидии на поддержку агропромышленного комплекса.",
+  "expected_action_level": "requires_attention",
+  "expected_page_type": "new_rule",
+  "expected_business_signal_contains": "прямым действием"
+}

@@ -360,7 +360,7 @@ class MockLLMClient(BaseLLMClient):
         topic_part = f" Тема: {topic}." if topic else ""
         return (
             "Документ требует внимания GR, потому что содержит конкретный action-сигнал "
-            f"для АПК и интересов агрохолдинга: {preview or 'action markers detected'}.{topic_part} "
+            f"для АПК и интересов агрохолдинга: {preview or 'действие в сфере АПК'}.{topic_part} "
             f"Бизнес-сигнал: {business_signal or 'не выделен'}."
         )
 

@@ -155,6 +155,21 @@ MCX_NEWS_WATCHLIST_PATTERNS = (
     r"(?:посевн|полев|уборк|урож).{0,120}(?:ставрополь|ростов|краснодар|заседан\w*\s+правительств)",
 )
 KRASNODAR_SUPPORT_SOURCE_MARKER = "минсельхоз краснодарского края - субсидирование и финансирование"
+_REGULATION_SUBSIDY_PROCEDURE_MARKERS = (
+    "субсид",
+    "порядок предоставления",
+    "меры поддержки",
+    "возмещен",
+    "грант",
+)
+# Tighter compound-phrase markers used when no deadline_text is present.
+# Require both a procedure word and a subsidy/grant word in the title alone.
+_REGULATION_NO_DEADLINE_TITLE_MARKERS = (
+    "порядок предоставления субсид",
+    "решение о порядке предоставления субсид",
+    "порядок распределения субсид",
+    "порядок предоставления грант",
+)
 KRASNODAR_SUPPORT_FILE_RE = re.compile(r"^/rest/files/\d+/?$", re.IGNORECASE)
 KRASNODAR_SUPPORT_ORDER_MARKERS = (
     "субсид",
@@ -265,6 +280,11 @@ def detect_action_level(
     lead_text = body_text[:1500]
     domain_gate_applies = should_apply_ahstep_domain_gate(source_role)
     has_ahstep_domain_context = has_ahstep_domain_relevance(title_text, body_text[:5000])
+    # regulation.gov.ru subsidy procedure docs without discussion deadline: bypass domain gate.
+    # Checked early so it also exempts the broad actionable-page gate below.
+    _has_regulation_subsidy_title_bypass = domain == "regulation.gov.ru" and any(
+        m in title_text for m in _REGULATION_NO_DEADLINE_TITLE_MARKERS
+    )
 
     if is_service_page or page_type == "navigation" or content_quality in {"navigation", "empty"}:
         if domain_gate_applies and not has_ahstep_domain_context:
@@ -321,6 +341,7 @@ def detect_action_level(
     if (
         domain_gate_applies
         and not has_ahstep_domain_context
+        and not _has_regulation_subsidy_title_bypass
         and page_type in {*ACTIONABLE_PAGE_TYPES, "news_background", "unknown"}
     ):
         return "background"
@@ -369,7 +390,11 @@ def detect_action_level(
         facts=facts,
     )
     if domain == "regulation.gov.ru" and not has_ahstep_domain_context:
-        return "background"
+        _has_subsidy_deadline_bypass = facts.deadline_text is not None and any(
+            m in title_text or m in lead_text for m in _REGULATION_SUBSIDY_PROCEDURE_MARKERS
+        )
+        if not (_has_subsidy_deadline_bypass or _has_regulation_subsidy_title_bypass):
+            return "background"
 
     if page_type in {"registry", "results_protocol", "reference_page"}:
         if source_role == "regional_npa":
@@ -463,6 +488,12 @@ def detect_action_level(
             return "watchlist"
         return "background"
     if source_role == "strategy":
+        # Title-bypass path: subsidy procedure wording in title but no AHSTEP domain context.
+        # Cap at watchlist — docs without agro context in body should not reach requires_attention.
+        # (Docs with real agro context have has_ahstep_domain_context=True and bypass doesn't fire,
+        # so their near-deadline escalation is handled by the standard check below.)
+        if _has_regulation_subsidy_title_bypass:
+            return "watchlist"
         if regulation_discussion_deadline_status == "near" and has_project_discussion_signal:
             return "requires_attention"
         if regulation_discussion_deadline_status == "future" and has_project_discussion_signal:
@@ -473,12 +504,33 @@ def detect_action_level(
             and facts.deadline_text
         ):
             return "requires_attention"
+        if (
+            domain == "regulation.gov.ru"
+            and facts.deadline_text is not None
+            and any(m in title_text or m in lead_text for m in _REGULATION_SUBSIDY_PROCEDURE_MARKERS)
+        ):
+            _deadline_date = _extract_regulation_deadline_date(facts.deadline_text)
+            if _deadline_date is not None:
+                _days_left = (_deadline_date - _today_utc()).days
+                if 0 <= _days_left <= REGULATION_DISCUSSION_NEAR_DAYS:
+                    return "requires_attention"
+            return "watchlist"
         if has_strategy_signal or has_any_action_signal or explicit_keywords:
             return "watchlist"
         return "background"
     if domain == "regulation.gov.ru":
         if regulation_discussion_deadline_status == "near" and has_project_discussion_signal:
             return "requires_attention"
+        if (
+            facts.deadline_text is not None
+            and any(m in title_text or m in lead_text for m in _REGULATION_SUBSIDY_PROCEDURE_MARKERS)
+        ):
+            _deadline_date = _extract_regulation_deadline_date(facts.deadline_text)
+            if _deadline_date is not None:
+                _days_left = (_deadline_date - _today_utc()).days
+                if 0 <= _days_left <= REGULATION_DISCUSSION_NEAR_DAYS:
+                    return "requires_attention"
+            return "watchlist"
         if regulation_discussion_deadline_status == "future" and has_project_discussion_signal:
             return "watchlist"
         if has_project_discussion_signal or has_any_action_signal or explicit_keywords:
@@ -803,7 +855,9 @@ def build_business_signal(
             return "Региональный НПА / публичные консультации по профильной теме; держать на наблюдении."
         if page_type in {"reference_page", "section_page", "category_page", "year_archive"}:
             return "Общий раздел/архив НПА; прямой GR-сигнал не выявлен."
-        return "Региональный НПА по профильной теме: оставить в наблюдении."
+        if action_level == "requires_attention":
+            return "Региональный НПА с прямым действием: проверить порядок, условия вступления в силу и сроки."
+        return "Региональный НПА по профильной теме: держать на наблюдении."
     if source_role == "support_documents" and page_type in {"reference_page", "section_page", "category_page"}:
         return "Общий раздел/список документов; прямой GR-сигнал не выявлен."
     if _has_krasnodar_support_order_signal(

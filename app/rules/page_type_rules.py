@@ -416,6 +416,14 @@ def detect_source_specific_page_type(
             return "year_archive"
         return "section_page"
 
+    if domain == "mcx.gov.ru":
+        if any(fragment in lower_url for fragment in ("/docs/", "/activity/state-support/measures/")):
+            combined_mcx = f"{title} {lead_text}"
+            if any(m in combined_mcx for m in ("компенсац", "субсидирован", "возмещен")):
+                return "measure_card"
+            if "субсид" in title:
+                return "measure_card"
+
     if domain == "mcx.donland.ru":
         if title in MCX_DONLAND_REFERENCE_TITLES and any(
             fragment in lower_url

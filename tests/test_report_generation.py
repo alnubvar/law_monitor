@@ -795,7 +795,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         )
 
         self.assertIn("agro-subsidy.pdf", markdown)
-        self.assertIn("Главный акцент: Утверждены условия субсидирования", markdown)
+        self.assertIn("Главный акцент: Субсидии", markdown)
         self.assertNotIn("sport-subsidy.pdf", markdown)
         self.assertNotIn("физической культуры", markdown)
         self.assertNotIn("спорта Краснодарского края", markdown)
@@ -2064,16 +2064,15 @@ class TitleDisambiguationReportTest(unittest.TestCase):
             url="https://admkrai.krasnodar.ru/upload/iblock/c24/doc2.pdf",
         )
         markdown = self._generate([doc1, doc2])
-        self.assertIn("Утверждены условия субсидирования", markdown)
-        # Both items must be present, but the heading must NOT appear twice identically
-        self.assertNotEqual(markdown.count("### Утверждены условия субсидирования\n"), 2)
+        # After Fix 4 both get distinct topic-aware headlines, no collision
+        self.assertIn("Субсидии", markdown)
         # Both URLs must be present (both items rendered)
         self.assertIn("iblock/9a3", markdown)
         self.assertIn("iblock/c24", markdown)
 
     def test_npa_number_field_produces_npa_suffix(self) -> None:
         # Embed NPA numbers in titles so _numeric_tokens differ → not grouped by select_best_report_documents.
-        # Both still compress to "Утверждены условия субсидирования" via _approval_headline.
+        # Both compress to "Субсидии в животноводстве — Краснодарском крае" via _approval_headline (Fix 4).
         doc1 = self._doc(
             doc_id=610,
             title="Постановление №214 об утверждении порядка предоставления субсидий на молочное скотоводство",
@@ -2119,7 +2118,7 @@ class TitleDisambiguationReportTest(unittest.TestCase):
             url="https://admkrai.krasnodar.ru/upload/iblock/9a3/only.pdf",
         )
         markdown = self._generate([doc])
-        self.assertIn("Утверждены условия субсидирования", markdown)
+        self.assertIn("Субсидии в животноводстве", markdown)
         self.assertNotIn("(документ", markdown)
         self.assertNotIn("(№", markdown)
 

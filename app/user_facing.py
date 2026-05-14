@@ -395,12 +395,37 @@ def _compress_bureaucratic_title(document: PresentationDocument, title: str) -> 
     return title
 
 
+def _subsidy_topic_hint(combined: str) -> str:
+    lowered = combined.lower()
+    if "мелиора" in lowered:
+        return "на мелиорацию"
+    if "семен" in lowered or "семян" in lowered:
+        return "на семеноводство"
+    if "молоч" in lowered or "животновод" in lowered:
+        return "в животноводстве"
+    if "экспорт" in lowered:
+        return "на экспорт"
+    if "овощ" in lowered:
+        return "на овощеводство"
+    if "зерн" in lowered or "пшениц" in lowered:
+        return "на зерновые"
+    if "апк" in lowered or "агропромышлен" in lowered:
+        return "в АПК"
+    return ""
+
+
 def _approval_headline(document: PresentationDocument, combined: str) -> str:
     if _looks_like_export_restriction(combined):
         return "Утверждены экспортные правила"
     if _looks_like_selection(combined):
         return "Утверждены правила отбора"
     if _looks_like_subsidy(combined):
+        region = _region_label(document)
+        topic = _subsidy_topic_hint(combined)
+        if topic and region:
+            return f"Субсидии {topic} — {region}"
+        if region:
+            return f"Субсидии — {region}"
         return "Утверждены условия субсидирования"
     if _is_support_context(combined):
         return "Утверждены правила поддержки"

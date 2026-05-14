@@ -1,0 +1,13 @@
+{
+  "id": "mcx_docs_compensation_measure_card",
+  "source_name": "Минсельхоз России - меры господдержки",
+  "source_role": "support_documents",
+  "expected_source_role": "support_documents",
+  "level": "federal",
+  "region": "federal",
+  "title": "Компенсация части затрат на приобретение семян сельскохозяйственных культур",
+  "url": "https://mcx.gov.ru/docs/documents/9876/",
+  "raw_text": "Минсельхоз России. Мера господдержки АПК. Компенсация части затрат на приобретение семян сельскохозяйственных культур. Государственная поддержка агропромышленного комплекса.",
+  "expected_action_level": "watchlist",
+  "expected_page_type": "measure_card"
+}

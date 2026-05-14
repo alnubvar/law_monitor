@@ -1945,5 +1945,195 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         self.assertEqual(result.action_level, "background")
 
 
+    def test_regulation_gov_subsidy_title_not_blocked_by_domain_gate(self) -> None:
+        """Fix 1: regulation.gov.ru + субсид in title must not return background."""
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+        deadline = datetime.now(timezone.utc) + timedelta(days=5)
+
+        result = client.analyze_document(
+            "Об утверждении порядка предоставления субсидий производителям зерна",
+            (
+                "Проект НПА. Министерство: Минсельхоз России. "
+                "Статус: Идет обсуждение. "
+                f"Конец обсуждения: {deadline.strftime('%d.%m.%Y')}. "
+                "Порядок предоставления субсидий."
+            ),
+            source_name="Regulation.gov.ru",
+            url="https://regulation.gov.ru/projects/168100",
+            level="federal",
+            region="federal",
+        )
+
+        self.assertNotEqual(result.action_level, "background")
+
+    def test_regulation_gov_procedure_deadline_bypass_near(self) -> None:
+        """Fix 2: regulation.gov.ru + deadline near + subsidy procedure signal → requires_attention."""
+        client = MockLLMClient(["субсидии"])
+        deadline = datetime.now(timezone.utc) + timedelta(days=6)
+
+        result = client.analyze_document(
+            "О порядке предоставления государственной поддержки предприятиям АПК",
+            (
+                "Проект НПА: О порядке предоставления государственной поддержки. "
+                "Министерство: Минсельхоз России. "
+                "Статус: Идет обсуждение. "
+                f"Конец обсуждения: {deadline.strftime('%d.%m.%Y')}. "
+                "Порядок предоставления субсидий сельхозтоваропроизводителям АПК."
+            ),
+            source_name="Regulation.gov.ru",
+            url="https://regulation.gov.ru/projects/168101",
+            level="federal",
+            region="federal",
+        )
+
+        self.assertEqual(result.action_level, "requires_attention")
+
+    def test_regulation_gov_procedure_deadline_bypass_future(self) -> None:
+        """Fix 2: regulation.gov.ru + deadline far + subsidy procedure signal → at most watchlist."""
+        client = MockLLMClient(["субсидии"])
+        deadline = datetime.now(timezone.utc) + timedelta(days=60)
+
+        result = client.analyze_document(
+            "О порядке предоставления субсидий на возмещение части затрат",
+            (
+                "Проект НПА. Министерство: Минсельхоз России. "
+                f"Конец обсуждения: {deadline.strftime('%d.%m.%Y')}. "
+                "Возмещение части затрат сельскохозяйственным товаропроизводителям."
+            ),
+            source_name="Regulation.gov.ru",
+            url="https://regulation.gov.ru/projects/168102",
+            level="federal",
+            region="federal",
+        )
+
+        self.assertNotEqual(result.action_level, "background")
+        self.assertNotEqual(result.action_level, "requires_attention")
+
+    def test_mcx_docs_compensation_becomes_measure_card(self) -> None:
+        """Fix 3: mcx.gov.ru /docs/ URL with compensation title → measure_card page_type."""
+        client = MockLLMClient(["государственная поддержка АПК"])
+
+        result = client.analyze_document(
+            "Компенсация части затрат на приобретение семян сельскохозяйственных культур",
+            "Минсельхоз России. Мера господдержки АПК. Компенсация части затрат на приобретение семян. Государственная поддержка агропромышленного комплекса.",
+            source_name="Минсельхоз России - меры господдержки",
+            url="https://mcx.gov.ru/docs/documents/9876/",
+            level="federal",
+            region="federal",
+        )
+
+        self.assertEqual(result.page_type, "measure_card")
+
+    def test_mcx_measures_subisidization_becomes_measure_card(self) -> None:
+        """Fix 3: mcx.gov.ru /activity/state-support/measures/ URL with субсидирован → measure_card."""
+        client = MockLLMClient(["государственная поддержка АПК"])
+
+        result = client.analyze_document(
+            "Субсидирование части затрат на транспортировку продукции АПК",
+            "Минсельхоз России. Субсидирование части затрат на транспортировку продукции АПК. Государственная поддержка.",
+            source_name="Минсельхоз России - меры господдержки",
+            url="https://mcx.gov.ru/activity/state-support/measures/transportirovka-apk/",
+            level="federal",
+            region="federal",
+        )
+
+        self.assertEqual(result.page_type, "measure_card")
+
+    def test_legacy_mcx_credit_subsidy_still_background_after_fix3(self) -> None:
+        """Fix 3 non-regression: subsidy-credit-2017 legacy measure must stay background."""
+        client = MockLLMClient(["субсидии сельское хозяйство", "государственная поддержка АПК"])
+
+        result = client.analyze_document(
+            "Субсидия на возмещение части процентной ставки по инвестиционным кредитам, взятым до 1 января 2017 года",
+            "Минсельхоз России. Мера господдержки АПК: субсидия на возмещение части процентной ставки.",
+            source_name="Минсельхоз России - меры господдержки",
+            url="https://mcx.gov.ru/activity/state-support/measures/subsidy-credit-2017/",
+        )
+
+        self.assertEqual(result.action_level, "background")
+
+    def test_regional_npa_requires_attention_business_signal_not_watchlist_wording(self) -> None:
+        """Fix 5: regional_npa with requires_attention must not say 'оставить в наблюдении'."""
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Постановление о внесении изменений в порядок предоставления субсидий сельхозтоваропроизводителям",
+            "Постановление Правительства Краснодарского края. О внесении изменений в порядок предоставления субсидий сельскохозяйственным товаропроизводителям. Субсидии на поддержку агропромышленного комплекса.",
+            source_name="Нормативные акты Краснодарского края",
+            url="https://admkrai.krasnodar.ru/upload/iblock/abc/subsidy-amendment.pdf",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertEqual(result.action_level, "requires_attention")
+        self.assertNotIn("оставить в наблюдении", result.business_signal or "")
+        self.assertIn("Региональный НПА", result.business_signal or "")
+
+    def test_regulation_gov_subsidy_decision_no_deadline_becomes_watchlist(self) -> None:
+        """Task 1: 'Решение о порядке предоставления субсидии' on regulation.gov.ru
+        with no deadline_text must become watchlist, not background."""
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Решение о порядке предоставления субсидии № 22-64470-00598-Р (версия 2)",
+            "Решение о порядке предоставления субсидии. Документ регулирует распределение средств.",
+            source_name="Regulation.gov.ru",
+            url="https://regulation.gov.ru/projects/167907",
+            level="federal",
+            region="federal",
+        )
+
+        self.assertEqual(result.action_level, "watchlist")
+        self.assertNotEqual(result.action_level, "background")
+
+    def test_regulation_gov_subsidy_procedure_title_only_becomes_watchlist(self) -> None:
+        """Task 1: 'порядок предоставления субсид' in title, no deadline → watchlist."""
+        client = MockLLMClient(["субсидии"])
+
+        result = client.analyze_document(
+            "Порядок предоставления субсидий на возмещение части затрат на производство",
+            "Документ утверждает порядок предоставления субсидий. Текст документа.",
+            source_name="Regulation.gov.ru",
+            url="https://regulation.gov.ru/projects/167910",
+            level="federal",
+            region="federal",
+        )
+
+        self.assertEqual(result.action_level, "watchlist")
+        self.assertNotEqual(result.action_level, "background")
+
+    def test_mcx_measures_subsidii_title_becomes_measure_card(self) -> None:
+        """Task 2: mcx.gov.ru /measures/ URL with 'Субсидии' title → measure_card,
+        ensuring already-collected docs are reclassified by analyze --force."""
+        client = MockLLMClient(["государственная поддержка АПК"])
+
+        result = client.analyze_document(
+            "Субсидии производителям сельскохозяйственной техники",
+            "Минсельхоз России. Мера господдержки: субсидии производителям сельскохозяйственной техники.",
+            source_name="Минсельхоз России - меры господдержки",
+            url="https://mcx.gov.ru/activity/state-support/measures/machinery-subsidy/",
+            level="federal",
+            region="federal",
+        )
+
+        self.assertEqual(result.page_type, "measure_card")
+
+    def test_regulation_gov_non_subsidy_title_without_deadline_stays_background(self) -> None:
+        """Task 1 non-regression: regulation.gov.ru doc without subsidy procedure title
+        and without deadline must still be blocked as background."""
+        client = MockLLMClient(["субсидии"])
+
+        result = client.analyze_document(
+            "О формах документов, применяемых кредитными организациями при осуществлении кассовых операций",
+            "Документ устанавливает формы для кредитных организаций.",
+            source_name="Regulation.gov.ru",
+            url="https://regulation.gov.ru/projects/167910",
+            level="federal",
+            region="federal",
+        )
+
+        self.assertEqual(result.action_level, "background")
+
+
 if __name__ == "__main__":
     unittest.main()
