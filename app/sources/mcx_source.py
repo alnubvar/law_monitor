@@ -5,6 +5,7 @@ from datetime import datetime, time, timezone
 from pathlib import PurePosixPath
 from urllib.parse import urljoin, urlparse
 
+import requests
 from bs4 import BeautifulSoup
 
 from app.extractors.date_extractor import parse_russian_date
@@ -72,6 +73,7 @@ _DETAIL_NOISE_TAGS = ("script", "style", "nav", "footer", "header", "noscript", 
 _DETAIL_WHITESPACE_RE = re.compile(r"\s+")
 _DETAIL_TEXT_MAX_LENGTH = 4000
 _DETAIL_LINKS_MAX_COUNT = 3
+_DETAIL_SERVER_ERROR_THRESHOLD = 3
 
 
 class McxSource(BaseSource):
@@ -222,34 +224,64 @@ class McxSource(BaseSource):
         return items
 
     def _enrich_items_with_details(self, items: list[CollectedItem]) -> None:
+        server_errors = 0
+        detail_disabled = False
         for item in items:
             if item.document_type != "html":
                 continue
-            item.raw_text = self._enrich_raw_text_from_detail(
-                base_raw_text=item.raw_text or "",
-                title=item.title,
-                url=item.url,
-            )
-
-    def _enrich_raw_text_from_detail(self, *, base_raw_text: str, title: str, url: str) -> str:
-        if not self._should_fetch_detail(url):
-            return base_raw_text
-        try:
-            response = self.get(url)
-        except Exception as exc:
-            self.logger.warning("McxSource detail fetch failed for %s: %s", url, exc)
-            return base_raw_text
-        soup = BeautifulSoup(response.text, "html.parser")
-        detail_text = self._extract_detail_text(soup, title)
-        related_links = self._extract_safe_related_links(soup, url, current_url=url)
-        if not detail_text and not related_links:
-            return base_raw_text
-        parts = [base_raw_text]
-        if detail_text:
-            parts.append(detail_text)
-        if related_links:
-            parts.append("Связанные документы: " + "; ".join(related_links))
-        return "\n".join(part for part in parts if part)
+            if detail_disabled:
+                continue
+            if not self._should_fetch_detail(item.url):
+                continue
+            base_raw_text = item.raw_text or ""
+            try:
+                response = self.get(item.url)
+            except requests.exceptions.HTTPError as exc:
+                status = exc.response.status_code if exc.response is not None else None
+                if status is not None and status >= 500:
+                    server_errors += 1
+                    self.logger.warning(
+                        "McxSource detail fetch HTTP %s for %s (%d/%d)",
+                        status, item.url, server_errors, _DETAIL_SERVER_ERROR_THRESHOLD,
+                    )
+                    if server_errors >= _DETAIL_SERVER_ERROR_THRESHOLD:
+                        detail_disabled = True
+                        self.logger.warning(
+                            "McxSource: detail fetch disabled for this run after %d server errors",
+                            server_errors,
+                        )
+                else:
+                    self.logger.warning(
+                        "McxSource detail fetch HTTP %s for %s", status, item.url
+                    )
+                continue
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+                server_errors += 1
+                self.logger.warning(
+                    "McxSource detail fetch connectivity error for %s: %s (%d/%d)",
+                    item.url, exc, server_errors, _DETAIL_SERVER_ERROR_THRESHOLD,
+                )
+                if server_errors >= _DETAIL_SERVER_ERROR_THRESHOLD:
+                    detail_disabled = True
+                    self.logger.warning(
+                        "McxSource: detail fetch disabled for this run after %d infrastructure errors",
+                        server_errors,
+                    )
+                continue
+            except Exception as exc:
+                self.logger.warning("McxSource detail fetch failed for %s: %s", item.url, exc)
+                continue
+            soup = BeautifulSoup(response.text, "html.parser")
+            detail_text = self._extract_detail_text(soup, item.title)
+            related_links = self._extract_safe_related_links(soup, item.url, current_url=item.url)
+            if not detail_text and not related_links:
+                continue
+            parts = [base_raw_text]
+            if detail_text:
+                parts.append(detail_text)
+            if related_links:
+                parts.append("Связанные документы: " + "; ".join(related_links))
+            item.raw_text = "\n".join(part for part in parts if part)
 
     def _should_fetch_detail(self, url: str) -> bool:
         parsed = urlparse(url)

@@ -4,6 +4,8 @@ import unittest
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
+import requests
+
 from app.models import SourceConfig
 from app.sources.mcx_source import McxSource
 
@@ -671,6 +673,129 @@ class McxSourceDetailFetchTest(unittest.TestCase):
                 "https://mcx.gov.ru/activity/state-support/measures/льготное-кредитование/"
             )
         )
+
+
+_HTML_5_ITEMS = """
+<html><body>
+<a href="/activity/state-support/measures/measure-1/">Субсидия 1</a>
+<a href="/activity/state-support/measures/measure-2/">Субсидия 2</a>
+<a href="/activity/state-support/measures/measure-3/">Субсидия 3</a>
+<a href="/activity/state-support/measures/measure-4/">Субсидия 4</a>
+<a href="/activity/state-support/measures/measure-5/">Субсидия 5</a>
+</body></html>
+"""
+
+_HTML_4_ITEMS = """
+<html><body>
+<a href="/activity/state-support/measures/measure-1/">Субсидия 1</a>
+<a href="/activity/state-support/measures/measure-2/">Субсидия 2</a>
+<a href="/activity/state-support/measures/measure-3/">Субсидия 3</a>
+<a href="/activity/state-support/measures/measure-4/">Субсидия 4</a>
+</body></html>
+"""
+
+
+def _http_error(status_code: int) -> requests.exceptions.HTTPError:
+    resp = requests.Response()
+    resp.status_code = status_code
+    return requests.exceptions.HTTPError(response=resp)
+
+
+class McxSourceCircuitBreakerTest(unittest.TestCase):
+
+    def _measures_source(self, max_items: int | None = None) -> McxSource:
+        return McxSource(
+            SourceConfig(
+                name=_MEASURES_CONFIG.name,
+                url=_MEASURES_CONFIG.url,
+                level=_MEASURES_CONFIG.level,
+                region=_MEASURES_CONFIG.region,
+                source_role=_MEASURES_CONFIG.source_role,
+                parser="mcx",
+                max_items=max_items,
+                description="test",
+            )
+        )
+
+    def test_404_does_not_disable_detail_fetch(self) -> None:
+        """A 404 falls back that item only; the next item is still detail-fetched."""
+        source = self._measures_source(max_items=2)
+        with patch.object(
+            source,
+            "get",
+            side_effect=[
+                _mock_response(_MEASURES_HTML),  # listing — 3 items, max_items=2
+                _http_error(404),                # item 1: 4xx, no circuit increment
+                _mock_response(_DETAIL_HTML),    # item 2: still attempted and enriched
+            ],
+        ) as mock_get:
+            items = source.fetch_items()
+        self.assertEqual(mock_get.call_count, 3)
+        self.assertIn("Мера господдержки АПК", items[0].raw_text or "")
+        self.assertNotIn("льготных кредитов", items[0].raw_text or "")
+        self.assertIn("льготных кредитов", items[1].raw_text or "")
+
+    def test_repeated_503_disables_further_detail_fetches(self) -> None:
+        """Three 503s trip the circuit; items 4 and 5 are not detail-fetched."""
+        source = self._measures_source(max_items=5)
+        with patch.object(
+            source,
+            "get",
+            side_effect=[
+                _mock_response(_HTML_5_ITEMS),
+                _http_error(503),  # item 1: server error
+                _http_error(503),  # item 2: server error
+                _http_error(503),  # item 3: server error → threshold, circuit opens
+                # items 4 and 5 not fetched
+            ],
+        ) as mock_get:
+            items = source.fetch_items()
+        self.assertEqual(mock_get.call_count, 4)  # 1 listing + 3 detail attempts
+        self.assertEqual(len(items), 5)
+        for item in items:
+            self.assertIn("Мера господдержки АПК", item.raw_text or "")
+            self.assertNotIn("льготных кредитов", item.raw_text or "")
+
+    def test_enriched_items_preserved_when_circuit_trips_later(self) -> None:
+        """Items enriched before the threshold is reached keep their detail text."""
+        source = self._measures_source(max_items=4)
+        with patch.object(
+            source,
+            "get",
+            side_effect=[
+                _mock_response(_HTML_4_ITEMS),
+                _mock_response(_DETAIL_HTML),  # item 1: enriched
+                _http_error(503),              # item 2: server error
+                _http_error(503),              # item 3: server error
+                _http_error(503),              # item 4: server error → circuit opens
+            ],
+        ) as mock_get:
+            items = source.fetch_items()
+        self.assertEqual(mock_get.call_count, 5)  # 1 listing + 4 detail attempts
+        self.assertIn("льготных кредитов", items[0].raw_text or "")
+        for item in items[1:]:
+            self.assertIn("Мера господдержки АПК", item.raw_text or "")
+            self.assertNotIn("льготных кредитов", item.raw_text or "")
+
+    def test_connectivity_errors_count_toward_circuit_breaker(self) -> None:
+        """ConnectionError and Timeout count toward the threshold like server errors."""
+        source = self._measures_source(max_items=4)
+        with patch.object(
+            source,
+            "get",
+            side_effect=[
+                _mock_response(_HTML_4_ITEMS),
+                requests.exceptions.ConnectionError("refused"),  # item 1
+                requests.exceptions.Timeout("timeout"),          # item 2
+                requests.exceptions.ConnectionError("refused"),  # item 3 → circuit opens
+                # item 4 not fetched
+            ],
+        ) as mock_get:
+            items = source.fetch_items()
+        self.assertEqual(mock_get.call_count, 4)  # 1 listing + 3 detail attempts
+        self.assertEqual(len(items), 4)
+        for item in items:
+            self.assertIn("Мера господдержки АПК", item.raw_text or "")
 
 
 if __name__ == "__main__":
