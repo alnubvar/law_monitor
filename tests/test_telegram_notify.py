@@ -857,6 +857,23 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         self.assertNotIn("Max retries", text)
         self.assertNotIn("Client Error", text)
 
+    def test_sources_does_not_mark_successful_source_unavailable_on_item_errors(self) -> None:
+        db_path = self._db_path("telegram_sources_item_errors.db")
+        init_db(db_path)
+        audits = [
+            {
+                "source_name": "Минсельхоз Ростовской области - господдержка",
+                "success_at": datetime.now(timezone.utc),
+                "error_at": datetime.now(timezone.utc),
+                "error_message": "Item processing errors: 1",
+            }
+        ]
+        with patch("app.notify.telegram.list_latest_source_audit", return_value=audits):
+            text = telegram.build_command_response("/sources", db_path=db_path)
+
+        self.assertNotIn("Минсельхоз Ростовской области - господдержка — временно недоступен", text)
+        self.assertIn("Минсельхоз Ростовской области - господдержка", text)
+
     def test_missing_published_date_is_hidden_from_user(self) -> None:
         db_path = self._db_path("telegram_missing_date.db")
         init_db(db_path)

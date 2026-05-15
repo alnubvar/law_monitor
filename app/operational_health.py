@@ -183,6 +183,9 @@ def _collect_source_error_notices(
         collected_at = _normalize_dt(record.collected_at)
         if collected_at is None or collected_at.timestamp() < cutoff:
             continue
+        latest_row = audit_by_source.get(record.source_name)
+        if latest_row is not None and not _is_unavailable_source_row(latest_row):
+            continue
         errored_sources.setdefault(record.source_name, True)
 
     for source_name in source_health.failed_sources:
@@ -192,7 +195,7 @@ def _collect_source_error_notices(
         error_at = _normalize_dt(row.get("error_at"))
         if error_at is None or error_at.timestamp() < cutoff:
             continue
-        if row.get("error_message"):
+        if row.get("error_message") and _is_unavailable_source_row(row):
             errored_sources.setdefault(source_name, True)
 
     return [
@@ -305,3 +308,7 @@ def _normalize_dt(value: object) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _is_unavailable_source_row(row: dict[str, object]) -> bool:
+    return bool(row.get("error_message")) and _normalize_dt(row.get("success_at")) is None

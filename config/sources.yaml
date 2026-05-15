@@ -189,7 +189,7 @@
   max_items: 30
   deny_patterns:
     - "/request/"
-    - "/presscenter/"
+    - "/presscenter/video"
     - "/documents/all/"
   allow_patterns:
     - "/activity/"

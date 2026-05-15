@@ -5,7 +5,7 @@ from datetime import datetime, time, timezone
 from pathlib import PurePosixPath
 from urllib.parse import urlparse
 
-from bs4 import NavigableString, Tag
+from bs4 import BeautifulSoup, NavigableString, Tag
 
 from app.extractors.date_extractor import parse_russian_date
 from app.sources.generic_html_source import GenericHTMLSource
@@ -108,8 +108,19 @@ MCX_REFERENCE_PATHS = {
     "/sitemap",
     "/vote",
 }
+MCX_TRAVERSAL_TITLES = {
+    "животноводство",
+    "малые формы хозяйствования",
+    "наука и образование",
+    "пищевая и перерабатывающая промышленность",
+    "растениеводство",
+    "рыбохозяйственный комплекс",
+    "страхование и инвестиции",
+    "виноградарство и виноделие",
+}
 MCX_YEAR_OR_PERIOD_RE = re.compile(r"^(?:20\d{2}|за\s+(?:сегодня|неделю|месяц))$", re.IGNORECASE)
 MCX_ACTIVITY_PATH_RE = re.compile(r"^/activity/\d+/?$", re.IGNORECASE)
+EMBEDDED_HOST_SEGMENT_RE = re.compile(r"(^|/)([a-z0-9-]+(?:\.[a-z0-9-]+)+)(?=/)", re.IGNORECASE)
 PRAVO_DOCUMENT_TITLE_MARKERS = (
     "закон",
     "постановление",
@@ -161,6 +172,47 @@ DATE_CONTEXT_RE = re.compile(
 
 class DonlandSource(GenericHTMLSource):
     """Source-specific filtering for Ростовские portals on donland.ru."""
+
+    def fetch_items(self):
+        if not self._is_mcx_support_root_source():
+            return super().fetch_items()
+
+        response = self.get(self.config.url)
+        soup = BeautifulSoup(response.text, "html.parser")
+        items = []
+        seen_urls: set[str] = set()
+        traversal_seen: set[str] = set()
+        aggregated_stats: dict[str, int | str] = {}
+
+        root_items = self._extract_items_from_soup(soup, response.url, seen_urls=seen_urls)
+        self._merge_fetch_stats(aggregated_stats, self.last_fetch_stats)
+        items.extend(root_items)
+
+        traversed_page_count = 0
+        for traversal_url in self._extract_mcx_traversal_urls(soup, response.url):
+            if traversal_url in traversal_seen:
+                continue
+            remaining = self._remaining_item_budget(items)
+            if remaining == 0:
+                break
+            traversal_seen.add(traversal_url)
+            nested_response = self.get(traversal_url)
+            nested_soup = BeautifulSoup(nested_response.text, "html.parser")
+            nested_items = self._extract_items_from_soup(
+                nested_soup,
+                nested_response.url,
+                seen_urls=seen_urls,
+                max_items_override=remaining,
+            )
+            self._merge_fetch_stats(aggregated_stats, self.last_fetch_stats)
+            items.extend(nested_items)
+            traversed_page_count += 1
+
+        if aggregated_stats:
+            aggregated_stats["items_collected_count"] = len(items)
+            aggregated_stats["traversed_page_count"] = traversed_page_count
+            self.last_fetch_stats = aggregated_stats
+        return items
 
     def _should_include_url(self, url: str, base_url: str, title: str) -> bool:
         if not super()._should_include_url(url, base_url, title):
@@ -214,6 +266,66 @@ class DonlandSource(GenericHTMLSource):
         if extracted is None:
             return super()._extract_published_at(link, normalized_url)
         return datetime.combine(extracted, time.min, tzinfo=timezone.utc)
+
+    def _normalize_url(self, href: str, base_url: str) -> str | None:
+        normalized = super()._normalize_url(href, base_url)
+        if normalized is None:
+            return None
+        if self._has_embedded_foreign_host_path(normalized):
+            return None
+        return normalized
+
+    def _is_mcx_support_root_source(self) -> bool:
+        source_key = f"{self.config.name} {self.config.url}".lower()
+        return (
+            "минсельхоз ростовской области - господдержка" in source_key
+            and self.config.url.rstrip("/") == "https://mcx.donland.ru/activity/35217"
+        )
+
+    def _extract_mcx_traversal_urls(self, soup: BeautifulSoup, base_url: str) -> list[str]:
+        traversal_urls: list[str] = []
+        local_seen: set[str] = set()
+        base_host = urlparse(base_url).netloc.lower()
+
+        for link in soup.find_all("a", href=True):
+            if not isinstance(link, Tag):
+                continue
+            normalized_url = self._normalize_url(link.get("href", ""), base_url)
+            if not normalized_url or normalized_url in local_seen:
+                continue
+            parsed = urlparse(normalized_url)
+            if parsed.netloc.lower() != base_host:
+                continue
+            title = self._extract_title(link, normalized_url)
+            if not self._should_include_title(title):
+                continue
+            if self._should_traverse_mcx_category(normalized_url, title):
+                traversal_urls.append(normalized_url)
+                local_seen.add(normalized_url)
+        return traversal_urls
+
+    def _should_traverse_mcx_category(self, url: str, title: str) -> bool:
+        if self._detect_document_type(url) != "html":
+            return False
+
+        path = urlparse(url).path.rstrip("/") or "/"
+        title_text = _normalize_title(title)
+
+        if path.startswith("/documents/active"):
+            return title_text == "действующие документы" or bool(MCX_YEAR_OR_PERIOD_RE.fullmatch(title_text))
+        if path.startswith("/presscenter/"):
+            return False
+        return MCX_ACTIVITY_PATH_RE.fullmatch(path) is not None and title_text in MCX_TRAVERSAL_TITLES
+
+    def _has_embedded_foreign_host_path(self, url: str) -> bool:
+        parsed = urlparse(url)
+        base_host = parsed.netloc.lower()
+        for _prefix, candidate_host in EMBEDDED_HOST_SEGMENT_RE.findall(parsed.path.lower()):
+            if candidate_host == base_host:
+                continue
+            if candidate_host.endswith((".ru", ".gov.ru", ".org", ".com", ".рф")):
+                return True
+        return False
 
 
 def _normalize_title(title: str) -> str:

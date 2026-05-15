@@ -219,6 +219,42 @@ class OperationalHealthTest(unittest.TestCase):
             )
         )
 
+    def test_item_processing_errors_do_not_mark_successful_source_unavailable(self) -> None:
+        db_path = self._db_path("operational_item_errors_not_unavailable.db")
+        init_db(db_path)
+        now = datetime.now(timezone.utc)
+        save_source_error(
+            "Минсельхоз Ростовской области - господдержка",
+            "https://mcx.donland.ru/activity/35217/",
+            "Item processing errors: 1",
+            db_path=db_path,
+        )
+        save_source_audit_record(
+            source_name="Минсельхоз Ростовской области - господдержка",
+            source_url="https://mcx.donland.ru/activity/35217/",
+            enabled=True,
+            attempted_at=now,
+            success_at=now,
+            error_at=now,
+            error_message="Item processing errors: 1",
+            fetched_count=30,
+            saved_count=26,
+            existing_count=3,
+            duplicates_count=0,
+            item_errors_count=1,
+            db_path=db_path,
+        )
+
+        notices = collect_operational_notices(db_path=db_path)
+
+        self.assertFalse(
+            any(
+                "Источник временно недоступен: Минсельхоз Ростовской области - господдержка"
+                in notice.message
+                for notice in notices
+            )
+        )
+
     def test_old_source_with_no_success_creates_no_success_warning(self) -> None:
         db_path = self._db_path("operational_no_success_source.db")
         init_db(db_path)

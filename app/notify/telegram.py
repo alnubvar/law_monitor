@@ -622,7 +622,7 @@ def _build_sources_message(db_path: Path | str) -> str:
         audit_row = audit_by_source.get(source.name)
         last_success = _fmt_dt(audit_row["success_at"]) if audit_row else None
         last_error = _fmt_dt(audit_row["error_at"]) if audit_row else None
-        if audit_row and audit_row.get("error_message"):
+        if audit_row and _is_unavailable_source_audit(audit_row):
             lines.append(f"❌ {source.name} — временно недоступен")
             if last_error:
                 lines.append(f"  Последняя проблема: {last_error}")
@@ -930,6 +930,10 @@ def _fmt_dt(value: datetime | None) -> str | None:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.astimezone().strftime("%Y-%m-%d")
+
+
+def _is_unavailable_source_audit(audit_row: dict[str, object]) -> bool:
+    return bool(audit_row.get("error_message")) and audit_row.get("success_at") is None
 
 
 def _sanitize_published_at_for_status(value: datetime | None) -> datetime | None:
