@@ -123,6 +123,26 @@
   max_items: 30
   description: Федеральный портал проектов нормативных актов и общественных обсуждений.
 
+- name: promote.budget.gov.ru / Минфин - отборы и меры поддержки
+  url: https://promote.budget.gov.ru/public/minfin/activity
+  level: support_measures
+  region: federal
+  source_role: active_support_measures
+  source_type: api_json
+  enabled: true
+  parser: promote_budget
+  verify_ssl: true
+  request_timeout: 30
+  request_headers:
+    User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0 Safari/537.36
+    Accept: application/json, text/plain, */*
+    Content-Type: application/json
+    Accept-Language: ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7
+    Origin: https://promote.budget.gov.ru
+    Referer: https://promote.budget.gov.ru/public/minfin/activity?fromMain=true&fromBanner=true&searchText=
+  max_items: 30
+  description: Федеральный SPA/API-портал отборов и мер поддержки Электронного бюджета; собираем только ограниченную первую выборку релевантных АПК карточек.
+
 - name: Минсельхоз Краснодарского края - субсидирование и финансирование
   url: https://msh.krasnodar.ru/documents/subsidirovanie-i-finansirovanie1
   level: regional

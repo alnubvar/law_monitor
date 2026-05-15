@@ -21,6 +21,7 @@ from app.sources.government_source import GovernmentSource
 from app.sources.krasnodar_source import KrasnodarSource
 from app.sources.regional_law_source import RegionalLawSource
 from app.sources.mcx_source import McxSource
+from app.sources.promote_budget_source import PromoteBudgetSource
 from app.sources.publication_pravo_stav_source import PublicationPravoStavropolSource
 from app.sources.regulation_gov_source import RegulationGovSource
 from app.sources.stavropol_source import StavropolSource
@@ -52,6 +53,7 @@ PARSER_REGISTRY: dict[str, type[BaseSource]] = {
     "government": GovernmentSource,
     "krasnodar": KrasnodarSource,
     "mcx": McxSource,
+    "promote_budget": PromoteBudgetSource,
     "publication_pravo_stav": PublicationPravoStavropolSource,
     "regional_law": RegionalLawSource,
     "regulation_gov": RegulationGovSource,
@@ -308,7 +310,14 @@ def run_collect_with_options(
                             db_path=resolved_db_path,
                         )
                     if audit_existing:
-                        extracted = extract_document(item, source_config)
+                        if item.raw_text:
+                            extracted = ExtractionResult(
+                                raw_text=item.raw_text,
+                                document_type=item.document_type,
+                                extracted_text_length=len(item.raw_text.strip()),
+                            )
+                        else:
+                            extracted = extract_document(item, source_config)
                         raw_text_length = extracted.extracted_text_length
                         if raw_text_length is None:
                             raw_text_length = len((extracted.raw_text or "").strip())

@@ -9,8 +9,10 @@ import requests
 
 from app.models import CollectedItem, ExtractionResult, RawDocument, SourceConfig
 from app.pipeline.collect import run_collect_with_options
+from app.pipeline.collect import create_source
 from app.sources.generic_html_source import GenericHTMLSource
 from app.sources.krasnodar_source import KrasnodarSource
+from app.sources.promote_budget_source import PromoteBudgetSource
 from app.pipeline.deduplicate import compute_content_hash
 from app.storage import (
     get_document_by_url,
@@ -1002,6 +1004,86 @@ class BaseSourceUserAgentTest(unittest.TestCase):
 
         source = ConcreteSource(config)
         self.assertEqual(source.session.headers.get("User-Agent"), "from-request-headers")
+
+
+class SourceRegistryTest(unittest.TestCase):
+    def test_create_source_uses_promote_budget_parser(self) -> None:
+        config = SourceConfig(
+            name="promote.budget.gov.ru / Минфин - отборы и меры поддержки",
+            url="https://promote.budget.gov.ru/public/minfin/activity",
+            level="support_measures",
+            region="federal",
+            source_role="active_support_measures",
+            parser="promote_budget",
+            description="test",
+        )
+
+        source = create_source(config)
+
+        self.assertIsInstance(source, PromoteBudgetSource)
+
+    def test_audit_existing_prefers_prefilled_raw_text_for_promote_budget_items(self) -> None:
+        db_path = Path("data/test_artifacts/collect_promote_budget_audit.db")
+        if db_path.exists():
+            db_path.unlink()
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        init_db(db_path)
+
+        source_config = SourceConfig(
+            name="promote.budget.gov.ru / Минфин - отборы и меры поддержки",
+            url="https://promote.budget.gov.ru/public/minfin/activity",
+            level="support_measures",
+            region="federal",
+            source_role="active_support_measures",
+            parser="promote_budget",
+            description="test",
+        )
+        item = CollectedItem(
+            source_name=source_config.name,
+            source_url=source_config.url,
+            level=source_config.level,
+            region=source_config.region,
+            title="Грант Агростартап",
+            url="https://promote.budget.gov.ru/public/minfin/activity#activityId=a1&competitionId=c1&id=i1",
+            document_type="html",
+            raw_text="title: Грант Агростартап\nendDate: 2026-05-14T20:59:00Z",
+        )
+        save_document(
+            RawDocument(
+                source_name=source_config.name,
+                source_url=source_config.url,
+                level=source_config.level,
+                region=source_config.region,
+                title=item.title,
+                url=item.url,
+                published_at=datetime.now(timezone.utc),
+                collected_at=datetime.now(timezone.utc),
+                content_hash="existing-promote-budget",
+                raw_text=item.raw_text or "",
+                document_type="html",
+                status="collected",
+            ),
+            db_path,
+        )
+
+        class FakeSource:
+            def __init__(self) -> None:
+                self.last_fetch_stats = {"links_found_count": 1, "html_links_count": 1}
+
+            def fetch_items(self) -> list[CollectedItem]:
+                return [item]
+
+        with patch("app.pipeline.collect.load_sources", return_value=[source_config]):
+            with patch("app.pipeline.collect.create_source", return_value=FakeSource()):
+                with patch("app.pipeline.collect.extract_document") as mock_extract:
+                    saved_count = run_collect_with_options(
+                        source_name=source_config.name,
+                        audit_existing=True,
+                        db_path=str(db_path),
+                    )
+
+        self.assertEqual(saved_count, 0)
+        mock_extract.assert_not_called()
 
 
 class RefreshExistingUrlTest(unittest.TestCase):
