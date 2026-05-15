@@ -98,10 +98,8 @@ def _build_raw_text(item: Mapping[str, object]) -> str:
         accepting_applications = _normalize_text(
             accepting_info.get("acceptingApplicationsInfo")
         )
-        count_days_end_date = _normalize_text(accepting_info.get("countDaysEndDate"))
     else:
         accepting_applications = ""
-        count_days_end_date = ""
 
     lines = [
         f"title: {_normalize_text(item.get('title'))}",
@@ -112,7 +110,6 @@ def _build_raw_text(item: Mapping[str, object]) -> str:
         f"maxAmountForPersonInfo: {_normalize_text(item.get('maxAmountForPersonInfo'))}",
         f"isActive: {_normalize_text(item.get('isActive'))}",
         f"acceptingApplicationsInfo: {accepting_applications}",
-        f"countDaysEndDate: {count_days_end_date}",
         f"activityId: {_normalize_text(item.get('activityId'))}",
         f"competitionId: {_normalize_text(item.get('competitionId'))}",
         f"id: {_normalize_text(item.get('id'))}",

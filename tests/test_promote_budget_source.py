@@ -157,7 +157,7 @@ class PromoteBudgetSourceTest(unittest.TestCase):
         self.assertIn("endDate: 2026-05-14T20:59:00Z", raw_text)
         self.assertIn("maxAmountForPersonInfo: 13 682 538,80 ₽", raw_text)
         self.assertIn("acceptingApplicationsInfo: меньше 1 дня", raw_text)
-        self.assertIn("countDaysEndDate: 0.016", raw_text)
+        self.assertNotIn("countDaysEndDate", raw_text)
         self.assertIn("activityId: activity-1", raw_text)
         self.assertIn("competitionId: competition-1", raw_text)
         self.assertIn("id: card-1", raw_text)
@@ -270,6 +270,11 @@ class PromoteBudgetHelpersTest(unittest.TestCase):
         self.assertIn("title: Тест", raw_text)
         self.assertIn("endDate:", raw_text)
         self.assertIn("id: x", raw_text)
+
+    def test_build_raw_text_excludes_count_days_end_date(self) -> None:
+        raw_text = _build_raw_text(_AGRO_ITEM)
+        self.assertNotIn("countDaysEndDate", raw_text)
+        self.assertIn("acceptingApplicationsInfo: меньше 1 дня", raw_text)
 
     def test_extract_page_items_returns_only_mapping_items(self) -> None:
         items = _extract_page_items(
