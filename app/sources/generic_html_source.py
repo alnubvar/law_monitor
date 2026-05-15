@@ -15,6 +15,9 @@ DOCUMENT_EXTENSIONS = {
     ".pdf": "pdf",
     ".doc": "doc",
     ".docx": "docx",
+    ".xls": "xls",
+    ".xlsx": "xlsx",
+    ".zip": "zip",
     ".htm": "html",
     ".html": "html",
     ".php": "html",
@@ -175,7 +178,7 @@ class GenericHTMLSource(BaseSource):
         max_items = self.config.max_items if max_items_override is None else max_items_override
         links_found_count = 0
         links_filtered_count = 0
-        document_type_counts: dict[str, int] = {"pdf": 0, "docx": 0, "doc": 0, "html": 0, "xml": 0, "unknown": 0}
+        document_type_counts: dict[str, int] = {"pdf": 0, "docx": 0, "doc": 0, "xls": 0, "xlsx": 0, "zip": 0, "html": 0, "xml": 0, "unknown": 0}
         filtered_reason_counts: dict[str, int] = {
             "navigation": 0,
             "archive": 0,

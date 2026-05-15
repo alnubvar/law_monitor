@@ -1310,5 +1310,69 @@ class RefreshExistingUrlTest(unittest.TestCase):
         self.assertEqual(refreshed.content_hash, new_hash)
 
 
+class ExtractDocumentDispatchTest(unittest.TestCase):
+    """Unit tests for extract_document() dispatch to XLS / XLSX / ZIP branches."""
+
+    def _source_config(self) -> SourceConfig:
+        return SourceConfig(
+            name="Минсельхоз Ставропольского края - господдержка",
+            url="https://mshsk.ru/gospodderzhka/",
+            level="regional",
+            region="stavropol",
+            source_role="support_documents",
+            parser="stavropol",
+            description="test",
+            verify_ssl=False,
+        )
+
+    def _item(self, url: str, document_type: str, title: str = "Перечень мер господдержки 2025") -> CollectedItem:
+        cfg = self._source_config()
+        return CollectedItem(
+            source_name=cfg.name,
+            source_url=cfg.url,
+            level=cfg.level,
+            region=cfg.region,
+            title=title,
+            url=url,
+            document_type=document_type,
+        )
+
+    def test_xls_dispatch_returns_metadata_raw_text_without_network(self) -> None:
+        from app.pipeline.collect import extract_document
+        item = self._item("https://mshsk.ru/upload/measures.xls", "xls", "Перечень мер господдержки 2025")
+        result = extract_document(item, self._source_config())
+
+        self.assertEqual(result.document_type, "xls")
+        self.assertFalse(result.error)
+        self.assertIn("Перечень мер господдержки 2025", result.raw_text)
+        self.assertIn("https://mshsk.ru/upload/measures.xls", result.raw_text)
+        self.assertIn("xlrd", result.raw_text)
+        self.assertGreater(result.extracted_text_length or 0, 0)
+
+    def test_xlsx_dispatch_calls_xlsx_extractor(self) -> None:
+        from app.pipeline.collect import extract_document
+        item = self._item("https://mshsk.ru/upload/measures.xlsx", "xlsx")
+        fake_result = ExtractionResult(raw_text="Субсидия АПК", document_type="xlsx", extracted_text_length=12)
+
+        with patch("app.extractors.xlsx_extractor.extract_text_from_xlsx", return_value=fake_result) as mock_fn:
+            result = extract_document(item, self._source_config())
+
+        mock_fn.assert_called_once()
+        self.assertEqual(result.raw_text, "Субсидия АПК")
+        self.assertEqual(result.document_type, "xlsx")
+
+    def test_zip_dispatch_calls_zip_extractor(self) -> None:
+        from app.pipeline.collect import extract_document
+        item = self._item("https://mshsk.ru/download/docs.zip", "zip")
+        fake_result = ExtractionResult(raw_text="[doc.docx]\nГрант 2025", document_type="zip", extracted_text_length=20)
+
+        with patch("app.extractors.zip_extractor.extract_text_from_zip", return_value=fake_result) as mock_fn:
+            result = extract_document(item, self._source_config())
+
+        mock_fn.assert_called_once()
+        self.assertEqual(result.raw_text, "[doc.docx]\nГрант 2025")
+        self.assertEqual(result.document_type, "zip")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -133,7 +133,7 @@ class StavropolSource(GenericHTMLSource):
 
     def _should_include_mshsk_url(self, url: str, title: str) -> bool:
         document_type = self._detect_document_type(url)
-        if document_type in {"pdf", "doc", "docx"}:
+        if document_type in {"pdf", "doc", "docx", "xls", "xlsx", "zip"}:
             return True
 
         lower_url = url.lower()

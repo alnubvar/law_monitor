@@ -152,6 +152,78 @@ class StavropolSourceTest(unittest.TestCase):
         self.assertEqual(items[0].document_type, "docx")
         self.assertEqual(items[0].url, "https://pravo.stavregion.ru/files/postanovlenie-apk.docx")
 
+    def test_mshsk_xls_is_collected_with_correct_document_type(self) -> None:
+        source = self._source(
+            name="Минсельхоз Ставропольского края - господдержка",
+            url="https://mshsk.ru/gospodderzhka/",
+            source_role="support_documents",
+            region="stavropol",
+        )
+        source.config.allow_patterns = ["gospod", "subsid", ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip"]
+        soup = BeautifulSoup(
+            '<a href="/upload/perecheny-mer-gospod-2025.xls">Перечень мер государственной поддержки АПК 2025</a>',
+            "html.parser",
+        )
+        items = source._extract_items_from_soup(soup, source.config.url)
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].document_type, "xls")
+        self.assertEqual(items[0].url, "https://mshsk.ru/upload/perecheny-mer-gospod-2025.xls")
+
+    def test_mshsk_xlsx_is_collected_with_correct_document_type(self) -> None:
+        source = self._source(
+            name="Минсельхоз Ставропольского края - господдержка",
+            url="https://mshsk.ru/gospodderzhka/",
+            source_role="support_documents",
+            region="stavropol",
+        )
+        source.config.allow_patterns = ["gospod", "subsid", ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip"]
+        soup = BeautifulSoup(
+            '<a href="/upload/subsidii-2026.xlsx">Субсидии АПК 2026</a>',
+            "html.parser",
+        )
+        items = source._extract_items_from_soup(soup, source.config.url)
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].document_type, "xlsx")
+        self.assertEqual(items[0].url, "https://mshsk.ru/upload/subsidii-2026.xlsx")
+
+    def test_mshsk_zip_is_collected_with_correct_document_type(self) -> None:
+        source = self._source(
+            name="Минсельхоз Ставропольского края - господдержка",
+            url="https://mshsk.ru/gospodderzhka/",
+            source_role="support_documents",
+            region="stavropol",
+        )
+        source.config.allow_patterns = ["gospod", "subsid", ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip"]
+        soup = BeautifulSoup(
+            '<a href="/download/gospod-dokumenty-14.02.25.zip">Документы господдержки февраль 2025</a>',
+            "html.parser",
+        )
+        items = source._extract_items_from_soup(soup, source.config.url)
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].document_type, "zip")
+        self.assertEqual(items[0].url, "https://mshsk.ru/download/gospod-dokumenty-14.02.25.zip")
+
+    def test_mshsk_xls_with_plain_title_is_still_collected(self) -> None:
+        """XLS is included via .xls in allow_patterns — title alone no longer gates it."""
+        source = self._source(
+            name="Минсельхоз Ставропольского края - господдержка",
+            url="https://mshsk.ru/gospodderzhka/",
+            source_role="support_documents",
+            region="stavropol",
+        )
+        source.config.allow_patterns = ["gospod", "subsid", ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip"]
+        soup = BeautifulSoup(
+            '<a href="/upload/data.xls">Скачать</a>',
+            "html.parser",
+        )
+        items = source._extract_items_from_soup(soup, source.config.url)
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].document_type, "xls")
+
 
 if __name__ == "__main__":
     unittest.main()

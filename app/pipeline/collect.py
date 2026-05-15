@@ -99,6 +99,28 @@ def extract_document(item: CollectedItem, source_config: SourceConfig) -> Extrac
             **request_options,
         )
 
+    if item.document_type == "xlsx":
+        from app.extractors.xlsx_extractor import extract_text_from_xlsx
+        return extract_text_from_xlsx(item.url, **request_options)
+
+    if item.document_type == "xls":
+        raw_text = (
+            f"Документ: {item.title}\n"
+            f"Источник: {item.source_name}\n"
+            f"URL: {item.url}\n"
+            f"Тип файла: XLS\n"
+            f"Примечание: содержимое XLS-файла не извлечено — бинарный формат не поддерживается без xlrd."
+        )
+        return ExtractionResult(
+            raw_text=raw_text,
+            document_type="xls",
+            extracted_text_length=len(raw_text.strip()),
+        )
+
+    if item.document_type == "zip":
+        from app.extractors.zip_extractor import extract_text_from_zip
+        return extract_text_from_zip(item.url, **request_options)
+
     if item.document_type == "unknown":
         return ExtractionResult(
             raw_text="",
