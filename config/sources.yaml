@@ -253,22 +253,18 @@
   level: regional
   region: stavropol
   source_role: regional_npa
-  source_type: html_listing
-  enabled: false
-  parser: stavropol
+  source_type: api_json
+  enabled: true
+  parser: pravo_stavregion_api
   verify_ssl: false
   request_timeout: 30
   request_headers:
     User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0 Safari/537.36
     Accept-Language: ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7
+    Accept: application/json, text/plain, */*
+    Referer: https://pravo.stavregion.ru/
   max_items: 25
-  allow_patterns:
-    - "document"
-    - "pravo"
-    - ".pdf"
-    - ".doc"
-    - ".docx"
-  description: Официальный правовой портал Ставропольского края. Отключён — сайт использует JavaScript SPA, статическая HTML-страница не содержит ссылок.
+  description: Официальный правовой портал Ставропольского края через публичный listing API byFilter для региональных НПА АПК.
 
 - name: Официальные акты Ставропольского края (НПА)
   url: http://publication.pravo.gov.ru/api/Documents

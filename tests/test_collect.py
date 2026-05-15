@@ -13,6 +13,7 @@ from app.pipeline.collect import create_source
 from app.sources.generic_html_source import GenericHTMLSource
 from app.sources.krasnodar_source import KrasnodarSource
 from app.sources.promote_budget_source import PromoteBudgetSource
+from app.sources.pravo_stavregion_api_source import PravoStavregionApiSource
 from app.pipeline.deduplicate import compute_content_hash
 from app.storage import (
     get_document_by_url,
@@ -1021,6 +1022,21 @@ class SourceRegistryTest(unittest.TestCase):
         source = create_source(config)
 
         self.assertIsInstance(source, PromoteBudgetSource)
+
+    def test_create_source_uses_pravo_stavregion_api_parser(self) -> None:
+        config = SourceConfig(
+            name="Право Ставропольского края",
+            url="https://pravo.stavregion.ru/",
+            level="regional",
+            region="stavropol",
+            source_role="regional_npa",
+            parser="pravo_stavregion_api",
+            description="test",
+        )
+
+        source = create_source(config)
+
+        self.assertIsInstance(source, PravoStavregionApiSource)
 
     def test_audit_existing_prefers_prefilled_raw_text_for_promote_budget_items(self) -> None:
         db_path = Path("data/test_artifacts/collect_promote_budget_audit.db")

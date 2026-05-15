@@ -22,6 +22,7 @@ from app.sources.krasnodar_source import KrasnodarSource
 from app.sources.regional_law_source import RegionalLawSource
 from app.sources.mcx_source import McxSource
 from app.sources.promote_budget_source import PromoteBudgetSource
+from app.sources.pravo_stavregion_api_source import PravoStavregionApiSource
 from app.sources.publication_pravo_stav_source import PublicationPravoStavropolSource
 from app.sources.regulation_gov_source import RegulationGovSource
 from app.sources.stavropol_source import StavropolSource
@@ -54,6 +55,7 @@ PARSER_REGISTRY: dict[str, type[BaseSource]] = {
     "krasnodar": KrasnodarSource,
     "mcx": McxSource,
     "promote_budget": PromoteBudgetSource,
+    "pravo_stavregion_api": PravoStavregionApiSource,
     "publication_pravo_stav": PublicationPravoStavropolSource,
     "regional_law": RegionalLawSource,
     "regulation_gov": RegulationGovSource,
