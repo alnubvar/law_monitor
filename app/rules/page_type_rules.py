@@ -366,6 +366,10 @@ def detect_source_specific_page_type(
             return "registry"
         return "results_protocol"
 
+    if domain == "regulation.gov.ru":
+        if "/projects/" in lower_url:
+            return "new_rule"
+
     if domain == "pravo.donland.ru":
         if any(
             fragment in lower_url
