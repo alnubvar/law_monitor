@@ -11,7 +11,7 @@
   request_headers:
     User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/135.0 Safari/537.36
     Accept-Language: ru-RU,ru;q=0.9
-  max_items: 30
+  max_items: 50
   allow_patterns:
     - "subsid"
     - "gospod"
@@ -120,7 +120,7 @@
   request_headers:
     User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0 Safari/537.36
     Accept-Language: ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7
-  max_items: 30
+  max_items: 50
   description: Федеральный портал проектов нормативных актов и общественных обсуждений.
 
 - name: promote.budget.gov.ru / Минфин - отборы и меры поддержки
@@ -186,7 +186,7 @@
     User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0 Safari/537.36
     Accept-Language: ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7
     Referer: https://mcx.donland.ru/
-  max_items: 30
+  max_items: 50
   deny_patterns:
     - "/request/"
     - "/presscenter/video"
@@ -200,6 +200,9 @@
     - ".pdf"
     - ".doc"
     - ".docx"
+    - ".xls"
+    - ".xlsx"
+    - ".zip"
   description: Региональные материалы по господдержке АПК Ростовской области.
 
 - name: Минсельхоз Ставропольского края - господдержка

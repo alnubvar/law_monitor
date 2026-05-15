@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 from bs4 import BeautifulSoup, NavigableString, Tag
 
 from app.extractors.date_extractor import parse_russian_date
+from app.models import CollectedItem
 from app.sources.generic_html_source import GenericHTMLSource
 
 SAFE_PUBLICATION_MARKERS = (
@@ -118,6 +119,34 @@ MCX_TRAVERSAL_TITLES = {
     "страхование и инвестиции",
     "виноградарство и виноделие",
 }
+MCX_CURATED_ACTIVITY_IDS = (
+    "35217",
+    "37368",
+    "37369",
+    "37370",
+    "37371",
+    "37372",
+    "37373",
+    "37543",
+    "37540",
+    "37378",
+    "37541",
+    "37544",
+    "47419",
+    "56370",
+    "72821",
+    "51403",
+    "35332",
+    "35333",
+    "35337",
+    "35334",
+    "35336",
+    "39115",
+)
+MCX_CURATED_ACTIVITY_URLS = tuple(
+    f"https://mcx.donland.ru/activity/{activity_id}/"
+    for activity_id in MCX_CURATED_ACTIVITY_IDS
+)
 MCX_YEAR_OR_PERIOD_RE = re.compile(r"^(?:20\d{2}|за\s+(?:сегодня|неделю|месяц))$", re.IGNORECASE)
 MCX_ACTIVITY_PATH_RE = re.compile(r"^/activity/\d+/?$", re.IGNORECASE)
 EMBEDDED_HOST_SEGMENT_RE = re.compile(r"(^|/)([a-z0-9-]+(?:\.[a-z0-9-]+)+)(?=/)", re.IGNORECASE)
@@ -186,41 +215,48 @@ class DonlandSource(GenericHTMLSource):
         return super().fetch_items()
 
     def _fetch_mcx_items(self):
-        response = self.get(self.config.url)
-        soup = BeautifulSoup(response.text, "html.parser")
         items = []
         seen_urls: set[str] = set()
-        traversal_seen: set[str] = set()
         aggregated_stats: dict[str, int | str] = {}
-
-        root_items = self._extract_items_from_soup(soup, response.url, seen_urls=seen_urls)
-        self._merge_fetch_stats(aggregated_stats, self.last_fetch_stats)
-        items.extend(root_items)
-
+        fetched_pages: list[tuple[str, str, BeautifulSoup]] = []
         traversed_page_count = 0
-        for traversal_url in self._extract_mcx_traversal_urls(soup, response.url):
-            if traversal_url in traversal_seen:
-                continue
+
+        for page_url in MCX_CURATED_ACTIVITY_URLS:
+            if self.config.max_items is not None and len(fetched_pages) >= self.config.max_items:
+                break
+            response = self.get(page_url)
+            soup = BeautifulSoup(response.text, "html.parser")
+            fetched_pages.append((page_url, response.url, soup))
+            if page_url.rstrip("/") != self.config.url.rstrip("/"):
+                traversed_page_count += 1
+
+        for requested_url, _response_url, soup in fetched_pages:
             remaining = self._remaining_item_budget(items)
             if remaining == 0:
                 break
-            traversal_seen.add(traversal_url)
-            nested_response = self.get(traversal_url)
-            nested_soup = BeautifulSoup(nested_response.text, "html.parser")
-            nested_items = self._extract_items_from_soup(
-                nested_soup,
-                nested_response.url,
+            page_item = self._build_mcx_activity_item(requested_url, soup)
+            if page_item is None or page_item.url in seen_urls:
+                continue
+            items.append(page_item)
+            seen_urls.add(page_item.url)
+
+        extra_pages = fetched_pages[1:] + fetched_pages[:1]
+        for _requested_url, response_url, soup in extra_pages:
+            remaining = self._remaining_item_budget(items)
+            if remaining == 0:
+                break
+            page_items = self._extract_items_from_soup(
+                soup,
+                response_url,
                 seen_urls=seen_urls,
                 max_items_override=remaining,
             )
             self._merge_fetch_stats(aggregated_stats, self.last_fetch_stats)
-            items.extend(nested_items)
-            traversed_page_count += 1
+            items.extend(page_items)
 
-        if aggregated_stats:
-            aggregated_stats["items_collected_count"] = len(items)
-            aggregated_stats["traversed_page_count"] = traversed_page_count
-            self.last_fetch_stats = aggregated_stats
+        aggregated_stats["items_collected_count"] = len(items)
+        aggregated_stats["traversed_page_count"] = traversed_page_count
+        self.last_fetch_stats = aggregated_stats
         return items
 
     def _fetch_pravo_items(self):
@@ -262,10 +298,11 @@ class DonlandSource(GenericHTMLSource):
         return items
 
     def _should_include_url(self, url: str, base_url: str, title: str) -> bool:
+        source_key = f"{self.config.name} {self.config.url}".lower()
+        if "mcx.donland.ru" in source_key and self._should_force_include_mcx_attachment(url, base_url, title):
+            return True
         if not super()._should_include_url(url, base_url, title):
             return False
-
-        source_key = f"{self.config.name} {self.config.url}".lower()
         if "mcx.donland.ru" in source_key:
             return self._should_include_mcx_url(url, title)
         if "pravo.donland.ru" in source_key:
@@ -274,7 +311,9 @@ class DonlandSource(GenericHTMLSource):
 
     def _should_include_mcx_url(self, url: str, title: str) -> bool:
         document_type = self._detect_document_type(url)
-        if document_type in {"pdf", "doc", "docx"}:
+        if document_type in {"pdf", "doc", "docx", "xls", "xlsx", "zip"}:
+            return True
+        if self._is_curated_mcx_activity_url(url):
             return True
 
         lower_url = url.lower()
@@ -381,6 +420,70 @@ class DonlandSource(GenericHTMLSource):
         if path.startswith("/presscenter/"):
             return False
         return MCX_ACTIVITY_PATH_RE.fullmatch(path) is not None and title_text in MCX_TRAVERSAL_TITLES
+
+    def _should_force_include_mcx_attachment(self, url: str, base_url: str, title: str) -> bool:
+        document_type = self._detect_document_type(url)
+        if document_type not in {"pdf", "doc", "docx", "xls", "xlsx", "zip"}:
+            return False
+        parsed = urlparse(url)
+        base_host = urlparse(base_url).netloc.lower()
+        if parsed.netloc.lower() != base_host:
+            return False
+        combined = f"{url} {title}".lower()
+        if self.config.allow_patterns:
+            patterns = [pattern.lower() for pattern in self.config.allow_patterns]
+            if not any(pattern in combined for pattern in patterns):
+                return False
+        if self.config.deny_patterns:
+            patterns = [pattern.lower() for pattern in self.config.deny_patterns]
+            if any(pattern in combined for pattern in patterns):
+                return False
+        return True
+
+    def _is_curated_mcx_activity_url(self, url: str) -> bool:
+        normalized = url.rstrip("/") + "/"
+        return normalized in MCX_CURATED_ACTIVITY_URLS
+
+    def _build_mcx_activity_item(
+        self,
+        url: str,
+        soup: BeautifulSoup,
+    ):
+        if not self._is_curated_mcx_activity_url(url):
+            return None
+        title = self._extract_mcx_page_title(soup, fallback=self.config.name if url.rstrip("/") == self.config.url.rstrip("/") else url)
+        return self._build_collected_item(title=title, url=url, document_type="html")
+
+    def _extract_mcx_page_title(self, soup: BeautifulSoup, *, fallback: str) -> str:
+        heading = soup.find("h1")
+        if isinstance(heading, Tag):
+            text = " ".join(heading.stripped_strings).strip()
+            if text:
+                return text
+        title_tag = soup.find("title")
+        if isinstance(title_tag, Tag):
+            text = " ".join(title_tag.stripped_strings).strip()
+            if text:
+                return text
+        return fallback
+
+    def _build_collected_item(
+        self,
+        *,
+        title: str,
+        url: str,
+        document_type: str,
+    ):
+        return CollectedItem(
+            source_name=self.config.name,
+            source_url=self.config.url,
+            level=self.config.level,
+            region=self.config.region,
+            title=title,
+            url=url,
+            published_at=None,
+            document_type=document_type,
+        )
 
     def _has_embedded_foreign_host_path(self, url: str) -> bool:
         parsed = urlparse(url)

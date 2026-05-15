@@ -5,9 +5,10 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup
 
+from app.config import load_sources
 from app.extractors.date_extractor import normalize_date_to_iso
 from app.models import SourceConfig
-from app.sources.donland_source import DonlandSource
+from app.sources.donland_source import DonlandSource, MCX_CURATED_ACTIVITY_URLS
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "html"
 
@@ -42,6 +43,9 @@ class DonlandSourceTest(unittest.TestCase):
                     ".pdf",
                     ".doc",
                     ".docx",
+                    ".xls",
+                    ".xlsx",
+                    ".zip",
                 ],
                 deny_patterns=deny_patterns or [],
                 max_items=max_items,
@@ -53,6 +57,13 @@ class DonlandSourceTest(unittest.TestCase):
         soup = BeautifulSoup(html, "html.parser")
         return source._extract_items_from_soup(soup, source.config.url)
 
+    def test_mcx_donland_source_config_raises_max_items_to_50(self) -> None:
+        source = next(
+            config for config in load_sources()
+            if config.name == "Минсельхоз Ростовской области - господдержка"
+        )
+        self.assertEqual(source.max_items, 50)
+
     def test_mcx_donland_listing_and_reference_pages_are_filtered(self) -> None:
         source = self._source(
             name="Минсельхоз Ростовской области - господдержка",
@@ -63,7 +74,10 @@ class DonlandSourceTest(unittest.TestCase):
 
         items = self._items(source, "mcx_donland_listing_reference_page.html")
 
-        self.assertEqual(items, [])
+        self.assertEqual(
+            [item.url for item in items],
+            ["https://mcx.donland.ru/activity/37370/"],
+        )
 
     def test_mcx_donland_real_selection_announcement_is_kept(self) -> None:
         source = self._source(
@@ -76,20 +90,28 @@ class DonlandSourceTest(unittest.TestCase):
 
         items = self._items(source, "mcx_donland_real_selection_announcement.html")
 
-        self.assertEqual(len(items), 1)
-        self.assertEqual(items[0].url, "https://mcx.donland.ru/presscenter/events/72822/")
-        self.assertEqual(normalize_date_to_iso(items[0].published_at), "2026-04-28")
+        by_url = {item.url: item for item in items}
+        self.assertIn("https://mcx.donland.ru/presscenter/events/72822/", by_url)
+        self.assertEqual(
+            normalize_date_to_iso(by_url["https://mcx.donland.ru/presscenter/events/72822/"].published_at),
+            "2026-04-28",
+        )
 
-    def test_mcx_donland_root_support_page_traverses_curated_categories(self) -> None:
+    def test_mcx_donland_root_support_page_fetches_curated_seed_pages_first(self) -> None:
         source = self._source(
             name="Минсельхоз Ростовской области - господдержка",
             url="https://mcx.donland.ru/activity/35217/",
             source_role="support_documents",
             region="rostov",
+            max_items=4,
             deny_patterns=["/request/", "/presscenter/video", "/documents/all/"],
         )
-        root_html = (FIXTURES_DIR / "mcx_donland_support_root_with_categories.html").read_text(encoding="utf-8")
-        nested_html = (FIXTURES_DIR / "mcx_donland_support_category_nested_page.html").read_text(encoding="utf-8")
+        html_by_url = {
+            "https://mcx.donland.ru/activity/35217/": "<html><body><h1>Меры государственной поддержки</h1></body></html>",
+            "https://mcx.donland.ru/activity/37368/": "<html><body><h1>Страхование и инвестиции</h1></body></html>",
+            "https://mcx.donland.ru/activity/37369/": "<html><body><h1>Пищевая и перерабатывающая промышленность</h1></body></html>",
+            "https://mcx.donland.ru/activity/37370/": "<html><body><h1>Животноводство</h1></body></html>",
+        }
         fetched_urls: list[str] = []
 
         class Response:
@@ -99,53 +121,46 @@ class DonlandSourceTest(unittest.TestCase):
 
         def fake_get(url: str):
             fetched_urls.append(url)
-            if url == source.config.url:
-                return Response(root_html, source.config.url)
-            if url in {
+            if url not in html_by_url:
+                raise AssertionError(f"Unexpected fetch: {url}")
+            return Response(html_by_url[url], url)
+
+        source.get = fake_get  # type: ignore[method-assign]
+
+        items = source.fetch_items()
+
+        self.assertEqual(
+            [item.url for item in items],
+            [
+                "https://mcx.donland.ru/activity/35217/",
+                "https://mcx.donland.ru/activity/37368/",
+                "https://mcx.donland.ru/activity/37369/",
                 "https://mcx.donland.ru/activity/37370/",
-                "https://mcx.donland.ru/activity/37371/",
-            }:
-                return Response(nested_html, url)
-            raise AssertionError(f"Unexpected fetch: {url}")
-
-        source.get = fake_get  # type: ignore[method-assign]
-
-        items = source.fetch_items()
-
-        self.assertEqual(
-            [item.url for item in items],
-            [
-                "https://mcx.donland.ru/presscenter/events/72822/",
-                "https://mcx.donland.ru/files/poryadok-subsidii.docx",
             ],
         )
-        self.assertEqual(fetched_urls.count("https://mcx.donland.ru/activity/37370/"), 1)
-        self.assertEqual(fetched_urls.count("https://mcx.donland.ru/activity/37371/"), 1)
-        self.assertEqual(source.last_fetch_stats["traversed_page_count"], 2)
+        self.assertEqual(fetched_urls, list(MCX_CURATED_ACTIVITY_URLS[:4]))
+        self.assertEqual(source.last_fetch_stats["traversed_page_count"], 3)
 
-    def test_mcx_donland_traversal_deduplicates_and_obeys_max_items(self) -> None:
+    def test_mcx_donland_documents_active_does_not_starve_curated_support_pages(self) -> None:
         source = self._source(
             name="Минсельхоз Ростовской области - господдержка",
             url="https://mcx.donland.ru/activity/35217/",
             source_role="support_documents",
             region="rostov",
-            max_items=2,
+            max_items=3,
             deny_patterns=["/request/", "/presscenter/video", "/documents/all/"],
         )
-        root_html = """
-        <html><body>
-          <a href="/presscenter/events/72822/">Объявление о проведении отбора на субсидию</a>
-          <a href="/activity/37370/">Животноводство</a>
-          <a href="/activity/37371/">Растениеводство</a>
-        </body></html>
-        """
-        nested_html = """
-        <html><body>
-          <span>Дата публикации: 02.05.2026</span>
-          <a href="/presscenter/events/72822/">Объявление о проведении отбора на субсидию</a>
-          <a href="/files/poryadok-subsidii.docx">Порядок предоставления субсидии</a>
-        </body></html>
-        """
+        html_by_url = {
+            "https://mcx.donland.ru/activity/35217/": """
+            <html><body>
+              <h1>Меры государственной поддержки</h1>
+              <a href="/documents/active/521032/">Действующие документы</a>
+              <a href="/upload/uf/test/support.pdf">Порядок субсидии PDF</a>
+            </body></html>
+            """,
+            "https://mcx.donland.ru/activity/37368/": "<html><body><h1>Страхование и инвестиции</h1></body></html>",
+            "https://mcx.donland.ru/activity/37369/": "<html><body><h1>Пищевая и перерабатывающая промышленность</h1></body></html>",
+        }
         fetched_urls: list[str] = []
 
         class Response:
@@ -155,25 +170,161 @@ class DonlandSourceTest(unittest.TestCase):
 
         def fake_get(url: str):
             fetched_urls.append(url)
-            if url == source.config.url:
-                return Response(root_html, source.config.url)
-            if url == "https://mcx.donland.ru/activity/37370/":
-                return Response(nested_html, url)
-            raise AssertionError(f"Unexpected fetch: {url}")
+            if url not in html_by_url:
+                raise AssertionError(f"Unexpected fetch: {url}")
+            return Response(html_by_url[url], url)
 
         source.get = fake_get  # type: ignore[method-assign]
 
         items = source.fetch_items()
 
-        self.assertEqual(len(items), 2)
         self.assertEqual(
             [item.url for item in items],
             [
-                "https://mcx.donland.ru/presscenter/events/72822/",
-                "https://mcx.donland.ru/files/poryadok-subsidii.docx",
+                "https://mcx.donland.ru/activity/35217/",
+                "https://mcx.donland.ru/activity/37368/",
+                "https://mcx.donland.ru/activity/37369/",
             ],
         )
-        self.assertEqual(fetched_urls, [source.config.url, "https://mcx.donland.ru/activity/37370/"])
+        self.assertEqual(fetched_urls, list(MCX_CURATED_ACTIVITY_URLS[:3]))
+
+    def test_mcx_donland_collects_known_rastenievodstvo_and_operational_pages(self) -> None:
+        source = self._source(
+            name="Минсельхоз Ростовской области - господдержка",
+            url="https://mcx.donland.ru/activity/35217/",
+            source_role="support_documents",
+            region="rostov",
+            max_items=30,
+            deny_patterns=["/request/", "/presscenter/video", "/documents/all/"],
+        )
+        titles_by_url = {
+            "https://mcx.donland.ru/activity/35217/": "Меры государственной поддержки",
+            "https://mcx.donland.ru/activity/37368/": "Страхование и инвестиции",
+            "https://mcx.donland.ru/activity/37369/": "Пищевая и перерабатывающая промышленность",
+            "https://mcx.donland.ru/activity/37370/": "Животноводство",
+            "https://mcx.donland.ru/activity/37371/": "Рыбохозяйственный комплекс",
+            "https://mcx.donland.ru/activity/37372/": "Малые формы хозяйствования",
+            "https://mcx.donland.ru/activity/37373/": "Растениеводство",
+            "https://mcx.donland.ru/activity/37543/": "Элитное семеноводство и зерновые культуры",
+            "https://mcx.donland.ru/activity/37540/": "Субсидии на закладку и уход за многолетними насаждениями",
+            "https://mcx.donland.ru/activity/37378/": "Техника и оборудование",
+            "https://mcx.donland.ru/activity/37541/": "Мелиорация и Агрохимия",
+            "https://mcx.donland.ru/activity/37544/": "Овощи защищенного и открытого грунта, картофель",
+            "https://mcx.donland.ru/activity/47419/": "Меры поддержки по зерну и элитному семеноводству",
+            "https://mcx.donland.ru/activity/56370/": "Условия по заработной плате",
+            "https://mcx.donland.ru/activity/72821/": "Льготный лизинг Росагролизинг",
+            "https://mcx.donland.ru/activity/51403/": "Протоколы рассмотрения заявок участников отборов",
+            "https://mcx.donland.ru/activity/35332/": "Сроки предоставления госуслуг через МФЦ",
+            "https://mcx.donland.ru/activity/35333/": "Результаты отборов и конкурсов на получение субсидий",
+            "https://mcx.donland.ru/activity/35337/": "Информация по отказам участникам отбора",
+            "https://mcx.donland.ru/activity/35334/": "Реестры получателей субсидий",
+            "https://mcx.donland.ru/activity/35336/": "Реестр сельхозтоваропроизводителей",
+            "https://mcx.donland.ru/activity/39115/": "Меры поддержки бизнеса в условиях санкций",
+        }
+        fetched_urls: list[str] = []
+
+        class Response:
+            def __init__(self, text: str, url: str) -> None:
+                self.text = text
+                self.url = url
+
+        def fake_get(url: str):
+            fetched_urls.append(url)
+            if url not in titles_by_url:
+                raise AssertionError(f"Unexpected fetch: {url}")
+            return Response(f"<html><body><h1>{titles_by_url[url]}</h1></body></html>", url)
+
+        source.get = fake_get  # type: ignore[method-assign]
+
+        items = source.fetch_items()
+
+        item_urls = {item.url for item in items}
+        self.assertIn("https://mcx.donland.ru/activity/37540/", item_urls)
+        self.assertIn("https://mcx.donland.ru/activity/47419/", item_urls)
+        self.assertIn("https://mcx.donland.ru/activity/35333/", item_urls)
+        self.assertIn("https://mcx.donland.ru/activity/35334/", item_urls)
+        self.assertIn("https://mcx.donland.ru/activity/39115/", item_urls)
+        self.assertEqual(fetched_urls, list(MCX_CURATED_ACTIVITY_URLS))
+
+    def test_mcx_donland_redirected_curated_ids_still_materialize_requested_activity_urls(self) -> None:
+        source = self._source(
+            name="Минсельхоз Ростовской области - господдержка",
+            url="https://mcx.donland.ru/activity/35217/",
+            source_role="support_documents",
+            region="rostov",
+            max_items=22,
+            deny_patterns=["/request/", "/presscenter/video", "/documents/all/"],
+        )
+        titles_by_url = {
+            url: f"Страница {index}"
+            for index, url in enumerate(MCX_CURATED_ACTIVITY_URLS, start=1)
+        }
+        titles_by_url["https://mcx.donland.ru/activity/47419/"] = "Меры поддержки по зерну и элитному семеноводству"
+        titles_by_url["https://mcx.donland.ru/activity/39115/"] = "Меры поддержки бизнеса в условиях санкций"
+
+        class Response:
+            def __init__(self, text: str, url: str) -> None:
+                self.text = text
+                self.url = url
+
+        def fake_get(url: str):
+            if url not in titles_by_url:
+                raise AssertionError(f"Unexpected fetch: {url}")
+            response_url = url
+            if url == "https://mcx.donland.ru/activity/47419/":
+                response_url = "https://mcx.donland.ru/activity/47419/?from=menu"
+            if url == "https://mcx.donland.ru/activity/39115/":
+                response_url = "https://mcx.donland.ru/activity/39115/index.php"
+            return Response(f"<html><body><h1>{titles_by_url[url]}</h1></body></html>", response_url)
+
+        source.get = fake_get  # type: ignore[method-assign]
+
+        items = source.fetch_items()
+
+        item_urls = {item.url for item in items}
+        self.assertIn("https://mcx.donland.ru/activity/47419/", item_urls)
+        self.assertIn("https://mcx.donland.ru/activity/39115/", item_urls)
+
+    def test_mcx_donland_collects_xlsx_and_zip_attachments_with_remaining_budget(self) -> None:
+        source = self._source(
+            name="Минсельхоз Ростовской области - господдержка",
+            url="https://mcx.donland.ru/activity/35217/",
+            source_role="support_documents",
+            region="rostov",
+            max_items=24,
+            deny_patterns=["/request/", "/presscenter/video", "/documents/all/"],
+        )
+        titles_by_url = {
+            url: f"Страница {index}"
+            for index, url in enumerate(MCX_CURATED_ACTIVITY_URLS, start=1)
+        }
+        attachments_html = """
+        <html><body>
+          <h1>Страхование и инвестиции</h1>
+          <a href="/upload/uf/test/support-data.xlsx">Таблица поддержки</a>
+          <a href="/upload/uf/test/support-archive.zip">Архив материалов</a>
+        </body></html>
+        """
+
+        class Response:
+            def __init__(self, text: str, url: str) -> None:
+                self.text = text
+                self.url = url
+
+        def fake_get(url: str):
+            if url == "https://mcx.donland.ru/activity/37368/":
+                return Response(attachments_html, url)
+            if url not in titles_by_url:
+                raise AssertionError(f"Unexpected fetch: {url}")
+            return Response(f"<html><body><h1>{titles_by_url[url]}</h1></body></html>", url)
+
+        source.get = fake_get  # type: ignore[method-assign]
+
+        items = source.fetch_items()
+
+        by_url = {item.url: item for item in items}
+        self.assertEqual(by_url["https://mcx.donland.ru/upload/uf/test/support-data.xlsx"].document_type, "xlsx")
+        self.assertEqual(by_url["https://mcx.donland.ru/upload/uf/test/support-archive.zip"].document_type, "zip")
 
     def test_pravo_donland_listing_search_and_reference_pages_are_filtered(self) -> None:
         source = self._source(
