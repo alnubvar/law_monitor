@@ -9,6 +9,7 @@ from unittest.mock import patch
 import main as cli_main
 from app.pipeline.ocr_runtime import OCRBackfillResult, OCRRunResult
 from app.run_lock import WriterLockHeldError
+from app.pipeline.donland_backfill import DonlandBackfillResult
 
 
 class MainCliOcrQueueTest(unittest.TestCase):
@@ -216,6 +217,26 @@ class MainCliOcrQueueTest(unittest.TestCase):
             limit=50,
         )
         self.assertIn("scanned=4; queued=2; existing=1; skipped=1", buffer.getvalue())
+
+    def test_donland_backfill_cli_prints_counts(self) -> None:
+        mocked_result = DonlandBackfillResult(scanned=10, updated=4, unchanged=5, errors=1, skipped=0)
+        with patch("main.setup_logging"):
+            with patch("main.run_donland_backfill", return_value=mocked_result) as backfill:
+                with patch.object(
+                    sys,
+                    "argv",
+                    ["main.py", "donland-backfill", "--source", "Право Ростовской области", "--limit", "25"],
+                ):
+                    buffer = io.StringIO()
+                    with redirect_stdout(buffer):
+                        exit_code = cli_main.main()
+
+        self.assertEqual(exit_code, 0)
+        backfill.assert_called_once_with(
+            source_name="Право Ростовской области",
+            limit=25,
+        )
+        self.assertIn("scanned=10; updated=4; unchanged=5; errors=1; skipped=0", buffer.getvalue())
 
 
 if __name__ == "__main__":

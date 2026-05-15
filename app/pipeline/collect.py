@@ -128,6 +128,13 @@ def extract_document(item: CollectedItem, source_config: SourceConfig) -> Extrac
             error="Unsupported document type for MVP extractor",
         )
 
+    if source_config.parser == "donland" and item.document_type in {"html", "xml"}:
+        from app.extractors.donland_detail_extractor import maybe_extract_donland_detail
+
+        enriched = maybe_extract_donland_detail(item, **request_options)
+        if enriched is not None:
+            return enriched
+
     return extract_text_from_html(
         item.url,
         source_name=source_config.name,

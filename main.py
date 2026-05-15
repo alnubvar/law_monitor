@@ -11,6 +11,7 @@ from app.notify.telegram import get_diagnostic_status
 from app.notify.telegram_bot import run_polling_listener
 from app.pipeline.analyze import run_analyze
 from app.pipeline.collect import run_collect_with_options
+from app.pipeline.donland_backfill import run_donland_backfill
 from app.pipeline.diagnostics import run_diagnostics
 from app.pipeline.digest import run_demo_report, run_digest
 from app.pipeline.ocr_runtime import backfill_ocr_queue_from_audit, run_ocr_queue
@@ -317,6 +318,22 @@ def build_parser() -> argparse.ArgumentParser:
         default=200,
         help="Максимум scan-candidate URL для backfill за запуск.",
     )
+    donland_backfill_parser = subparsers.add_parser(
+        "donland-backfill",
+        help="Точечный backfill existing Donland doc/view документов без создания новых rows.",
+    )
+    donland_backfill_parser.add_argument(
+        "--source",
+        type=str,
+        default=None,
+        help="Backfill только для одного Donland source_name.",
+    )
+    donland_backfill_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Опционально ограничить количество existing Donland документов за запуск.",
+    )
 
     subparsers.add_parser(
         "backfill-dates",
@@ -537,6 +554,12 @@ def main() -> int:
             lambda: _cli_ocr_backfill(args),
         )
 
+    if args.command == "donland-backfill":
+        return _run_writer_command(
+            "donland-backfill",
+            lambda: _cli_donland_backfill(args),
+        )
+
     if args.command == "backfill-dates":
         return _run_writer_command(
             "backfill-dates",
@@ -665,6 +688,20 @@ def _cli_ocr_backfill(args: argparse.Namespace) -> int:
     print(
         f"scanned={backfill_result.scanned}; queued={backfill_result.queued}; "
         f"existing={backfill_result.existing}; skipped={backfill_result.skipped}"
+    )
+    return 0
+
+
+def _cli_donland_backfill(args: argparse.Namespace) -> int:
+    backfill_result = run_donland_backfill(
+        source_name=args.source,
+        limit=args.limit,
+    )
+    print("Donland backfill completed.")
+    print(
+        f"scanned={backfill_result.scanned}; updated={backfill_result.updated}; "
+        f"unchanged={backfill_result.unchanged}; errors={backfill_result.errors}; "
+        f"skipped={backfill_result.skipped}"
     )
     return 0
 
