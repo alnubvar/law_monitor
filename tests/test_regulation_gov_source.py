@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
@@ -366,6 +367,41 @@ class RegulationGovSourceTest(unittest.TestCase):
                 "https://regulation.gov.ru/api/npalist?limit=5&offset=20&sort=desc",
             ],
         )
+
+
+class BuildSyntheticTextTest(unittest.TestCase):
+    def _project(self, *, stage: str, end_discussion: str | None = None) -> ET.Element:
+        xml = f"<project id='1'><title>Тест</title><stage>{stage}</stage>"
+        if end_discussion is not None:
+            xml += f"<endDiscussion>{end_discussion}</endDiscussion>"
+        xml += "</project>"
+        return ET.fromstring(xml)
+
+    def test_discussion_stage_injects_public_discussion_marker(self) -> None:
+        project = self._project(stage="Обсуждение")
+        text = _build_synthetic_text(project, "1", "Тест")
+        self.assertIn("публичное обсуждение", text)
+
+    def test_discussion_stage_variant_also_injects_marker(self) -> None:
+        project = self._project(stage="Общественное обсуждение")
+        text = _build_synthetic_text(project, "1", "Тест")
+        self.assertIn("публичное обсуждение", text)
+
+    def test_development_stage_does_not_inject_marker(self) -> None:
+        project = self._project(stage="Разработка")
+        text = _build_synthetic_text(project, "1", "Тест")
+        self.assertNotIn("публичное обсуждение", text)
+
+    def test_discussion_stage_with_end_date_still_includes_marker(self) -> None:
+        project = self._project(stage="Обсуждение", end_discussion="2026-06-01T00:00:00Z")
+        text = _build_synthetic_text(project, "1", "Тест")
+        self.assertIn("публичное обсуждение", text)
+        self.assertIn("Конец обсуждения", text)
+
+    def test_empty_stage_does_not_inject_marker(self) -> None:
+        project = self._project(stage="")
+        text = _build_synthetic_text(project, "1", "Тест")
+        self.assertNotIn("публичное обсуждение", text)
 
 
 class ParseIsoDateTest(unittest.TestCase):

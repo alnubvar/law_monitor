@@ -40,6 +40,14 @@ def _build_synthetic_text(project: ET.Element, pid: str, title: str) -> str:
         value = (project.findtext(tag) or "").strip()
         if value:
             lines.append(f"{label}: {_format_field_value(tag, value)}")
+    # When the project is in a discussion stage but lacks an endDiscussion date,
+    # the rules engine would find no PROJECT_DISCUSSION_SIGNALS and silently
+    # classify the item as background.  Inject the canonical marker so that
+    # any stage containing "обсуждение" is correctly treated as an active
+    # public discussion.
+    stage_value = (project.findtext("stage") or "").strip().lower()
+    if "обсуждение" in stage_value:
+        lines.append("публичное обсуждение")
     return "\n".join(lines)
 
 
