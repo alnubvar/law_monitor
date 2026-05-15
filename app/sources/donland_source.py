@@ -168,15 +168,24 @@ DATE_CONTEXT_RE = re.compile(
     r"[:\s,]+(.{0,120})",
     re.IGNORECASE,
 )
+PRAVO_LIST_PATH_RE = re.compile(
+    r"^/doc/list/level/(?P<level>\d+)/(?:page/(?P<page>\d+)/)?$",
+    re.IGNORECASE,
+)
+PRAVO_MAX_PAGINATION_PAGES = 5
 
 
 class DonlandSource(GenericHTMLSource):
     """Source-specific filtering for Ростовские portals on donland.ru."""
 
     def fetch_items(self):
-        if not self._is_mcx_support_root_source():
-            return super().fetch_items()
+        if self._is_mcx_support_root_source():
+            return self._fetch_mcx_items()
+        if self._is_pravo_source():
+            return self._fetch_pravo_items()
+        return super().fetch_items()
 
+    def _fetch_mcx_items(self):
         response = self.get(self.config.url)
         soup = BeautifulSoup(response.text, "html.parser")
         items = []
@@ -211,6 +220,44 @@ class DonlandSource(GenericHTMLSource):
         if aggregated_stats:
             aggregated_stats["items_collected_count"] = len(items)
             aggregated_stats["traversed_page_count"] = traversed_page_count
+            self.last_fetch_stats = aggregated_stats
+        return items
+
+    def _fetch_pravo_items(self):
+        items = []
+        seen_urls: set[str] = set()
+        aggregated_stats: dict[str, int | str] = {}
+        next_url = self.config.url
+        visited_pages: set[str] = set()
+
+        for _ in range(PRAVO_MAX_PAGINATION_PAGES):
+            remaining = self._remaining_item_budget(items)
+            if remaining == 0:
+                break
+            response = self.get(next_url)
+            if response.url in visited_pages:
+                break
+            visited_pages.add(response.url)
+            soup = BeautifulSoup(response.text, "html.parser")
+            page_items = self._extract_items_from_soup(
+                soup,
+                response.url,
+                seen_urls=seen_urls,
+                max_items_override=remaining,
+            )
+            self._merge_fetch_stats(aggregated_stats, self.last_fetch_stats)
+            items.extend(page_items)
+            if not page_items:
+                break
+            if self._remaining_item_budget(items) == 0:
+                break
+            next_page_url = self._next_pravo_page_url(response.url)
+            if next_page_url is None or next_page_url in visited_pages:
+                break
+            next_url = next_page_url
+
+        if aggregated_stats:
+            aggregated_stats["items_collected_count"] = len(items)
             self.last_fetch_stats = aggregated_stats
         return items
 
@@ -281,6 +328,24 @@ class DonlandSource(GenericHTMLSource):
             "минсельхоз ростовской области - господдержка" in source_key
             and self.config.url.rstrip("/") == "https://mcx.donland.ru/activity/35217"
         )
+
+    def _is_pravo_source(self) -> bool:
+        parsed = urlparse(self.config.url)
+        return (
+            parsed.netloc.lower() == "pravo.donland.ru"
+            and PRAVO_LIST_PATH_RE.match(parsed.path) is not None
+        )
+
+    def _next_pravo_page_url(self, current_url: str) -> str | None:
+        parsed = urlparse(current_url)
+        match = PRAVO_LIST_PATH_RE.match(parsed.path)
+        if match is None:
+            return None
+        level = match.group("level")
+        page_str = match.group("page")
+        current_page = int(page_str) if page_str else 1
+        next_path = f"/doc/list/level/{level}/page/{current_page + 1}/"
+        return parsed._replace(path=next_path).geturl()
 
     def _extract_mcx_traversal_urls(self, soup: BeautifulSoup, base_url: str) -> list[str]:
         traversal_urls: list[str] = []

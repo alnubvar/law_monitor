@@ -249,6 +249,130 @@ class DonlandSourceTest(unittest.TestCase):
 
         self.assertEqual(normalize_date_to_iso(items[0].published_at), "2026-04-28")
 
+    def test_pravo_donland_fetch_items_paginates_listing_pages(self) -> None:
+        source = self._source(
+            name="Право Ростовской области",
+            url="https://pravo.donland.ru/doc/list/level/1/",
+            source_role="regional_npa",
+            region="rostov",
+        )
+        p1_html = (FIXTURES_DIR / "pravo_donland_listing_page_p1.html").read_text(encoding="utf-8")
+        p2_html = (FIXTURES_DIR / "pravo_donland_listing_page_p2.html").read_text(encoding="utf-8")
+        fetched_urls: list[str] = []
+
+        class Response:
+            def __init__(self, text: str, url: str) -> None:
+                self.text = text
+                self.url = url
+
+        def fake_get(url: str):
+            fetched_urls.append(url)
+            if "page/2" in url:
+                return Response(p2_html, url)
+            return Response(p1_html, url)
+
+        source.get = fake_get  # type: ignore[method-assign]
+
+        items = source.fetch_items()
+
+        self.assertEqual(len(items), 4)
+        self.assertEqual(fetched_urls[0], "https://pravo.donland.ru/doc/list/level/1/")
+        self.assertIn("page/2", fetched_urls[1])
+        self.assertEqual(
+            items[0].url,
+            "https://pravo.donland.ru/doc/view/id/Постановление_42_29042026_60001/",
+        )
+        self.assertEqual(
+            items[3].url,
+            "https://pravo.donland.ru/doc/view/id/Постановление_38_20042026_60001/",
+        )
+
+    def test_pravo_donland_fetch_items_stops_when_page_yields_no_new_items(self) -> None:
+        source = self._source(
+            name="Право Ростовской области",
+            url="https://pravo.donland.ru/doc/list/level/1/",
+            source_role="regional_npa",
+            region="rostov",
+        )
+        p1_html = (FIXTURES_DIR / "pravo_donland_listing_page_p1.html").read_text(encoding="utf-8")
+        empty_html = "<html><body><div class='doc-list'></div></body></html>"
+        fetched_urls: list[str] = []
+
+        class Response:
+            def __init__(self, text: str, url: str) -> None:
+                self.text = text
+                self.url = url
+
+        def fake_get(url: str):
+            fetched_urls.append(url)
+            if "page/2" in url:
+                return Response(empty_html, url)
+            return Response(p1_html, url)
+
+        source.get = fake_get  # type: ignore[method-assign]
+
+        items = source.fetch_items()
+
+        self.assertEqual(len(items), 3)
+        self.assertEqual(len(fetched_urls), 2)
+
+    def test_pravo_donland_level2_fetch_items_paginates_correctly(self) -> None:
+        source = self._source(
+            name="Проекты правовых актов Ростовской области",
+            url="https://pravo.donland.ru/doc/list/level/2/",
+            source_role="regional_npa",
+            region="rostov",
+        )
+        p1_html = (FIXTURES_DIR / "pravo_donland_listing_page_p1.html").read_text(encoding="utf-8")
+        p2_html = (FIXTURES_DIR / "pravo_donland_listing_page_p2.html").read_text(encoding="utf-8")
+        fetched_urls: list[str] = []
+
+        class Response:
+            def __init__(self, text: str, url: str) -> None:
+                self.text = text
+                self.url = url
+
+        def fake_get(url: str):
+            fetched_urls.append(url)
+            if "page/2" in url:
+                return Response(p2_html, url)
+            return Response(p1_html, url)
+
+        source.get = fake_get  # type: ignore[method-assign]
+
+        items = source.fetch_items()
+
+        self.assertEqual(len(items), 4)
+        self.assertIn("doc/list/level/2", fetched_urls[0])
+        self.assertIn("doc/list/level/2/page/2", fetched_urls[1])
+
+    def test_pravo_donland_fetch_items_respects_max_items(self) -> None:
+        source = self._source(
+            name="Право Ростовской области",
+            url="https://pravo.donland.ru/doc/list/level/1/",
+            source_role="regional_npa",
+            region="rostov",
+            max_items=2,
+        )
+        p1_html = (FIXTURES_DIR / "pravo_donland_listing_page_p1.html").read_text(encoding="utf-8")
+        fetched_urls: list[str] = []
+
+        class Response:
+            def __init__(self, text: str, url: str) -> None:
+                self.text = text
+                self.url = url
+
+        def fake_get(url: str):
+            fetched_urls.append(url)
+            return Response(p1_html, url)
+
+        source.get = fake_get  # type: ignore[method-assign]
+
+        items = source.fetch_items()
+
+        self.assertEqual(len(items), 2)
+        self.assertEqual(len(fetched_urls), 1)
+
     def test_mcx_donland_rejects_malformed_embedded_foreign_host_url(self) -> None:
         source = self._source(
             name="Минсельхоз Ростовской области - господдержка",

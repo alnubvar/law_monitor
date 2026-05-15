@@ -228,7 +228,7 @@
   description: Региональные меры государственной поддержки АПК Ставропольского края.
 
 - name: Право Ростовской области
-  url: https://pravo.donland.ru/
+  url: https://pravo.donland.ru/doc/list/level/1/
   level: regional
   region: rostov
   source_role: regional_npa
@@ -250,6 +250,30 @@
     - ".doc"
     - ".docx"
   description: Официальный портал правовой информации Ростовской области.
+
+- name: Проекты правовых актов Ростовской области
+  url: https://pravo.donland.ru/doc/list/level/2/
+  level: regional
+  region: rostov
+  source_role: regional_npa
+  source_type: html_listing
+  enabled: true
+  parser: donland
+  verify_ssl: false
+  request_timeout: 30
+  request_headers:
+    User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0 Safari/537.36
+    Accept-Language: ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7
+  max_items: 15
+  deny_patterns:
+    - "/news/"
+  allow_patterns:
+    - "/doc/"
+    - "/fd/"
+    - ".pdf"
+    - ".doc"
+    - ".docx"
+  description: Проекты правовых актов Ростовской области — для мониторинга готовящихся изменений нормативной базы.
 
 - name: Право Ставропольского края
   url: https://pravo.stavregion.ru/
