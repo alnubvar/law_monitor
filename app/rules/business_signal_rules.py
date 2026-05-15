@@ -495,7 +495,7 @@ def detect_action_level(
         if _has_regulation_subsidy_title_bypass:
             return "watchlist"
         if regulation_discussion_deadline_status == "near" and has_project_discussion_signal:
-            return "requires_attention"
+            return "watchlist"
         if regulation_discussion_deadline_status == "future" and has_project_discussion_signal:
             return "watchlist"
         if (
@@ -513,14 +513,14 @@ def detect_action_level(
             if _deadline_date is not None:
                 _days_left = (_deadline_date - _today_utc()).days
                 if 0 <= _days_left <= REGULATION_DISCUSSION_NEAR_DAYS:
-                    return "requires_attention"
+                    return "watchlist"
             return "watchlist"
         if has_strategy_signal or has_any_action_signal or explicit_keywords:
             return "watchlist"
         return "background"
     if domain == "regulation.gov.ru":
         if regulation_discussion_deadline_status == "near" and has_project_discussion_signal:
-            return "requires_attention"
+            return "watchlist"
         if (
             facts.deadline_text is not None
             and any(m in title_text or m in lead_text for m in _REGULATION_SUBSIDY_PROCEDURE_MARKERS)
@@ -529,7 +529,7 @@ def detect_action_level(
             if _deadline_date is not None:
                 _days_left = (_deadline_date - _today_utc()).days
                 if 0 <= _days_left <= REGULATION_DISCUSSION_NEAR_DAYS:
-                    return "requires_attention"
+                    return "watchlist"
             return "watchlist"
         if regulation_discussion_deadline_status == "future" and has_project_discussion_signal:
             return "watchlist"

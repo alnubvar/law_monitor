@@ -1758,18 +1758,18 @@ class ReportGenerationSmokeTest(unittest.TestCase):
     def test_report_header_counts_rendered_items_after_evergreen_suppression(
         self,
     ) -> None:
-        urgent_document = self._doc(
+        regulation_document = self._doc(
             doc_id=20,
             source_name="Regulation.gov.ru",
             region="federal",
             title="Об утверждении требований к видам племенных хозяйств",
             url="https://regulation.gov.ru/projects/167863",
-            action_level="requires_attention",
+            action_level="watchlist",
             page_type="new_rule",
             summary="Проект НПА по сельскому хозяйству.",
         )
-        urgent_document.application_status = "open"
-        urgent_document.deadline_text = "Конец обсуждения: 2026-05-26T11:53:57.098Z"
+        regulation_document.application_status = "open"
+        regulation_document.deadline_text = "Конец обсуждения: 2026-05-26T11:53:57.098Z"
 
         evergreen_measure = self._doc(
             doc_id=21,
@@ -1797,15 +1797,15 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         )
 
         markdown = generate_markdown_report(
-            [urgent_document, evergreen_measure, news_document],
+            [regulation_document, evergreen_measure, news_document],
             report_date="2026-05-13",
             relevant_only=True,
             action_levels=["requires_attention", "watchlist"],
         )
 
         self.assertIn("- Включено в сводку: 2", markdown)
-        self.assertIn("- Требует реакции: 1", markdown)
-        self.assertIn("- На наблюдении: 1", markdown)
+        self.assertIn("- Требует реакции: 0", markdown)
+        self.assertIn("- На наблюдении: 2", markdown)
         self.assertNotIn("Гарантия ВЭБ.РФ", markdown)
 
     def test_regulation_public_discussion_uses_correct_report_wording(self) -> None:
@@ -1815,7 +1815,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             region="federal",
             title="Об утверждении требований к видам племенных хозяйств",
             url="https://regulation.gov.ru/projects/167863",
-            action_level="requires_attention",
+            action_level="watchlist",
             page_type="new_rule",
             summary=(
                 "Проект Статус: Идет обсуждение Процедура: Оценка регулирующего воздействия "

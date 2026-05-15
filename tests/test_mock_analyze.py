@@ -1762,7 +1762,7 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
 
         self.assertEqual(result.action_level, "background")
 
-    def test_regulation_near_discussion_deadline_is_requires_attention(self) -> None:
+    def test_regulation_near_discussion_deadline_is_watchlist(self) -> None:
         client = MockLLMClient(["субсидии сельское хозяйство"])
         deadline = datetime.now(timezone.utc) + timedelta(days=5)
 
@@ -1775,7 +1775,8 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
             region="federal",
         )
 
-        self.assertEqual(result.action_level, "requires_attention")
+        self.assertEqual(result.action_level, "watchlist")
+        self.assertNotEqual(result.action_level, "requires_attention")
         self.assertIn("Конец обсуждения", result.deadline_text or "")
         self.assertEqual(result.application_status, "open")
         self.assertIn("публичного обсуждения", result.impact)
@@ -1967,7 +1968,7 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         self.assertNotEqual(result.action_level, "background")
 
     def test_regulation_gov_procedure_deadline_bypass_near(self) -> None:
-        """Fix 2: regulation.gov.ru + deadline near + subsidy procedure signal → requires_attention."""
+        """Fix 2: regulation.gov.ru + deadline near + subsidy procedure signal → watchlist."""
         client = MockLLMClient(["субсидии"])
         deadline = datetime.now(timezone.utc) + timedelta(days=6)
 
@@ -1986,7 +1987,8 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
             region="federal",
         )
 
-        self.assertEqual(result.action_level, "requires_attention")
+        self.assertEqual(result.action_level, "watchlist")
+        self.assertNotEqual(result.action_level, "requires_attention")
 
     def test_regulation_gov_procedure_deadline_bypass_future(self) -> None:
         """Fix 2: regulation.gov.ru + deadline far + subsidy procedure signal → at most watchlist."""
