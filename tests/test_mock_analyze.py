@@ -2058,6 +2058,157 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         self.assertEqual(result.page_type, "reference_page")
         self.assertEqual(result.action_level, "background")
 
+    def test_msh_krasnodar_open_near_deadline_selection_is_requires_attention(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+        deadline = datetime.now(timezone.utc) + timedelta(days=7)
+
+        result = client.analyze_document(
+            '№201 от 20.05.2026 "Об утверждении Порядка проведения конкурсного отбора на предоставление субсидий производителям зерновых культур"',
+            (
+                "МИНИСТЕРСТВО СЕЛЬСКОГО ХОЗЯЙСТВА И ПЕРЕРАБАТЫВАЮЩЕЙ ПРОМЫШЛЕННОСТИ "
+                "КРАСНОДАРСКОГО КРАЯ. ПРИКАЗ. Объявлен конкурсный отбор на предоставление субсидий "
+                "производителям зерновых культур. "
+                f"Прием заявок до {deadline.strftime('%d.%m.%Y')}. "
+                "Заявки подаются в министерство."
+            ),
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://npa.krasnodar.ru/rest/files/1234001",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertEqual(result.action_level, "requires_attention")
+
+    def test_msh_krasnodar_open_far_deadline_selection_is_watchlist(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+        deadline = datetime.now(timezone.utc) + timedelta(days=30)
+
+        result = client.analyze_document(
+            '№202 от 20.05.2026 "Об утверждении Порядка проведения конкурсного отбора на предоставление субсидий производителям молока"',
+            (
+                "ПРИКАЗ. Объявлен конкурсный отбор на предоставление субсидий производителям молока. "
+                f"Прием заявок до {deadline.strftime('%d.%m.%Y')}. "
+                "Гранты предоставляются в форме субсидий."
+            ),
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://npa.krasnodar.ru/rest/files/1234002",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertEqual(result.action_level, "watchlist")
+        self.assertIn(deadline.strftime("%d.%m.%Y"), result.business_signal or "")
+
+    def test_msh_krasnodar_open_no_deadline_is_watchlist(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            '№203 от 21.05.2026 "Об объявлении конкурсного отбора на предоставление грантов фермерским хозяйствам"',
+            (
+                "ПРИКАЗ. Объявлен конкурсный отбор на предоставление грантов крестьянским (фермерским) "
+                "хозяйствам. Прием заявок открыт. Субсидии выплачиваются в рамках госпрограммы."
+            ),
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://npa.krasnodar.ru/rest/files/1234003",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertEqual(result.action_level, "watchlist")
+
+    def test_msh_krasnodar_suspended_intake_is_watchlist(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            '№204 от 22.05.2026 "О приостановлении приема заявок на предоставление субсидий на развитие садоводства"',
+            (
+                "ПРИКАЗ. Прием заявок приостановлен в связи с исчерпанием лимитов бюджетных "
+                "обязательств. Приказ об утверждении Порядка предоставления субсидий на развитие "
+                "садоводства остается в силе."
+            ),
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://npa.krasnodar.ru/rest/files/1234004",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertEqual(result.action_level, "watchlist")
+        self.assertEqual(result.application_status, "closed")
+        self.assertIn("приостановлен", (result.business_signal or "").lower())
+
+    def test_msh_krasnodar_horse_show_order_is_background(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            '№205 от 23.05.2026 "О проведении регионального конкурса по конному спорту среди сельскохозяйственных предприятий"',
+            (
+                "ПРИКАЗ. Провести региональный конкурс по конному спорту среди "
+                "сельскохозяйственных предприятий Краснодарского края. Субсидии предусмотрены "
+                "победителям. Дата проведения: июнь 2026 г."
+            ),
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://npa.krasnodar.ru/rest/files/1234005",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertEqual(result.action_level, "background")
+
+    def test_msh_krasnodar_reopened_intake_near_deadline_is_requires_attention(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+        deadline = datetime.now(timezone.utc) + timedelta(days=5)
+
+        result = client.analyze_document(
+            '№206 от 24.05.2026 "О возобновлении приема заявок на предоставление субсидий на компенсацию части затрат на приобретение семян"',
+            (
+                "ПРИКАЗ. Возобновлен прием заявок на предоставление субсидий на компенсацию "
+                "части затрат на приобретение семян элитных сортов. "
+                f"Прием заявок до {deadline.strftime('%d.%m.%Y')}. "
+                "Гранты предоставляются в форме субсидий."
+            ),
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://npa.krasnodar.ru/rest/files/1234006",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertEqual(result.action_level, "requires_attention")
+        self.assertEqual(result.application_status, "open")
+
+    def test_msh_krasnodar_horse_farming_subsidy_is_not_suppressed(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            '№207 от 25.05.2026 "Об утверждении Порядка предоставления субсидий на поддержку развития коневодства и конного хозяйства"',
+            (
+                "ПРИКАЗ. Об утверждении Порядка предоставления субсидий сельскохозяйственным "
+                "товаропроизводителям на поддержку развития коневодства и конного хозяйства "
+                "Краснодарского края. Субсидии предоставляются в форме целевых выплат."
+            ),
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://npa.krasnodar.ru/rest/files/1234007",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertEqual(result.action_level, "watchlist")
+
+    def test_msh_krasnodar_equestrian_sport_competition_stays_background(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            '№208 от 26.05.2026 "О проведении краевого конкурса по конному спорту и выездке среди воспитанников аграрных колледжей"',
+            (
+                "ПРИКАЗ. Провести краевой конкурс по конному спорту среди воспитанников "
+                "аграрных колледжей. Субсидии предусмотрены победителям. Июль 2026 г."
+            ),
+            source_name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://npa.krasnodar.ru/rest/files/1234008",
+            level="regional",
+            region="krasnodar",
+        )
+
+        self.assertEqual(result.action_level, "background")
 
     def test_regulation_gov_subsidy_title_not_blocked_by_domain_gate(self) -> None:
         """Fix 1: regulation.gov.ru + субсид in title must not return background."""

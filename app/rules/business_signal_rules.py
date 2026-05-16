@@ -172,6 +172,14 @@ _REGULATION_NO_DEADLINE_TITLE_MARKERS = (
     "порядок предоставления грант",
 )
 KRASNODAR_SUPPORT_FILE_RE = re.compile(r"^/rest/files/\d+/?$", re.IGNORECASE)
+_MSH_KRASNODAR_NEAR_DEADLINE_DAYS = 14
+_KRASNODAR_LOW_VALUE_EXHIBIT_MARKERS = (
+    "конный спорт",
+    "конному спорту",
+    "конного спорта",
+    "ипподром",
+    "конкурс лошад",
+)
 KRASNODAR_SUPPORT_ORDER_MARKERS = (
     "субсид",
     "грант",
@@ -336,7 +344,14 @@ def detect_action_level(
         title_text=title_text,
         lead_text=lead_text,
     ):
-        if facts.application_status == "open" and facts.deadline_text:
+        if _has_krasnodar_low_value_exhibit_signal(
+            title_text=title_text,
+            lead_text=lead_text,
+        ):
+            return "background"
+        if facts.application_status == "open" and _is_near_open_support_deadline(
+            facts.deadline_text, near_days=_MSH_KRASNODAR_NEAR_DEADLINE_DAYS
+        ):
             return "requires_attention"
         return "watchlist"
     if (
@@ -768,6 +783,11 @@ def _has_krasnodar_support_order_signal(
     return any(marker in text for marker in KRASNODAR_SUPPORT_ORDER_MARKERS)
 
 
+def _has_krasnodar_low_value_exhibit_signal(*, title_text: str, lead_text: str) -> bool:
+    text = f"{title_text} {lead_text}"
+    return any(marker in text for marker in _KRASNODAR_LOW_VALUE_EXHIBIT_MARKERS)
+
+
 def _regulation_discussion_deadline_status(
     *,
     domain: str,
@@ -906,6 +926,11 @@ def build_business_signal(
         title_text=title_text,
         lead_text=lead_text,
     ):
+        if facts.application_status == "open" and facts.deadline_text:
+            deadline_info = f" (срок подачи: {facts.deadline_text})"
+            return f"Открыт конкурсный отбор или приём заявок Минсельхоза Краснодарского края{deadline_info}: проверить условия участия."
+        if facts.application_status == "closed" and "приостановлен" in f"{title_text} {lead_text}":
+            return "Приём заявок по данной мере поддержки приостановлен. Отслеживать возобновление или новый конкурсный отбор."
         return "Региональный приказ Минсельхоза Краснодарского края по субсидии, гранту или порядку поддержки; держать на наблюдении."
     if source_role == "news_signals":
         if _has_mcx_official_news_watchlist_signal(
