@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from unittest.mock import MagicMock, patch
 
 from app.models import SourceConfig
@@ -276,6 +276,53 @@ class PromoteBudgetHelpersTest(unittest.TestCase):
         self.assertNotIn("countDaysEndDate", raw_text)
         self.assertIn("acceptingApplicationsInfo: меньше 1 дня", raw_text)
 
+    def test_build_raw_text_renders_open_window_in_analysis_friendly_form(self) -> None:
+        item = {
+            **_AGRO_ITEM,
+            "endDate": "2026-05-20T20:59:00Z",
+            "selectionAcceptingApplicationInfo": {
+                "acceptingApplicationsInfo": "4 дня",
+                "countDaysEndDate": 4,
+            },
+        }
+        with patch("app.sources.promote_budget_source._today_utc", return_value=date(2026, 5, 16)):
+            raw_text = _build_raw_text(item)
+
+        self.assertIn("Активная мера поддержки.", raw_text)
+        self.assertIn("Прием заявок открыт до 20.05.2026.", raw_text)
+        self.assertIn("Статус приема заявок: 4 дня.", raw_text)
+        self.assertNotIn("countDaysEndDate", raw_text)
+
+    def test_build_raw_text_marks_expired_window_as_closed(self) -> None:
+        with patch("app.sources.promote_budget_source._today_utc", return_value=date(2026, 5, 16)):
+            raw_text = _build_raw_text(_AGRO_ITEM)
+
+        self.assertIn("Прием заявок до 14.05.2026.", raw_text)
+        self.assertIn("Прием завершен. Отбор завершен.", raw_text)
+
+    def test_build_raw_text_is_stable_when_only_count_days_changes(self) -> None:
+        open_item = {
+            **_AGRO_ITEM,
+            "endDate": "2026-05-20T20:59:00Z",
+            "selectionAcceptingApplicationInfo": {
+                "acceptingApplicationsInfo": "4 дня",
+                "countDaysEndDate": 4,
+            },
+        }
+        changed_count_days_item = {
+            **open_item,
+            "selectionAcceptingApplicationInfo": {
+                "acceptingApplicationsInfo": "4 дня",
+                "countDaysEndDate": 3.25,
+            },
+        }
+
+        with patch("app.sources.promote_budget_source._today_utc", return_value=date(2026, 5, 16)):
+            first = _build_raw_text(open_item)
+            second = _build_raw_text(changed_count_days_item)
+
+        self.assertEqual(first, second)
+
     def test_extract_page_items_returns_only_mapping_items(self) -> None:
         items = _extract_page_items(
             {
@@ -294,6 +341,22 @@ class PromoteBudgetHelpersTest(unittest.TestCase):
 
     def test_parse_api_datetime_returns_none_for_invalid_value(self) -> None:
         self.assertIsNone(_parse_api_datetime("not-a-date"))
+
+    def test_is_agriculture_relevant_false_for_nko_grant_from_rural_settlement(self) -> None:
+        item = {
+            "pppItemName": "Администрация Михайловского сельского поселения",
+            "title": "Предоставление субсидии некоммерческим организациям",
+            "shortName": "Поддержка НКО",
+        }
+        self.assertFalse(_is_agriculture_relevant(item))
+
+    def test_is_agriculture_relevant_false_for_sports_grant_with_rural_wording(self) -> None:
+        item = {
+            "pppItemName": "Комитет по спорту",
+            "title": "Грант на проведение летней олимпиады сельских спортсменов",
+            "shortName": "Спорт",
+        }
+        self.assertFalse(_is_agriculture_relevant(item))
 
 
 if __name__ == "__main__":

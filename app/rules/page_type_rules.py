@@ -428,6 +428,10 @@ def detect_source_specific_page_type(
             if "субсид" in title:
                 return "measure_card"
 
+    if domain == "promote.budget.gov.ru":
+        if "/public/minfin/selection/view/" in lower_url:
+            return "selection_announcement"
+
     if domain == "mcx.donland.ru":
         if title in MCX_DONLAND_REFERENCE_TITLES and any(
             fragment in lower_url

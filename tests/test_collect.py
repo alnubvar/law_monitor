@@ -12,7 +12,7 @@ from app.pipeline.collect import run_collect_with_options
 from app.pipeline.collect import create_source
 from app.sources.generic_html_source import GenericHTMLSource
 from app.sources.krasnodar_source import KrasnodarSource
-from app.sources.promote_budget_source import PromoteBudgetSource
+from app.sources.promote_budget_source import PromoteBudgetSource, _build_raw_text
 from app.sources.pravo_stavregion_api_source import PravoStavregionApiSource
 from app.pipeline.deduplicate import compute_content_hash
 from app.storage import (
@@ -1195,6 +1195,65 @@ class RefreshExistingUrlTest(unittest.TestCase):
         self._saved_doc(db_path, url, text, content_hash)
 
         item = self._item(source_config, url, text)
+
+        update_calls: list[str] = []
+
+        class FakeSource:
+            last_fetch_stats: dict = {}
+
+            def fetch_items(self) -> list[CollectedItem]:
+                return [item]
+
+        with patch("app.pipeline.collect.load_sources", return_value=[source_config]):
+            with patch("app.pipeline.collect.create_source", return_value=FakeSource()):
+                with patch(
+                    "app.pipeline.collect.update_document_text_by_url",
+                    side_effect=lambda **kw: update_calls.append(kw["document_url"]),
+                ):
+                    run_collect_with_options(
+                        source_name=source_config.name,
+                        audit_existing=False,
+                        db_path=str(db_path),
+                    )
+
+        self.assertEqual(update_calls, [])
+
+    def test_refresh_skips_update_when_promote_countdown_only_changes(self) -> None:
+        db_path = self._db_path("collect_refresh_promote_countdown_only.db")
+        init_db(db_path)
+        source_config = self._source_config(source_role="active_support_measures")
+        url = "https://promote.budget.gov.ru/public/minfin/selection/view/competition-1?showBackButton=true&competitionType=0&tab=1"
+        base_item = {
+            "title": "Грант Агростартап",
+            "shortName": "Агростартап",
+            "pppItemName": "Министерство сельского хозяйства Российской Федерации",
+            "startDate": "2026-05-12T10:00:00Z",
+            "endDate": "2026-05-20T10:00:00Z",
+            "maxAmountForPersonInfo": "13 682 538,80 ₽",
+            "isActive": True,
+            "selectionAcceptingApplicationInfo": {
+                "acceptingApplicationsInfo": "4 дня",
+                "countDaysEndDate": 4,
+            },
+            "activityId": "activity-1",
+            "competitionId": "competition-1",
+            "id": "card-1",
+        }
+        old_text = _build_raw_text(base_item)
+        new_text = _build_raw_text(
+            {
+                **base_item,
+                "selectionAcceptingApplicationInfo": {
+                    "acceptingApplicationsInfo": "4 дня",
+                    "countDaysEndDate": 3.25,
+                },
+            }
+        )
+        self.assertEqual(old_text, new_text)
+        old_hash = compute_content_hash(old_text, fallback=f"Мера поддержки\n{url}")
+        self._saved_doc(db_path, url, old_text, old_hash)
+
+        item = self._item(source_config, url, new_text)
 
         update_calls: list[str] = []
 

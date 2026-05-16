@@ -181,6 +181,44 @@ class VisibilityDecisionTest(unittest.TestCase):
         self.assertTrue(should_show_document(document, surface="telegram_digest", relevant_only=False))
         self.assertTrue(should_show_document(document, surface="telegram_list", relevant_only=False))
 
+    def test_promote_near_deadline_selection_is_visible_for_report_and_telegram(self) -> None:
+        document = self._doc(
+            doc_id=71,
+            source_name="promote.budget.gov.ru / Минфин - отборы и меры поддержки",
+            region="federal",
+            title="Грант Агростартап",
+            url="https://promote.budget.gov.ru/public/minfin/selection/view/competition-1?showBackButton=true&competitionType=0&tab=1",
+            action_level="requires_attention",
+            page_type="selection_announcement",
+            raw_text="Активная мера поддержки. Прием заявок открыт до 20.05.2026. Агростартап для сельхозтоваропроизводителей.",
+        )
+        document.support_status = "active"
+        document.application_status = "open"
+        document.business_signal = "Открыт прием заявок на меру поддержки АПК."
+
+        self.assertTrue(should_show_document(document, surface="report", relevant_only=False))
+        self.assertTrue(should_show_document(document, surface="telegram_digest", relevant_only=False))
+        self.assertTrue(should_show_document(document, surface="telegram_list", relevant_only=False))
+
+    def test_promote_closed_selection_is_hidden_from_telegram_digest(self) -> None:
+        document = self._doc(
+            doc_id=72,
+            source_name="promote.budget.gov.ru / Минфин - отборы и меры поддержки",
+            region="federal",
+            title="Грант на развитие животноводства",
+            url="https://promote.budget.gov.ru/public/minfin/selection/view/competition-2?showBackButton=true&competitionType=0&tab=1",
+            action_level="watchlist",
+            page_type="selection_announcement",
+            raw_text="Активная мера поддержки. Прием заявок до 14.05.2026. Прием завершен. Отбор завершен.",
+        )
+        document.support_status = "active"
+        document.application_status = "closed"
+        document.business_signal = "Прием заявок или отбор завершены."
+
+        self.assertTrue(should_show_document(document, surface="report", relevant_only=False))
+        self.assertFalse(should_show_document(document, surface="telegram_digest", relevant_only=False))
+        self.assertTrue(should_show_document(document, surface="telegram_list", relevant_only=False))
+
     def test_generic_export_price_news_is_downgraded_to_background(self) -> None:
         document = self._doc(
             doc_id=73,

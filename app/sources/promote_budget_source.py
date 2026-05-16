@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from urllib.parse import urlencode
 
 from requests import RequestException
@@ -20,7 +20,7 @@ _MAX_PAGES = 5
 _STRONG_AGRO_MARKERS = (
     "апк",
     "агро",
-    "сельск",
+    "сельскохозяй",
     "сельхоз",
     "растениевод",
     "животновод",
@@ -33,6 +33,12 @@ _STRONG_AGRO_MARKERS = (
 )
 _WEAK_AGRO_MARKERS = ("пищев", "переработ", "экспорт")
 _SUPPORT_MARKERS = ("субсид", "грант")
+_CLOSED_APPLICATION_MARKERS = (
+    "прием заверш",
+    "приём заверш",
+    "заявки не принимаются",
+    "отбор заверш",
+)
 
 
 def _normalize_text(value: object) -> str:
@@ -51,6 +57,56 @@ def _parse_api_datetime(value: str) -> datetime | None:
         return datetime.fromisoformat(normalized).astimezone(timezone.utc)
     except ValueError:
         return None
+
+
+def _today_utc() -> date:
+    return datetime.now(timezone.utc).date()
+
+
+def _format_deadline_date(value: str) -> str | None:
+    parsed = _parse_api_datetime(value)
+    if parsed is None:
+        return None
+    return parsed.strftime("%d.%m.%Y")
+
+
+def _build_operational_status_lines(
+    item: Mapping[str, object], *, accepting_applications: str
+) -> list[str]:
+    lines: list[str] = []
+    is_active = item.get("isActive")
+    if is_active is True:
+        lines.append("Активная мера поддержки.")
+    elif is_active is False:
+        lines.append("Не активная мера поддержки.")
+
+    end_date_raw = _normalize_text(item.get("endDate"))
+    deadline_date = _format_deadline_date(end_date_raw)
+    end_datetime = _parse_api_datetime(end_date_raw) if end_date_raw else None
+    accepting_lower = accepting_applications.lower()
+    is_closed_window = any(
+        marker in accepting_lower for marker in _CLOSED_APPLICATION_MARKERS
+    ) or (
+        end_datetime is not None and end_datetime.date() < _today_utc()
+    )
+
+    if deadline_date:
+        if is_closed_window:
+            lines.append(f"Прием заявок до {deadline_date}.")
+            lines.append("Прием завершен. Отбор завершен.")
+        elif is_active is True:
+            lines.append(f"Прием заявок открыт до {deadline_date}.")
+        else:
+            lines.append(f"Прием заявок до {deadline_date}.")
+    elif is_closed_window:
+        lines.append("Прием завершен. Отбор завершен.")
+    elif is_active is True and accepting_applications:
+        lines.append("Прием заявок открыт.")
+
+    if accepting_applications:
+        lines.append(f"Статус приема заявок: {accepting_applications}.")
+
+    return lines
 
 
 def _is_agriculture_relevant(item: Mapping[str, object]) -> bool:
@@ -100,6 +156,10 @@ def _build_raw_text(item: Mapping[str, object]) -> str:
         )
     else:
         accepting_applications = ""
+    operational_status_lines = _build_operational_status_lines(
+        item,
+        accepting_applications=accepting_applications,
+    )
 
     lines = [
         f"title: {_normalize_text(item.get('title'))}",
@@ -114,6 +174,7 @@ def _build_raw_text(item: Mapping[str, object]) -> str:
         f"competitionId: {_normalize_text(item.get('competitionId'))}",
         f"id: {_normalize_text(item.get('id'))}",
     ]
+    lines.extend(operational_status_lines)
     return "\n".join(lines)
 
 

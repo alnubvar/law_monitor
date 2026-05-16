@@ -6,6 +6,7 @@ import unittest
 from app.llm.facts_extractor import DocumentFacts
 from app.llm.mock_client import MockLLMClient
 from app.rules.business_signal_rules import detect_action_level
+from app.sources.promote_budget_source import _build_raw_text
 
 
 class MockAnalyzeSmokeTest(unittest.TestCase):
@@ -528,6 +529,118 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         self.assertIsNotNone(result.deadline_text)
         self.assertNotEqual(result.action_level, "requires_attention")
         self.assertIn("не является текущим окном подачи", result.risk_notes or "")
+
+    def test_promote_selection_view_url_becomes_selection_announcement_and_requires_attention(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+        deadline = datetime.now(timezone.utc) + timedelta(days=1)
+        raw_text = _build_raw_text(
+            {
+                "title": "Грант Агростартап",
+                "shortName": "Агростартап",
+                "pppItemName": "Министерство сельского хозяйства Российской Федерации",
+                "startDate": "2026-05-12T10:00:00Z",
+                "endDate": deadline.strftime("%Y-%m-%dT10:00:00Z"),
+                "maxAmountForPersonInfo": "13 682 538,80 ₽",
+                "isActive": True,
+                "selectionAcceptingApplicationInfo": {
+                    "acceptingApplicationsInfo": "меньше 1 дня",
+                    "countDaysEndDate": 0.5,
+                },
+                "activityId": "activity-1",
+                "competitionId": "competition-1",
+                "id": "card-1",
+            }
+        )
+
+        result = client.analyze_document(
+            "Грант Агростартап",
+            raw_text,
+            source_name="promote.budget.gov.ru / Минфин - отборы и меры поддержки",
+            url="https://promote.budget.gov.ru/public/minfin/selection/view/competition-1?showBackButton=true&competitionType=0&tab=1",
+            level="support_measures",
+            region="federal",
+        )
+
+        self.assertEqual(result.page_type, "selection_announcement")
+        self.assertEqual(result.support_status, "active")
+        self.assertEqual(result.application_status, "open")
+        self.assertIsNotNone(result.deadline_text)
+        self.assertEqual(result.action_level, "requires_attention")
+
+    def test_promote_open_selection_with_far_deadline_becomes_watchlist(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+        deadline = datetime.now(timezone.utc) + timedelta(days=5)
+        raw_text = _build_raw_text(
+            {
+                "title": "Грант Агростартап",
+                "shortName": "Агростартап",
+                "pppItemName": "Министерство сельского хозяйства Российской Федерации",
+                "startDate": "2026-05-12T10:00:00Z",
+                "endDate": deadline.strftime("%Y-%m-%dT10:00:00Z"),
+                "maxAmountForPersonInfo": "13 682 538,80 ₽",
+                "isActive": True,
+                "selectionAcceptingApplicationInfo": {
+                    "acceptingApplicationsInfo": "5 дней",
+                    "countDaysEndDate": 5,
+                },
+                "activityId": "activity-3",
+                "competitionId": "competition-3",
+                "id": "card-3",
+            }
+        )
+
+        result = client.analyze_document(
+            "Грант Агростартап",
+            raw_text,
+            source_name="promote.budget.gov.ru / Минфин - отборы и меры поддержки",
+            url="https://promote.budget.gov.ru/public/minfin/selection/view/competition-3?showBackButton=true&competitionType=0&tab=1",
+            level="support_measures",
+            region="federal",
+        )
+
+        self.assertEqual(result.page_type, "selection_announcement")
+        self.assertEqual(result.support_status, "active")
+        self.assertEqual(result.application_status, "open")
+        self.assertIsNotNone(result.deadline_text)
+        self.assertEqual(result.action_level, "watchlist")
+
+    def test_promote_expired_selection_downgrades_from_urgent(self) -> None:
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+        deadline = datetime.now(timezone.utc) - timedelta(days=2)
+        raw_text = _build_raw_text(
+            {
+                "title": "Грант на развитие животноводства",
+                "shortName": "Животноводство",
+                "pppItemName": "Министерство сельского хозяйства Российской Федерации",
+                "startDate": "2026-05-10T10:00:00Z",
+                "endDate": deadline.strftime("%Y-%m-%dT10:00:00Z"),
+                "maxAmountForPersonInfo": "20 000 000,00 ₽",
+                "isActive": True,
+                "selectionAcceptingApplicationInfo": {
+                    "acceptingApplicationsInfo": "0 дней",
+                    "countDaysEndDate": 0,
+                },
+                "activityId": "activity-2",
+                "competitionId": "competition-2",
+                "id": "card-2",
+            }
+        )
+
+        result = client.analyze_document(
+            "Грант на развитие животноводства",
+            raw_text,
+            source_name="promote.budget.gov.ru / Минфин - отборы и меры поддержки",
+            url="https://promote.budget.gov.ru/public/minfin/selection/view/competition-2?showBackButton=true&competitionType=0&tab=1",
+            level="support_measures",
+            region="federal",
+        )
+
+        self.assertEqual(result.page_type, "selection_announcement")
+        self.assertEqual(result.support_status, "active")
+        self.assertEqual(result.application_status, "closed")
+        self.assertIsNotNone(result.deadline_text)
+        self.assertNotEqual(result.action_level, "requires_attention")
+        self.assertIn(result.action_level, {"watchlist", "background"})
 
     def test_results_protocol_never_requires_attention_even_with_subsidy_words(self) -> None:
         client = MockLLMClient(["субсидии сельское хозяйство"])

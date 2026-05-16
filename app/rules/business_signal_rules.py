@@ -60,6 +60,7 @@ PROJECT_DISCUSSION_SIGNALS = (
     "консультац",
 )
 REGULATION_DISCUSSION_NEAR_DAYS = 14
+PROMOTE_SELECTION_NEAR_DAYS = 2
 REGULATION_DISCUSSION_MARKERS = (
     "конец обсуждения",
     "окончание обсуждения",
@@ -383,6 +384,15 @@ def detect_action_level(
         signal in title_text or signal in lead_text
         for signal in PROJECT_DISCUSSION_SIGNALS
     )
+    is_promote_operational_selection = _is_promote_operational_selection(
+        domain=domain,
+        url=url,
+        page_type=page_type,
+    )
+    promote_open_requires_attention = not is_promote_operational_selection or _is_near_open_support_deadline(
+        facts.deadline_text,
+        near_days=PROMOTE_SELECTION_NEAR_DAYS,
+    )
     regulation_discussion_deadline_status = _regulation_discussion_deadline_status(
         domain=domain,
         title_text=title_text,
@@ -572,9 +582,14 @@ def detect_action_level(
             title_text=title_text,
             lead_text=lead_text,
             facts=facts,
+            allow_open_requires_attention=promote_open_requires_attention,
         ):
             return "requires_attention"
-        if facts.support_status == "active" and facts.application_status == "open":
+        if (
+            facts.support_status == "active"
+            and facts.application_status == "open"
+            and promote_open_requires_attention
+        ):
             return "requires_attention"
         if facts.support_status == "active" and facts.application_status == "regular":
             # GISP static measure cards (active_support_measures) require a concrete
@@ -650,15 +665,39 @@ def _has_strong_support_action_signal(
     title_text: str,
     lead_text: str,
     facts: DocumentFacts,
+    allow_open_requires_attention: bool = True,
 ) -> bool:
     text = f"{title_text} {lead_text}"
-    if facts.application_status == "open":
+    if facts.application_status == "open" and allow_open_requires_attention:
         return True
     if page_type == "deadline_update" and facts.deadline_text:
         return True
     if facts.deadline_text and any(marker in text for marker in SUPPORT_CHANGE_MARKERS):
         return True
     return False
+
+
+def _is_promote_operational_selection(
+    *,
+    domain: str,
+    url: str | None,
+    page_type: str,
+) -> bool:
+    return (
+        domain == "promote.budget.gov.ru"
+        and page_type == "selection_announcement"
+        and "/public/minfin/selection/view/" in (url or "").lower()
+    )
+
+
+def _is_near_open_support_deadline(deadline_text: str | None, *, near_days: int) -> bool:
+    if not deadline_text:
+        return False
+    deadline_date = _extract_regulation_deadline_date(deadline_text)
+    if deadline_date is None:
+        return False
+    days_left = (deadline_date - _today_utc()).days
+    return 0 <= days_left <= near_days
 
 
 def _has_strong_regional_npa_action_signal(
