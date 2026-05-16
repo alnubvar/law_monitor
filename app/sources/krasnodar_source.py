@@ -321,7 +321,7 @@ def _find_msh_next_page_url(soup: BeautifulSoup, page_url: str, next_page: int) 
         if parsed.path.rstrip("/").lower() != base_path.lower():
             continue
         if query.get("PAGEN_1") == str(next_page):
-            return _normalize_msh_page_url(normalized)
+            return normalized
     return None
 
 

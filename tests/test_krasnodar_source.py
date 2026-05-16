@@ -207,7 +207,11 @@ class KrasnodarSourceTest(unittest.TestCase):
         </body></html>
         """
         listing_url = "https://msh.krasnodar.ru/documents/prikazy-minselkhoza-krasnodarskogo-kraya"
-        page2_url = "https://msh.krasnodar.ru/documents/prikazy-minselkhoza-krasnodarskogo-kraya?PAGEN_1=2"
+        # Real Bitrix pagination href includes MENU_CODE_PATH and MUL_MODE alongside PAGEN_1
+        page2_url = (
+            "https://msh.krasnodar.ru/documents/prikazy-minselkhoza-krasnodarskogo-kraya"
+            "?MENU_CODE_PATH=documents%2Fprikazy-minselkhoza-krasnodarskogo-kraya&MUL_MODE=&PAGEN_1=2"
+        )
 
         page1_html = """
         <html><body>
@@ -223,7 +227,7 @@ class KrasnodarSourceTest(unittest.TestCase):
               <span class="document-info-bar__download-text">скачать документ</span>
             </a>
           </div>
-          <a href="/documents/prikazy-minselkhoza-krasnodarskogo-kraya?PAGEN_1=2">Следующая</a>
+          <a href="/documents/prikazy-minselkhoza-krasnodarskogo-kraya?MENU_CODE_PATH=documents%2Fprikazy-minselkhoza-krasnodarskogo-kraya&amp;MUL_MODE=&amp;PAGEN_1=2">Следующая</a>
         </body></html>
         """
         page2_html = """
