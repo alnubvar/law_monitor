@@ -23,7 +23,7 @@ class KrasnodarSourceTest(unittest.TestCase):
                 source_role=source_role,  # type: ignore[arg-type]
                 parser="krasnodar",
                 description="fixture source",
-                allow_patterns=["content", "document", "subsid", "finans", ".pdf", ".doc", ".docx"],
+                allow_patterns=["content", "document", "subsid", "finans", ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip"],
             )
         )
 
@@ -164,34 +164,37 @@ class KrasnodarSourceTest(unittest.TestCase):
         self.assertEqual(calls, [source.config.url, listing_url, page2_url])
         self.assertEqual(
             [item.document_type for item in items],
-            ["html", "pdf", "pdf", "pdf"],
+            ["pdf", "pdf", "pdf", "html"],
         )
-        self.assertEqual(items[0].url, listing_url)
-        self.assertIsNone(items[0].published_at)
         self.assertEqual(
-            [item.url for item in items[1:]],
+            [item.url for item in items[:3]],
             [
                 "https://npa.krasnodar.ru/rest/files/1233707",
                 "https://npa.krasnodar.ru/rest/files/1233677",
                 "https://npa.krasnodar.ru/rest/files/1233654",
             ],
         )
-        self.assertIn("Порядка предоставления субсидий", items[1].title)
-        self.assertIn("гранта «Агротуризм»", items[2].title)
-        self.assertIn("крестьянским (фермерским)", items[3].title)
-        self.assertEqual(normalize_date_to_iso(items[1].published_at), "2026-04-30")
-        self.assertEqual(normalize_date_to_iso(items[2].published_at), "2026-04-29")
-        self.assertEqual(normalize_date_to_iso(items[3].published_at), "2026-04-28")
+        self.assertIn("Порядка предоставления субсидий", items[0].title)
+        self.assertIn("гранта «Агротуризм»", items[1].title)
+        self.assertIn("крестьянским (фермерским)", items[2].title)
+        self.assertEqual(normalize_date_to_iso(items[0].published_at), "2026-04-30")
+        self.assertEqual(normalize_date_to_iso(items[1].published_at), "2026-04-29")
+        self.assertEqual(normalize_date_to_iso(items[2].published_at), "2026-04-28")
+        self.assertEqual(items[3].url, listing_url)
+        self.assertIsNone(items[3].published_at)
         self.assertNotIn(page2_url, {item.url for item in items})
         self.assertNotIn(
             "https://msh.krasnodar.ru/documents/prikazy-minselkhoza-krasnodarskogo-kraya/159222",
             {item.url for item in items},
         )
         self.assertNotIn("https://msh.krasnodar.ru/contacts/", {item.url for item in items})
+        self.assertEqual(source.last_fetch_stats["seed_pages_found"], 1)
+        self.assertEqual(source.last_fetch_stats["seed_pages_visited"], 1)
+        self.assertEqual(source.last_fetch_stats["pagination_pages_visited"], 1)
         self.assertEqual(source.last_fetch_stats["harvested_attachment_count"], 3)
 
-    def test_msh_krasnodar_fetch_harvests_page2_attachments(self) -> None:
-        """Verify that page2+ listing pages are traversed and their attachments collected."""
+    def test_msh_krasnodar_fetch_harvests_pagen_1_attachments(self) -> None:
+        """Verify that PAGEN_1 page2+ listing pages are traversed and their attachments collected."""
         source = self._source(
             name="Минсельхоз Краснодарского края - субсидирование и финансирование",
             url="https://msh.krasnodar.ru/documents/subsidirovanie-i-finansirovanie1",
@@ -204,7 +207,7 @@ class KrasnodarSourceTest(unittest.TestCase):
         </body></html>
         """
         listing_url = "https://msh.krasnodar.ru/documents/prikazy-minselkhoza-krasnodarskogo-kraya"
-        page2_url = "https://msh.krasnodar.ru/documents/prikazy-minselkhoza-krasnodarskogo-kraya/page2"
+        page2_url = "https://msh.krasnodar.ru/documents/prikazy-minselkhoza-krasnodarskogo-kraya?PAGEN_1=2"
 
         page1_html = """
         <html><body>
@@ -220,7 +223,7 @@ class KrasnodarSourceTest(unittest.TestCase):
               <span class="document-info-bar__download-text">скачать документ</span>
             </a>
           </div>
-          <a href="/documents/prikazy-minselkhoza-krasnodarskogo-kraya/page2">Следующая</a>
+          <a href="/documents/prikazy-minselkhoza-krasnodarskogo-kraya?PAGEN_1=2">Следующая</a>
         </body></html>
         """
         page2_html = """
@@ -256,13 +259,159 @@ class KrasnodarSourceTest(unittest.TestCase):
 
         self.assertEqual(calls, [source.config.url, listing_url, page2_url])
         urls = [item.url for item in items]
-        self.assertIn(listing_url, urls)
         self.assertIn("https://npa.krasnodar.ru/rest/files/1234100", urls)
         self.assertIn("https://npa.krasnodar.ru/rest/files/1234050", urls)
+        self.assertEqual(urls[-1], listing_url)
         self.assertEqual(len(items), 3)
         self.assertEqual(source.last_fetch_stats["harvested_attachment_count"], 2)
-        self.assertEqual(normalize_date_to_iso(items[1].published_at), "2026-05-07")
-        self.assertEqual(normalize_date_to_iso(items[2].published_at), "2026-04-27")
+        self.assertEqual(source.last_fetch_stats["pagination_pages_visited"], 1)
+        self.assertEqual(normalize_date_to_iso(items[0].published_at), "2026-05-07")
+        self.assertEqual(normalize_date_to_iso(items[1].published_at), "2026-04-27")
+
+    def test_msh_krasnodar_fetch_traverses_year_pages_and_skips_archive(self) -> None:
+        source = self._source(
+            name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://msh.krasnodar.ru/documents/subsidirovanie-i-finansirovanie1",
+            source_role="support_documents",
+        )
+        source.config.max_items = 10
+        root_html = """
+        <html><body>
+          <a href="/documents/subsidirovanie-i-finansirovanie1/i2026">2026</a>
+          <a href="/documents/subsidirovanie-i-finansirovanie1/i2025">2025</a>
+          <a href="/documents/subsidirovanie-i-finansirovanie1/i2024">2024</a>
+          <a href="/documents/subsidirovanie-i-finansirovanie1/i2023">2023</a>
+          <a href="/documents/subsidirovanie-i-finansirovanie1/arkhiv-subs">Архив</a>
+        </body></html>
+        """
+        year_urls = {
+            "https://msh.krasnodar.ru/documents/subsidirovanie-i-finansirovanie1/i2026": "<html><body></body></html>",
+            "https://msh.krasnodar.ru/documents/subsidirovanie-i-finansirovanie1/i2025": "<html><body></body></html>",
+            "https://msh.krasnodar.ru/documents/subsidirovanie-i-finansirovanie1/i2024": """
+            <html><body>
+              <a href="/upload/subsidy-order-2024.pdf">Приказ о субсидиях</a>
+            </body></html>
+            """,
+            "https://msh.krasnodar.ru/documents/subsidirovanie-i-finansirovanie1/i2023": "<html><body></body></html>",
+        }
+        archive_url = "https://msh.krasnodar.ru/documents/subsidirovanie-i-finansirovanie1/arkhiv-subs"
+        calls: list[str] = []
+
+        def fake_get(url: str):
+            calls.append(url)
+            if url == source.config.url:
+                return self._response(root_html, source.config.url)
+            if url in year_urls:
+                return self._response(year_urls[url], url)
+            if url == archive_url:
+                raise AssertionError("Archive must not be traversed in S1")
+            raise AssertionError(f"Unexpected fetch: {url}")
+
+        source.get = fake_get  # type: ignore[method-assign]
+        items = source.fetch_items()
+
+        self.assertEqual(
+            calls,
+            [
+                source.config.url,
+                "https://msh.krasnodar.ru/documents/subsidirovanie-i-finansirovanie1/i2026",
+                "https://msh.krasnodar.ru/documents/subsidirovanie-i-finansirovanie1/i2025",
+                "https://msh.krasnodar.ru/documents/subsidirovanie-i-finansirovanie1/i2024",
+                "https://msh.krasnodar.ru/documents/subsidirovanie-i-finansirovanie1/i2023",
+            ],
+        )
+        self.assertEqual([item.url for item in items], ["https://msh.krasnodar.ru/upload/subsidy-order-2024.pdf"])
+        self.assertNotIn(archive_url, {item.url for item in items})
+        self.assertEqual(source.last_fetch_stats["seed_pages_found"], 4)
+        self.assertEqual(source.last_fetch_stats["seed_pages_visited"], 4)
+
+    def test_msh_krasnodar_fetch_keeps_pdf_doc_docx_xls_xlsx_zip_links(self) -> None:
+        source = self._source(
+            name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://msh.krasnodar.ru/documents/subsidirovanie-i-finansirovanie1",
+            source_role="support_documents",
+        )
+        source.config.max_items = 10
+        year_url = "https://msh.krasnodar.ru/documents/subsidirovanie-i-finansirovanie1/i2024"
+        root_html = f'<html><body><a href="{year_url}">2024</a></body></html>'
+        year_html = """
+        <html><body>
+          <a href="/upload/poryadok-subsidii.pdf">Порядок предоставления субсидий PDF</a>
+          <a href="/upload/forma-zayavki.doc">Форма заявки DOC</a>
+          <a href="/upload/paket-dokumentov.docx">Пакет документов DOCX</a>
+          <a href="/upload/reestr-uchastnikov.xls">Реестр участников XLS</a>
+          <a href="/upload/shablon-rascheta.xlsx">Шаблон расчета XLSX</a>
+          <a href="/upload/komplekt-form.zip">Комплект форм ZIP</a>
+        </body></html>
+        """
+
+        def fake_get(url: str):
+            if url == source.config.url:
+                return self._response(root_html, source.config.url)
+            if url == year_url:
+                return self._response(year_html, year_url)
+            raise AssertionError(f"Unexpected fetch: {url}")
+
+        source.get = fake_get  # type: ignore[method-assign]
+        items = source.fetch_items()
+
+        self.assertEqual(
+            [item.document_type for item in items],
+            ["pdf", "doc", "docx", "xls", "xlsx", "zip"],
+        )
+        self.assertEqual(source.last_fetch_stats["xls_links_count"], 1)
+        self.assertEqual(source.last_fetch_stats["xlsx_links_count"], 1)
+        self.assertEqual(source.last_fetch_stats["zip_links_count"], 1)
+
+    def test_msh_krasnodar_fetch_suppresses_duplicate_attachments_across_seed_pages(self) -> None:
+        source = self._source(
+            name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://msh.krasnodar.ru/documents/subsidirovanie-i-finansirovanie1",
+            source_role="support_documents",
+        )
+        source.config.max_items = 10
+        year_url = "https://msh.krasnodar.ru/documents/subsidirovanie-i-finansirovanie1/i2024"
+        listing_url = "https://msh.krasnodar.ru/documents/prikazy-minselkhoza-krasnodarskogo-kraya"
+        attachment_url = "https://npa.krasnodar.ru/rest/files/1233654"
+        root_html = f"""
+        <html><body>
+          <a href="{year_url}">2024</a>
+          <a href="{listing_url}">Приказы минсельхоза</a>
+        </body></html>
+        """
+        year_html = f"""
+        <html><body>
+          <a href="{attachment_url}">Порядок предоставления грантов</a>
+        </body></html>
+        """
+        listing_html = f"""
+        <html><body>
+          <div class="document-item">
+            <a class="document-item__title" href="/documents/prikazy/159168">
+              № 161 от 28.04.2026 "Об утверждении Порядка предоставления грантов крестьянским (фермерским) хозяйствам"
+            </a>
+            <span class="document-info-bar__type">pdf</span>
+            <a class="document-info-bar__download-link" href="{attachment_url}">
+              <span class="document-info-bar__download-text">скачать документ</span>
+            </a>
+          </div>
+        </body></html>
+        """
+
+        def fake_get(url: str):
+            if url == source.config.url:
+                return self._response(root_html, source.config.url)
+            if url == year_url:
+                return self._response(year_html, year_url)
+            if url == listing_url:
+                return self._response(listing_html, listing_url)
+            raise AssertionError(f"Unexpected fetch: {url}")
+
+        source.get = fake_get  # type: ignore[method-assign]
+        items = source.fetch_items()
+
+        self.assertEqual([item.url for item in items].count(attachment_url), 1)
+        self.assertEqual(items[-1].url, listing_url)
 
     def test_msh_krasnodar_document_item_ignores_referenced_internal_date(self) -> None:
         source = self._source(

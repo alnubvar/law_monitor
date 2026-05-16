@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, time, timezone
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
 
@@ -43,6 +43,7 @@ LISTING_TITLE_RE = re.compile(
     re.IGNORECASE,
 )
 MSH_YEAR_PATH_RE = re.compile(r"/i20\d{2}/?$", re.IGNORECASE)
+MSH_ARCHIVE_PATH_RE = re.compile(r"/documents/subsidirovanie-i-finansirovanie1/(?:arkhiv-subs|i20\d{2}/archive)/?$", re.IGNORECASE)
 DATE_CONTEXT_RE = re.compile(
     r"(?:дата публикации|опубликовано|опубликован|размещено|размещен|размещён)"
     r"[:\s]+(.{0,80})",
@@ -55,6 +56,13 @@ MSH_LEADING_ORDER_DATE_RE = re.compile(
 NPA_KRASNODAR_FILE_RE = re.compile(r"^/rest/files/\d+/?$", re.IGNORECASE)
 _MSH_PAGINATION_PATH_RE = re.compile(r"/page\d+/?$", re.IGNORECASE)
 _MSH_MAX_EXTRA_PAGES = 4  # follow at most pages 2-5 per listing
+MSH_ALLOWED_YEAR_PATHS = {
+    "/documents/subsidirovanie-i-finansirovanie1/i2026",
+    "/documents/subsidirovanie-i-finansirovanie1/i2025",
+    "/documents/subsidirovanie-i-finansirovanie1/i2024",
+    "/documents/subsidirovanie-i-finansirovanie1/i2023",
+}
+MSH_ALLOWED_ATTACHMENT_TYPES = {"pdf", "doc", "docx", "xls", "xlsx", "zip"}
 
 
 class KrasnodarSource(GenericHTMLSource):
@@ -65,7 +73,7 @@ class KrasnodarSource(GenericHTMLSource):
         soup = BeautifulSoup(response.text, "html.parser")
         items = self._extract_items_from_soup(soup, response.url)
         if self._is_msh_krasnodar_source():
-            items = self._harvest_msh_listing_attachments(items)
+            items = self._harvest_msh_listing_attachments(items, soup, response.url)
         return items
 
     def _should_include_url(self, url: str, base_url: str, title: str) -> bool:
@@ -94,7 +102,7 @@ class KrasnodarSource(GenericHTMLSource):
 
     def _should_include_msh_url(self, url: str, title: str) -> bool:
         document_type = self._detect_document_type(url)
-        if document_type in {"pdf", "doc", "docx"}:
+        if document_type in MSH_ALLOWED_ATTACHMENT_TYPES:
             return True
 
         lower_url = url.lower()
@@ -103,7 +111,7 @@ class KrasnodarSource(GenericHTMLSource):
             return False
         if LISTING_TITLE_RE.search(title_text) and not _has_actionable_title(title_text):
             return False
-        if any(fragment in lower_url for fragment in ("/archive", "/i202", "/i203")):
+        if MSH_ARCHIVE_PATH_RE.search(urlparse(lower_url).path):
             return False
         return _has_actionable_title(f"{title_text} {lower_url}")
 
@@ -117,50 +125,65 @@ class KrasnodarSource(GenericHTMLSource):
         source_key = f"{self.config.name} {self.config.url}".lower()
         return "msh.krasnodar.ru" in source_key
 
-    def _harvest_msh_listing_attachments(self, items: list[CollectedItem]) -> list[CollectedItem]:
+    def _harvest_msh_listing_attachments(
+        self,
+        items: list[CollectedItem],
+        root_soup: BeautifulSoup,
+        root_url: str,
+    ) -> list[CollectedItem]:
         max_items = self.config.max_items
-        harvested_items = list(items)
-        seen_urls = {item.url for item in harvested_items}
-        attachment_counts = {"pdf": 0, "docx": 0, "doc": 0}
+        direct_items = [item for item in items if not _is_msh_attachment_listing_item(item)]
+        listing_items = [item for item in items if _is_msh_attachment_listing_item(item)]
+        final_items = list(direct_items)
+        seen_urls = {item.url for item in final_items}
+        attachment_counts = {"pdf": 0, "docx": 0, "doc": 0, "xls": 0, "xlsx": 0, "zip": 0}
+        seed_urls = _collect_msh_seed_urls(root_soup, root_url, listing_items)
+        visited_pages: set[str] = set()
+        pagination_pages_visited = 0
+        seed_pages_visited = 0
 
-        for item in items:
-            if max_items is not None and len(harvested_items) >= max_items:
+        for seed_url in seed_urls:
+            if max_items is not None and len(final_items) >= max_items:
                 break
-            if not _is_msh_attachment_listing_item(item):
-                continue
-
-            listing_url: str = item.url
-            extra_pages = 0
+            page_url = seed_url
+            current_page = 1
+            page_visits_for_seed = 0
 
             while True:
-                if max_items is not None and len(harvested_items) >= max_items:
+                if max_items is not None and len(final_items) >= max_items:
                     break
                 try:
-                    response = self.get(listing_url)
+                    response = self.get(page_url)
                 except Exception as exc:
                     self.logger.warning(
                         "Could not harvest attachments from %s: %s",
-                        listing_url,
+                        page_url,
                         exc,
                     )
                     break
+                normalized_page_url = _normalize_msh_page_url(response.url)
+                if normalized_page_url in visited_pages:
+                    break
+                visited_pages.add(normalized_page_url)
+                page_visits_for_seed += 1
+                if current_page > 1:
+                    pagination_pages_visited += 1
                 soup = BeautifulSoup(response.text, "html.parser")
-                count_before = len(harvested_items)
 
                 for document_item in soup.select(".document-item"):
-                    if max_items is not None and len(harvested_items) >= max_items:
+                    if max_items is not None and len(final_items) >= max_items:
                         break
                     if not isinstance(document_item, Tag):
                         continue
                     collected = _extract_msh_document_item_attachment(self, document_item, response.url)
                     if collected is None or collected.url in seen_urls:
                         continue
-                    harvested_items.append(collected)
+                    final_items.append(collected)
                     seen_urls.add(collected.url)
                     attachment_counts[collected.document_type] += 1
 
                 for link in soup.find_all("a", href=True):
-                    if max_items is not None and len(harvested_items) >= max_items:
+                    if max_items is not None and len(final_items) >= max_items:
                         break
                     if not isinstance(link, Tag):
                         continue
@@ -168,16 +191,16 @@ class KrasnodarSource(GenericHTMLSource):
                     if not normalized_url or normalized_url in seen_urls:
                         continue
                     document_type = _detect_msh_attachment_document_type(self, normalized_url, link)
-                    if document_type not in {"pdf", "doc", "docx"}:
+                    if document_type not in MSH_ALLOWED_ATTACHMENT_TYPES:
                         continue
                     title = _extract_msh_attachment_title(self, link, normalized_url)
                     if not self._should_include_title(title):
                         continue
+                    if _is_generic_download_title(title):
+                        continue
                     if not _is_safe_msh_attachment_url(self, normalized_url, response.url, title):
                         continue
-                    if not _has_actionable_title(f"{title} {normalized_url.lower()}"):
-                        continue
-                    harvested_items.append(
+                    final_items.append(
                         CollectedItem(
                             source_name=self.config.name,
                             source_url=self.config.url,
@@ -192,30 +215,93 @@ class KrasnodarSource(GenericHTMLSource):
                     seen_urls.add(normalized_url)
                     attachment_counts[document_type] += 1
 
-                new_items_this_page = len(harvested_items) - count_before
-                if extra_pages >= _MSH_MAX_EXTRA_PAGES or new_items_this_page == 0:
+                if page_visits_for_seed >= _MSH_MAX_EXTRA_PAGES + 1:
                     break
-                if max_items is not None and len(harvested_items) >= max_items:
+                if max_items is not None and len(final_items) >= max_items:
                     break
-                next_url = _find_msh_next_page_url(soup, response.url, extra_pages + 2)
+                next_url = _find_msh_next_page_url(soup, response.url, current_page + 1)
                 if next_url is None:
                     break
-                listing_url = next_url
-                extra_pages += 1
+                page_url = next_url
+                current_page += 1
 
-        if attachment_counts:
+            if page_visits_for_seed > 0:
+                seed_pages_visited += 1
+
+        for item in listing_items:
+            if max_items is not None and len(final_items) >= max_items:
+                break
+            if item.url in seen_urls:
+                continue
+            final_items.append(item)
+            seen_urls.add(item.url)
+
+        if attachment_counts or seed_urls:
             stats = dict(getattr(self, "last_fetch_stats", {}) or {})
-            stats["items_collected_count"] = len(harvested_items)
+            stats["items_collected_count"] = len(final_items)
+            stats["seed_pages_found"] = len(seed_urls)
+            stats["seed_pages_visited"] = seed_pages_visited
+            stats["pagination_pages_visited"] = pagination_pages_visited
             stats["harvested_attachment_count"] = sum(attachment_counts.values())
             stats["pdf_links_count"] = int(stats.get("pdf_links_count", 0)) + attachment_counts["pdf"]
             stats["docx_links_count"] = int(stats.get("docx_links_count", 0)) + attachment_counts["docx"]
             stats["doc_links_count"] = int(stats.get("doc_links_count", 0)) + attachment_counts["doc"]
+            stats["xls_links_count"] = int(stats.get("xls_links_count", 0)) + attachment_counts["xls"]
+            stats["xlsx_links_count"] = int(stats.get("xlsx_links_count", 0)) + attachment_counts["xlsx"]
+            stats["zip_links_count"] = int(stats.get("zip_links_count", 0)) + attachment_counts["zip"]
             self.last_fetch_stats = stats
-        return harvested_items
+        return final_items
+
+
+def _collect_msh_seed_urls(
+    soup: BeautifulSoup,
+    base_url: str,
+    listing_items: list[CollectedItem],
+) -> list[str]:
+    seed_urls: list[str] = []
+    seen_urls: set[str] = set()
+
+    for item in listing_items:
+        if item.url not in seen_urls:
+            seed_urls.append(item.url)
+            seen_urls.add(item.url)
+
+    for link in soup.find_all("a", href=True):
+        if not isinstance(link, Tag):
+            continue
+        normalized_url = urljoin(base_url, (link.get("href") or "").strip())
+        normalized = _normalize_msh_page_url(normalized_url)
+        if not normalized or normalized in seen_urls:
+            continue
+        parsed = urlparse(normalized)
+        if parsed.scheme not in {"http", "https"} or parsed.netloc.lower() != "msh.krasnodar.ru":
+            continue
+        normalized_path = parsed.path.rstrip("/").lower()
+        if normalized_path in MSH_ALLOWED_YEAR_PATHS:
+            seed_urls.append(normalized)
+            seen_urls.add(normalized)
+            continue
+        if normalized_path == "/documents/prikazy-minselkhoza-krasnodarskogo-kraya":
+            seed_urls.append(normalized)
+            seen_urls.add(normalized)
+    return seed_urls
+
+
+def _normalize_msh_page_url(url: str) -> str | None:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        return None
+    query_pairs = []
+    for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+        if key == "PAGEN_1":
+            query_pairs.append((key, value))
+    normalized_query = urlencode(query_pairs)
+    normalized_path = parsed.path.rstrip("/") or "/"
+    return parsed._replace(path=normalized_path, query=normalized_query, fragment="").geturl()
 
 
 def _find_msh_next_page_url(soup: BeautifulSoup, page_url: str, next_page: int) -> str | None:
-    """Return the next listing page URL if a /pageN link matching next_page is in soup."""
+    """Return the next listing page URL if a /pageN or ?PAGEN_1=N link matching next_page is in soup."""
     parsed_base = urlparse(page_url)
     base_path = _MSH_PAGINATION_PATH_RE.sub("", parsed_base.path).rstrip("/")
     expected_path = f"{base_path}/page{next_page}".lower()
@@ -230,7 +316,12 @@ def _find_msh_next_page_url(soup: BeautifulSoup, page_url: str, next_page: int) 
         if parsed.netloc.lower() != parsed_base.netloc.lower():
             continue
         if parsed.path.rstrip("/").lower() == expected_path:
-            return normalized
+            return _normalize_msh_page_url(normalized)
+        query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        if parsed.path.rstrip("/").lower() != base_path.lower():
+            continue
+        if query.get("PAGEN_1") == str(next_page):
+            return _normalize_msh_page_url(normalized)
     return None
 
 
@@ -269,15 +360,13 @@ def _extract_msh_document_item_attachment(
         return None
 
     document_type = _extract_msh_document_item_type(source, document_item, normalized_url, download_link)
-    if document_type not in {"pdf", "doc", "docx"}:
+    if document_type not in MSH_ALLOWED_ATTACHMENT_TYPES:
         return None
 
     title = _extract_msh_document_item_title(title_tag)
     if not source._should_include_title(title):
         return None
     if not _is_safe_msh_attachment_url(source, normalized_url, base_url, title):
-        return None
-    if not _has_actionable_title(f"{title.lower()} {normalized_url.lower()}"):
         return None
 
     return CollectedItem(
@@ -300,7 +389,7 @@ def _extract_msh_document_item_type(
 ) -> str:
     type_tag = document_item.select_one(".document-info-bar__type")
     type_text = " ".join(type_tag.stripped_strings).lower() if isinstance(type_tag, Tag) else ""
-    if type_text in {"pdf", "doc", "docx"}:
+    if type_text in MSH_ALLOWED_ATTACHMENT_TYPES:
         return type_text
     return _detect_msh_attachment_document_type(source, normalized_url, download_link)
 
@@ -345,7 +434,7 @@ def _extract_msh_attachment_title(source: KrasnodarSource, link: Tag, normalized
 
 def _detect_msh_attachment_document_type(source: KrasnodarSource, normalized_url: str, link: Tag) -> str:
     document_type = source._detect_document_type(normalized_url)
-    if document_type in {"pdf", "doc", "docx"}:
+    if document_type in MSH_ALLOWED_ATTACHMENT_TYPES:
         return document_type
 
     evidence = _msh_attachment_evidence_text(link, normalized_url)
@@ -355,6 +444,12 @@ def _detect_msh_attachment_document_type(source: KrasnodarSource, normalized_url
         return "docx"
     if ".doc" in evidence or re.search(r"(?<![a-zа-я])doc(?![a-zа-я])", evidence):
         return "doc"
+    if ".xlsx" in evidence or re.search(r"(?<![a-zа-я])xlsx(?![a-zа-я])", evidence):
+        return "xlsx"
+    if ".xls" in evidence or re.search(r"(?<![a-zа-я])xls(?![a-zа-я])", evidence):
+        return "xls"
+    if ".zip" in evidence or re.search(r"(?<![a-zа-я])zip(?![a-zа-я])", evidence):
+        return "zip"
     return document_type
 
 
@@ -410,14 +505,17 @@ def _is_generic_download_title(title: str) -> bool:
         "pdf",
         "doc",
         "docx",
+        "xls",
+        "xlsx",
+        "zip",
         "файл",
-    } or normalized.startswith(("pdf,", "doc,", "docx,"))
+    } or normalized.startswith(("pdf,", "doc,", "docx,", "xls,", "xlsx,", "zip,"))
 
 
 def _clean_attachment_title(text: str) -> str:
     normalized = " ".join((text or "").split())
     normalized = re.sub(
-        r"\b(?:pdf|docx?|rtf|zip)\s*,?\s*\d+(?:[.,]\d+)?\s*(?:кб|kb|мб|mb)\b",
+        r"\b(?:pdf|docx?|xlsx?|rtf|zip)\s*,?\s*\d+(?:[.,]\d+)?\s*(?:кб|kb|мб|mb)\b",
         " ",
         normalized,
         flags=re.IGNORECASE,

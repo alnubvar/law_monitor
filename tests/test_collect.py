@@ -804,7 +804,7 @@ class CollectAuditTest(unittest.TestCase):
             description="test",
             max_items=10,
             deny_patterns=["/news", "/department", "/contacts", "/activity", "/serv"],
-            allow_patterns=["subsid", "finans", "document", ".pdf", ".doc", ".docx"],
+            allow_patterns=["subsid", "finans", "document", ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip"],
         )
         listing_url = "https://msh.krasnodar.ru/documents/prikazy-minselkhoza-krasnodarskogo-kraya"
         existing_listing = RawDocument(
