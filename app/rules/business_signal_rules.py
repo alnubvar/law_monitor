@@ -540,6 +540,13 @@ def detect_action_level(
                 if 0 <= _days_left <= REGULATION_DISCUSSION_NEAR_DAYS:
                     return "watchlist"
             return "watchlist"
+        if (
+            domain == "government.ru"
+            and page_type in ACTIONABLE_PAGE_TYPES
+            and has_strict_action_signal
+            and (has_strategy_signal or has_watch_in_title or has_watch_in_body)
+        ):
+            return "requires_attention"
         if has_strategy_signal or has_any_action_signal or explicit_keywords:
             return "watchlist"
         return "background"

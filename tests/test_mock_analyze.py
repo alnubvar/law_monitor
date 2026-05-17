@@ -2400,6 +2400,81 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
 
         self.assertEqual(result.action_level, "background")
 
+    def test_government_apk_decree_is_requires_attention(self) -> None:
+        client = MockLLMClient(["государственная поддержка АПК", "субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Постановление от 15 мая 2026 года №789",
+            (
+                "Правительство Российской Федерации постановляет: утвердить изменения "
+                "в государственную программу развития сельского хозяйства и регулирования "
+                "рынков сельскохозяйственной продукции. Субсидии на развитие АПК."
+            ),
+            source_name="Правительство РФ - документы",
+            url="http://government.ru/docs/58789/",
+            level="federal",
+            region="federal",
+        )
+
+        self.assertEqual(result.page_type, "new_rule")
+        self.assertEqual(result.action_level, "requires_attention")
+
+    def test_government_export_decree_is_requires_attention(self) -> None:
+        client = MockLLMClient(["государственная поддержка АПК"])
+
+        result = client.analyze_document(
+            "Распоряжение от 12 мая 2026 года №1200-р",
+            (
+                "Правительство Российской Федерации распоряжается: ввести временное "
+                "ограничение вывоза сельскохозяйственной продукции — пшеницы и ячменя. "
+                "Распоряжение от 12 мая 2026 вступает в силу с 1 июня."
+            ),
+            source_name="Правительство РФ - документы",
+            url="http://government.ru/docs/58790/",
+            level="federal",
+            region="federal",
+        )
+
+        self.assertEqual(result.page_type, "new_rule")
+        self.assertEqual(result.action_level, "requires_attention")
+
+    def test_government_non_agro_decree_stays_watchlist(self) -> None:
+        client = MockLLMClient([])
+
+        result = client.analyze_document(
+            "Постановление от 15 мая 2026 года №790",
+            (
+                "Правительство Российской Федерации постановляет: утвердить правила "
+                "присвоения квалификационных категорий гидам-проводникам туристских "
+                "маршрутов. Настоящее постановление вступает в силу с момента "
+                "официального опубликования."
+            ),
+            source_name="Правительство РФ - документы",
+            url="http://government.ru/docs/58791/",
+            level="federal",
+            region="federal",
+        )
+
+        self.assertNotEqual(result.action_level, "requires_attention")
+
+    def test_government_ceremonial_decree_is_not_requires_attention(self) -> None:
+        client = MockLLMClient([])
+
+        result = client.analyze_document(
+            "Распоряжение от 9 мая 2026 года №1100-р",
+            (
+                "Правительство Российской Федерации распоряжается: наградить "
+                "сотрудников за вклад в развитие государственного управления. "
+                "Список награждённых прилагается."
+            ),
+            source_name="Правительство РФ - документы",
+            url="http://government.ru/docs/58792/",
+            level="federal",
+            region="federal",
+        )
+
+        self.assertNotEqual(result.action_level, "requires_attention")
+
 
 if __name__ == "__main__":
     unittest.main()
