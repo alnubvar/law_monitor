@@ -544,7 +544,7 @@ def detect_action_level(
             domain == "government.ru"
             and page_type in ACTIONABLE_PAGE_TYPES
             and has_strict_action_signal
-            and (has_strategy_signal or has_watch_in_title or has_watch_in_body)
+            and (has_strategy_signal or has_watch_in_title)
         ):
             return "requires_attention"
         if has_strategy_signal or has_any_action_signal or explicit_keywords:

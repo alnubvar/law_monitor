@@ -2420,10 +2420,12 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         self.assertEqual(result.action_level, "requires_attention")
 
     def test_government_export_decree_is_requires_attention(self) -> None:
+        # government.ru titles are always descriptive — "сельскохозяйственной" in title
+        # triggers has_watch_in_title, which is the correct escalation gate.
         client = MockLLMClient(["государственная поддержка АПК"])
 
         result = client.analyze_document(
-            "Распоряжение от 12 мая 2026 года №1200-р",
+            "Правительство ввело временное ограничение вывоза сельскохозяйственной продукции Распоряжение от 12 мая 2026 года №1200-р",
             (
                 "Правительство Российской Федерации распоряжается: ввести временное "
                 "ограничение вывоза сельскохозяйственной продукции — пшеницы и ячменя. "
@@ -2474,6 +2476,36 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         )
 
         self.assertNotEqual(result.action_level, "requires_attention")
+
+    def test_government_news_fisheries_decree_is_not_requires_attention(self) -> None:
+        # Regression: investment quota decree for fishing companies escalated to RA because
+        # "рыбопереработка" matched WATCHLIST_MARKERS substring "переработ" in body text.
+        # government.ru pages also embed ministry attribution ("Министерство сельского
+        # хозяйства") which bypasses the AHSTEP domain gate. The body-level watchlist
+        # fallback must not be the escalation gate for government.ru strategy sources.
+        client = MockLLMClient([])
+
+        result = client.analyze_document(
+            (
+                "Правительство увеличило размер инвестиционной квоты для рыбопромысловых "
+                "компаний на Дальнем Востоке Постановление от 12 мая 2026 года №549"
+            ),
+            (
+                "Правительство России. Рыболовство, аквакультура, рыбопереработка. "
+                "Постановление от 12 мая 2026 года №549. "
+                "В целях стимулирования строительства судов для Дальневосточного "
+                "рыбохозяйственного бассейна увеличен размер инвестиционной квоты "
+                "для рыбопромысловых компаний. "
+                "Министерства и ведомства: Министерство сельского хозяйства Российской Федерации."
+            ),
+            source_name="Правительство РФ - новости",
+            url="http://government.ru/news/58725/",
+            level="federal",
+            region="federal",
+        )
+
+        self.assertNotEqual(result.action_level, "requires_attention")
+        self.assertIn(result.action_level, {"background", "watchlist"})
 
 
 if __name__ == "__main__":
