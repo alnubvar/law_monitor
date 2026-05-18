@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
@@ -109,6 +110,71 @@ _XML_DUPLICATE_PAGE = """<?xml version="1.0" encoding="utf-8"?>
 
 _XML_MALFORMED = b"<projects><project id=1>broken xml"
 
+_DETAIL_CARD = {
+    "developerDepartment": {"description": "Минсельхоз России"},
+    "procedure": {"description": "Оценка регулирующего воздействия"},
+}
+
+_DETAIL_STAGES = [
+    {
+        "title": "Размещение текста проекта",
+        "stage": "Text",
+        "isCurrent": True,
+    }
+]
+
+_DETAIL_STAGE_INFO = {
+    "title": "Размещение текста проекта",
+    "values": [
+        {
+            "description": "Дата начала публичного обсуждения",
+            "type": "DateTime",
+            "values": ["2026-05-13T10:00:00.000"],
+        },
+        {
+            "description": "Дата окончания публичного обсуждения",
+            "type": "DateTime",
+            "values": ["2026-05-26T23:59:59.000"],
+        },
+        {
+            "description": "Дата начала независимой антикоррупционной экспертизы",
+            "type": "DateTime",
+            "values": ["2026-05-13T10:00:00.000"],
+        },
+        {
+            "description": "Дата окончания независимой антикоррупционной экспертизы",
+            "type": "DateTime",
+            "values": ["2026-05-20T23:59:59.000"],
+        },
+        {
+            "description": "Планируемый срок вступления в силу",
+            "type": "DateTime",
+            "values": ["2027-03-01T12:00:00"],
+        },
+        {
+            "description": "Ответственный за разработку",
+            "type": "Text",
+            "values": ["Сарычев Алексей"],
+        },
+        {
+            "description": "Текущая версия текста проекта нормативного правового акта",
+            "type": "File",
+            "values": [
+                {"description": "project.docx"},
+                {"description": "project.docx"},
+            ],
+        },
+        {
+            "description": "Дополнительные документы к тексту проекта",
+            "type": "File",
+            "values": [
+                {"description": "Пояснительная записка.docx"},
+                {"description": "ФЭО.docx"},
+            ],
+        },
+    ],
+}
+
 
 def _make_source(max_items: int | None = 20) -> RegulationGovSource:
     config = SourceConfig(
@@ -128,6 +194,14 @@ def _mock_response(content: bytes) -> MagicMock:
     mock = MagicMock()
     mock.content = content
     mock.text = content.decode("utf-8")
+    return mock
+
+
+def _mock_json_response(payload: object) -> MagicMock:
+    text = json.dumps(payload, ensure_ascii=False)
+    mock = MagicMock()
+    mock.content = text.encode("utf-8")
+    mock.text = text
     return mock
 
 
@@ -228,7 +302,7 @@ class RegulationGovSourceTest(unittest.TestCase):
         source = _make_source()
         with patch.object(source, "get", return_value=_mock_response(_XML_MULTIPLE)) as mock_get:
             source.fetch_items()
-        called_url = mock_get.call_args[0][0]
+        called_url = mock_get.call_args_list[0].args[0]
         self.assertIn("sort=desc", called_url)
         self.assertIn("api/npalist", called_url)
         self.assertIn("offset=0", called_url)
@@ -367,6 +441,93 @@ class RegulationGovSourceTest(unittest.TestCase):
                 "https://regulation.gov.ru/api/npalist?limit=5&offset=20&sort=desc",
             ],
         )
+
+    def test_candidate_item_is_enriched_with_detail_json_metadata(self) -> None:
+        source = _make_source()
+
+        def get_side_effect(url: str):
+            if "api/npalist" in url:
+                return _mock_response(_XML_MULTIPLE)
+            if "GetCardInfo/167856" in url:
+                return _mock_json_response(_DETAIL_CARD)
+            if "GetProjectStages/167856" in url:
+                return _mock_json_response(_DETAIL_STAGES)
+            if "GetProjectStageInfo/167856/Text" in url:
+                return _mock_json_response(_DETAIL_STAGE_INFO)
+            raise AssertionError(f"Unexpected URL: {url}")
+
+        with patch.object(source, "get", side_effect=get_side_effect) as mock_get:
+            items = source.fetch_items()
+
+        raw_text = items[1].raw_text or ""
+        self.assertIn("Этап портала: Размещение текста проекта", raw_text)
+        self.assertIn("Ответственный: Сарычев Алексей", raw_text)
+        self.assertIn("Публичное обсуждение: 13.05.2026 - 26.05.2026", raw_text)
+        self.assertIn(
+            "Независимая антикоррупционная экспертиза: 13.05.2026 - 20.05.2026",
+            raw_text,
+        )
+        self.assertIn("Планируемое вступление в силу: 01.03.2027", raw_text)
+        self.assertIn(
+            "Файлы этапа: project.docx; Пояснительная записка.docx; ФЭО.docx",
+            raw_text,
+        )
+        called_urls = [call.args[0] for call in mock_get.call_args_list]
+        self.assertEqual(
+            called_urls[:4],
+            [
+                "https://regulation.gov.ru/api/npalist?limit=20&offset=0&sort=desc",
+                "https://regulation.gov.ru/api/public/PublicProjects/GetCardInfo/167856",
+                "https://regulation.gov.ru/api/public/PublicProjects/GetProjectStages/167856",
+                "https://regulation.gov.ru/api/public/PublicProjects/GetProjectStageInfo/167856/Text",
+            ],
+        )
+
+    def test_detail_json_failure_falls_back_to_npalist_only_item(self) -> None:
+        source = _make_source()
+
+        def get_side_effect(url: str):
+            if "api/npalist" in url:
+                return _mock_response(_XML_MULTIPLE)
+            if "GetCardInfo/167856" in url:
+                raise RuntimeError("detail endpoint unavailable")
+            raise AssertionError(f"Unexpected URL: {url}")
+
+        with patch.object(source, "get", side_effect=get_side_effect):
+            items = source.fetch_items()
+
+        raw_text = items[1].raw_text or ""
+        self.assertIn("Министерство: Минсельхоз России", raw_text)
+        self.assertNotIn("Этап портала:", raw_text)
+        self.assertNotIn("Файлы этапа:", raw_text)
+
+    def test_missing_stage_info_keeps_item_and_uses_available_stage_metadata(self) -> None:
+        source = _make_source()
+
+        def get_side_effect(url: str):
+            if "api/npalist" in url:
+                return _mock_response(_XML_MULTIPLE)
+            if "GetCardInfo/167856" in url:
+                return _mock_json_response(_DETAIL_CARD)
+            if "GetProjectStages/167856" in url:
+                return _mock_json_response(_DETAIL_STAGES)
+            if "GetProjectStageInfo/167856/Text" in url:
+                raise RuntimeError("stage info missing")
+            raise AssertionError(f"Unexpected URL: {url}")
+
+        with patch.object(source, "get", side_effect=get_side_effect):
+            items = source.fetch_items()
+
+        raw_text = items[1].raw_text or ""
+        self.assertIn("Этап портала: Размещение текста проекта", raw_text)
+        self.assertNotIn("Публичное обсуждение:", raw_text)
+        self.assertNotIn("Независимая антикоррупционная экспертиза:", raw_text)
+
+    def test_non_candidate_item_skips_detail_json_enrichment(self) -> None:
+        source = _make_source()
+        with patch.object(source, "get", return_value=_mock_response(_XML_NO_PUBLISHDATE)) as mock_get:
+            source.fetch_items()
+        self.assertEqual(mock_get.call_count, 1)
 
 
 class BuildSyntheticTextTest(unittest.TestCase):

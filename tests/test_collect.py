@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import requests
 
@@ -732,6 +733,87 @@ class CollectAuditTest(unittest.TestCase):
         urls = {d.url for d in documents}
         self.assertIn("https://regulation.gov.ru/projects/1", urls)
         self.assertIn("https://regulation.gov.ru/projects/3", urls)
+
+    def test_regulation_gov_collect_keeps_prefilled_item_when_stage_info_missing(self) -> None:
+        db_path = self._db_path("collect_regulation_stage_info_missing.db")
+        init_db(db_path)
+        source_config = SourceConfig(
+            name="Regulation.gov.ru",
+            url="https://regulation.gov.ru/",
+            level="federal",
+            region="federal",
+            source_role="strategy",
+            parser="regulation_gov",
+            description="test",
+        )
+        xml = """<?xml version="1.0" encoding="utf-8"?>
+<projects offset="0" limit="1" total="1">
+  <project id="167856">
+    <title>О внесении изменений в постановление Минсельхоза об АПК</title>
+    <projectId>02/07/05-26/00167856</projectId>
+    <publishDate>2026-05-12T09:07:48.87Z</publishDate>
+    <stage id="20">Обсуждение</stage>
+    <department>Минсельхоз России</department>
+  </project>
+</projects>
+""".encode("utf-8")
+
+        def mock_response(payload: bytes | str) -> MagicMock:
+            if isinstance(payload, bytes):
+                text = payload.decode("utf-8")
+                content = payload
+            else:
+                text = payload
+                content = payload.encode("utf-8")
+            mock = MagicMock()
+            mock.text = text
+            mock.content = content
+            return mock
+
+        def get_side_effect(self, url: str):
+            if "api/npalist" in url:
+                return mock_response(xml)
+            if "GetCardInfo/167856" in url:
+                return mock_response(
+                    json.dumps(
+                        {
+                            "developerDepartment": {"description": "Минсельхоз России"},
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+            if "GetProjectStages/167856" in url:
+                return mock_response(
+                    json.dumps(
+                        [
+                            {
+                                "title": "Размещение текста проекта",
+                                "stage": "Text",
+                                "isCurrent": True,
+                            }
+                        ],
+                        ensure_ascii=False,
+                    )
+                )
+            if "GetProjectStageInfo/167856/Text" in url:
+                raise RuntimeError("stage info missing")
+            raise AssertionError(f"Unexpected URL: {url}")
+
+        with patch("app.pipeline.collect.load_sources", return_value=[source_config]):
+            with patch("app.sources.regulation_gov_source.RegulationGovSource.get", new=get_side_effect):
+                with patch("app.pipeline.collect.extract_document") as mock_extract:
+                    saved_count = run_collect_with_options(
+                        source_name=source_config.name,
+                        limit=10,
+                        audit_existing=False,
+                        db_path=str(db_path),
+                    )
+
+        mock_extract.assert_not_called()
+        self.assertEqual(saved_count, 1)
+        documents = list_documents(db_path=db_path)
+        self.assertEqual(len(documents), 1)
+        self.assertIn("Этап портала: Размещение текста проекта", documents[0].raw_text)
 
     def test_php_support_page_is_extracted_as_html_document(self) -> None:
         db_path = self._db_path("collect_php_support_html.db")
