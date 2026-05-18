@@ -7,7 +7,7 @@ from pathlib import Path
 from collections import Counter
 import re
 from typing import Iterable
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from app import config
 from app.config import get_source_role
@@ -47,6 +47,24 @@ from app.visibility import (
 SHORT_SUMMARY_MAX_CHARS = 140
 REPORT_TITLE_MAX_CHARS = 90
 REPORT_REACTION_TITLE_MAX_CHARS = 70
+# UI/query parameters that are part of the source-side viewer UX and have no
+# operational meaning. Stripped from rendered "- Источник:" links so the GR
+# user sees a stable canonical URL.
+_UI_QUERY_PARAMS_TO_STRIP = frozenset(
+    {
+        "showbackbutton",
+        "competitiontype",
+        "tab",
+        "backurl",
+        "from",
+        "ref",
+        "utm_source",
+        "utm_medium",
+        "utm_campaign",
+        "utm_content",
+        "utm_term",
+    }
+)
 MEASURES_SECTION_DISPLAY_MAX = 6
 # Executive cap on the urgent block. Overflow is NOT hidden — it falls through
 # to the source-role-appropriate operational section.
@@ -1031,11 +1049,35 @@ def _format_human_item(
         )
     lines.extend(
         [
-            f"- Источник: {item.url}",
+            f"- Источник: {_clean_display_url(item.url)}",
             "",
         ]
     )
     return lines
+
+
+def _clean_display_url(url: str | None) -> str:
+    """Strip UI-only query params from the URL rendered in the report.
+
+    Operational params that influence the document identity (NPA ids, doc
+    numbers, regional anchor ids) are preserved — only purely-UI params
+    listed in ``_UI_QUERY_PARAMS_TO_STRIP`` are dropped. Returns the original
+    URL unchanged when it has no scheme/netloc (unparsable) or no query.
+    """
+    if not url:
+        return ""
+    parsed = urlsplit(url)
+    if not parsed.scheme or not parsed.netloc or not parsed.query:
+        return url
+    kept = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if key.lower() not in _UI_QUERY_PARAMS_TO_STRIP
+    ]
+    new_query = urlencode(kept, doseq=True)
+    return urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, new_query, parsed.fragment)
+    )
 
 
 def _build_human_importance_text(

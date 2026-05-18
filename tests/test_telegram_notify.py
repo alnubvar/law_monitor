@@ -485,7 +485,7 @@ class TelegramNotifySmokeTest(unittest.TestCase):
 
         text = telegram.build_command_response("/urgent", db_path=db_path)
 
-        self.assertIn("- Изменены условия субсидирования", text)
+        self.assertIn("- Изменены субсидии в Ставропольском крае", text)
         self.assertIn("Почему важно: Изменены условия субсидирования", text)
         self.assertNotIn("оставить в наблюдении", text)
 

@@ -490,10 +490,13 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             "Кратко: Изменён порядок предоставления субсидий в Ставропольском крае.",
             markdown,
         )
-        self.assertIn("### Изменены условия субсидирования", markdown)
+        # Title compresses to a region-aware headline now ("Изменены субсидии в
+        # Ставропольском крае"); the legacy generic "Изменены условия
+        # субсидирования" form is retained only as the reason wording.
+        self.assertIn("### Изменены субсидии в Ставропольском крае", markdown)
         self.assertIn("Почему важно: Изменены условия субсидирования", markdown)
         self.assertIn(
-            "Проверить изменения порядка субсидирования и сроки вступления.", markdown
+            "Проверить изменения условий субсидирования и критерии отбора.", markdown
         )
         self.assertNotIn("Сигнал может повлиять на контекст господдержки", markdown)
         self.assertNotIn("Оценить срочность сигнала", markdown)
@@ -522,10 +525,10 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             action_levels=["requires_attention", "watchlist"],
         )
 
-        self.assertIn("### Изменены условия субсидирования", markdown)
+        self.assertIn("### Изменены субсидии в Ставропольском крае", markdown)
         self.assertIn("Почему важно: Изменены условия субсидирования", markdown)
         self.assertIn(
-            "Проверить изменения порядка субсидирования и сроки вступления.", markdown
+            "Проверить изменения условий субсидирования и критерии отбора.", markdown
         )
         self.assertNotIn("оставить в наблюдении", markdown)
 
@@ -552,7 +555,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         )
 
         self.assertIn(
-            "Проверить влияние на экспорт и контрагентов.",
+            "Проверить влияние на экспортные контракты и логистику.",
             markdown,
         )
         self.assertNotIn("Оставить как отраслевой фон.", markdown)
@@ -586,11 +589,11 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             "Почему важно: Обновлены условия льготного кредитования", markdown
         )
         self.assertIn(
-            "Что проверить: Проверить условия кредитования, сроки и применимость для АПК.",
+            "Что проверить: Проверить условия кредитования и применимость для АПК.",
             markdown,
         )
         self.assertNotIn(
-            "Проверить влияние на экспорт и контрагентов.",
+            "Проверить влияние на экспортные контракты и логистику.",
             markdown,
         )
 
@@ -745,12 +748,14 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         )
 
         self.assertIn("Главный акцент:", markdown)
-        self.assertIn(
-            "- Главный акцент: Изменены условия субсидирования; Льготное кредитование АПК",
-            markdown,
-        )
+        # Region-aware title compression now makes the two subsidy headlines
+        # distinguishable ("Изменены субсидии для АПК в Ростовской области" vs
+        # the Краснодарский крае form), so they no longer dedupe to a single
+        # legacy "Изменены условия субсидирования" entry. Still no duplicate.
+        self.assertIn("Изменены субсидии для АПК в Ростовской области", markdown)
+        self.assertIn("Льготное кредитование АПК", markdown)
         self.assertNotIn(
-            "Главный акцент: Изменены условия субсидирования; Изменены условия субсидирования;",
+            "Изменены условия субсидирования; Изменены условия субсидирования",
             markdown,
         )
 
@@ -817,7 +822,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         )
 
         self.assertEqual(
-            markdown.count("### Субсидии на мелиорацию — Краснодарском крае"), 1
+            markdown.count("### Субсидии на мелиорацию в Краснодарском крае"), 1
         )
         self.assertIn("admkrai.krasnodar.ru", markdown)
         self.assertNotIn("npa.krasnodar.ru/rest/files/1233833", markdown)
@@ -866,7 +871,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         )
 
         self.assertIn(
-            "Главный акцент: Изменены условия субсидирования; Минсельхоз предложил новые условия льготного кредитования АПК",
+            "Главный акцент: Изменены субсидии в Краснодарском крае; Минсельхоз предложил новые условия льготного кредитования АПК",
             markdown,
         )
         self.assertNotIn(
@@ -1850,7 +1855,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertIn("Проект НПА на публичном обсуждении", markdown)
         self.assertIn("Проект НПА вынесен на публичное обсуждение.", markdown)
         self.assertIn(
-            "Проверить влияние проекта и необходимость позиции до 26.05.2026.", markdown
+            "Проверить влияние проекта и подготовить позицию до 26.05.2026.", markdown
         )
         self.assertNotIn("Открыт прием заявок", markdown)
         self.assertNotIn("Проверить сроки подачи", markdown)
@@ -2119,9 +2124,9 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             include_market_background=True,
         )
 
-        self.assertIn("Проверить сроки подачи и ответственного.", markdown)
+        self.assertIn("Проверить сроки подачи документов и готовность заявки.", markdown)
         self.assertIn(
-            "Проверить изменения порядка субсидирования и сроки вступления.", markdown
+            "Проверить изменения условий субсидирования и критерии отбора.", markdown
         )
         self.assertIn("Оставить как отраслевой фон.", markdown)
 
@@ -2148,7 +2153,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             action_levels=["requires_attention", "watchlist"],
         )
 
-        self.assertIn("### Изменены условия субсидирования", markdown)
+        self.assertIn("### Изменены субсидии в Ростовской области", markdown)
         self.assertIn("https://pravo.donland.ru/doc/view/id/very-long-title", markdown)
         self.assertNotIn(long_title, markdown)
 
@@ -2172,7 +2177,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             action_levels=["requires_attention", "watchlist"],
         )
 
-        self.assertIn("### Изменены условия субсидирования", markdown)
+        self.assertIn("### Изменены субсидии в Ростовской области", markdown)
         self.assertEqual(document.title, original_title)
 
 
@@ -2378,9 +2383,11 @@ class TitleDisambiguationReportTest(unittest.TestCase):
         self.assertIn("(№214)", markdown)
         self.assertIn("(№318)", markdown)
 
-    def test_iblock_url_fragment_used_when_no_npa_and_no_date_in_title(self) -> None:
-        # Test disambiguate_visible_titles directly: identical OCR placeholder titles get
-        # grouped/merged by select_best_report_documents, so we bypass the pipeline here.
+    def test_identical_ocr_titles_do_not_leak_parser_url_tokens(self) -> None:
+        # Two identical OCR placeholder titles share the URL fallback path.
+        # Previously the helper emitted "документ 9a3" / "документ c24" tokens
+        # which read like parser artifacts; under the cleaner UX rule the
+        # disambiguator must NOT emit these.
         from app.user_facing import disambiguate_visible_titles
 
         ocr_title = "Document 'abc.pdf' requires ocr extraction"
@@ -2395,12 +2402,17 @@ class TitleDisambiguationReportTest(unittest.TestCase):
             url="https://admkrai.krasnodar.ru/upload/iblock/c24/xyz.pdf",
         )
         title_map = disambiguate_visible_titles([doc1, doc2], max_chars=90)
-        self.assertIsNotNone(doc1.id)
-        self.assertIsNotNone(doc2.id)
-        self.assertIn("документ 9a3", title_map[doc1.id])  # type: ignore[index]
-        self.assertIn("документ c24", title_map[doc2.id])  # type: ignore[index]
+        rendered = list(title_map.values())
+        self.assertFalse(any("документ 9a3" in title for title in rendered))
+        self.assertFalse(any("документ c24" in title for title in rendered))
+        # Bare numeric suffix fallback must also stay out of the rendered title.
+        self.assertFalse(any(title.endswith(" (1)") for title in rendered))
+        self.assertFalse(any(title.endswith(" (2)") for title in rendered))
 
-    def test_bad_lexical_suffixes_are_not_used_when_url_suffix_exists(self) -> None:
+    def test_bad_lexical_suffixes_are_dropped_when_no_topical_match(self) -> None:
+        # When neither a topical stem nor an NPA/date is available, the
+        # disambiguator must keep titles clean rather than emit parser tokens
+        # or bare Russian wordforms.
         from app.user_facing import disambiguate_visible_titles
 
         doc1 = self._doc(
@@ -2420,8 +2432,8 @@ class TitleDisambiguationReportTest(unittest.TestCase):
         title_map = disambiguate_visible_titles([doc1, doc2], max_chars=90)
         rendered_titles = list(title_map.values())
 
-        self.assertTrue(any("документ 9a3" in title for title in rendered_titles))
-        self.assertTrue(any("документ c24" in title for title in rendered_titles))
+        self.assertFalse(any("документ 9a3" in title for title in rendered_titles))
+        self.assertFalse(any("документ c24" in title for title in rendered_titles))
         self.assertFalse(
             any("(агропромышленном)" in title for title in rendered_titles)
         )
@@ -2434,7 +2446,7 @@ class TitleDisambiguationReportTest(unittest.TestCase):
             url="https://admkrai.krasnodar.ru/upload/iblock/9a3/only.pdf",
         )
         markdown = self._generate([doc])
-        self.assertIn("Субсидии в животноводстве", markdown)
+        self.assertIn("Субсидии на молочное животноводство", markdown)
         self.assertNotIn("(документ", markdown)
         self.assertNotIn("(№", markdown)
 

@@ -282,7 +282,7 @@ class TelegramFormatterTest(unittest.TestCase):
 
         self.assertIn("Сигнал: Обновлены условия льготного кредитования", text)
         self.assertIn(
-            "Что проверить: Проверить условия кредитования, сроки и применимость для АПК.",
+            "Что проверить: Проверить условия кредитования и применимость для АПК.",
             text,
         )
         self.assertNotIn("Что проверить: Оставить как отраслевой фон.", text)
@@ -309,11 +309,11 @@ class TelegramFormatterTest(unittest.TestCase):
 
         self.assertIn("Сигнал: Обновлены условия льготного кредитования", text)
         self.assertIn(
-            "Что проверить: Проверить условия кредитования, сроки и применимость для АПК.",
+            "Что проверить: Проверить условия кредитования и применимость для АПК.",
             text,
         )
         self.assertNotIn(
-            "Что проверить: Проверить влияние на экспорт и контрагентов.",
+            "Что проверить: Проверить влияние на экспортные контракты и логистику.",
             text,
         )
 
@@ -369,10 +369,10 @@ class TelegramFormatterTest(unittest.TestCase):
         text = build_digest_message([document])
 
         self.assertIn(
-            "Что проверить: Проверить влияние на экспорт и контрагентов.",
+            "Что проверить: Проверить влияние на экспортные контракты и логистику.",
             text,
         )
-        self.assertNotIn("Проверить условия кредитования, сроки и применимость для АПК.", text)
+        self.assertNotIn("Проверить условия кредитования и применимость для АПК.", text)
 
     def test_formatter_uses_specific_regional_npa_hint(self) -> None:
         document = self._doc(
@@ -388,9 +388,9 @@ class TelegramFormatterTest(unittest.TestCase):
 
         text = build_digest_message([document])
 
-        self.assertIn("- Изменены условия субсидирования", text)
+        self.assertIn("- Изменены субсидии в Ставропольском крае", text)
         self.assertIn(
-            "Что проверить: Проверить изменения порядка субсидирования и сроки вступления.",
+            "Что проверить: Проверить изменения условий субсидирования и критерии отбора.",
             text,
         )
 
@@ -610,9 +610,9 @@ class TelegramFormatterTest(unittest.TestCase):
         ):
             text = build_digest_message([document])
 
-        self.assertIn("- Изменены условия субсидирования", text)
+        self.assertIn("- Изменены субсидии в Ставропольском крае", text)
         self.assertIn("Кратко: Изменён порядок предоставления субсидий в Ставропольском крае.", text)
-        self.assertIn("Что проверить: Проверить изменения порядка субсидирования и сроки вступления.", text)
+        self.assertIn("Что проверить: Проверить изменения условий субсидирования и критерии отбора.", text)
         self.assertNotIn("Сигнал может повлиять на контекст господдержки", text)
         self.assertNotIn("Оценить срочность сигнала", text)
 
@@ -631,7 +631,7 @@ class TelegramFormatterTest(unittest.TestCase):
 
         compressed = compress_visible_title(document)
 
-        self.assertEqual(compressed, "Изменены условия субсидирования")
+        self.assertEqual(compressed, "Изменены субсидии в Ставропольском крае")
         self.assertEqual(document.title, original_title)
 
     def test_daily_digest_disambiguates_two_documents_with_same_compressed_title(self) -> None:
@@ -656,15 +656,16 @@ class TelegramFormatterTest(unittest.TestCase):
             summary="Изменены условия субсидирования растениеводства.",
         )
         text = build_digest_message([doc1, doc2])
-        # Both items must be present
+        # Both items must be present. Region+topic title compression makes
+        # them distinguishable on their own — no parser-token suffix needed.
         self.assertIn("iblock/9a3", text)
         self.assertIn("iblock/c24", text)
-        # The base title appears (as a prefix of the disambiguated titles)
-        self.assertIn("Утверждены условия субсидирования", text)
-        # The two items must NOT share the exact same title line
-        title_lines = [ln for ln in text.splitlines() if ln.startswith("- Утверждены условия субсидирования")]
-        self.assertEqual(len(title_lines), 2)
-        self.assertNotEqual(title_lines[0], title_lines[1])
+        self.assertIn("Субсидии на молочное животноводство в Краснодарском крае", text)
+        # No parser-looking fallback tokens leak as title suffixes.
+        self.assertNotIn("документ 9a3", text)
+        self.assertNotIn("документ c24", text)
+        self.assertNotIn(" (1)\n", text)
+        self.assertNotIn(" (2)\n", text)
 
     def test_daily_digest_no_suffix_when_only_one_document(self) -> None:
         doc = self._doc(
@@ -677,7 +678,7 @@ class TelegramFormatterTest(unittest.TestCase):
             page_type="new_rule",
         )
         text = build_digest_message([doc])
-        self.assertIn("Утверждены условия субсидирования", text)
+        self.assertIn("Субсидии на молочное животноводство в Краснодарском крае", text)
         self.assertNotIn("(документ", text)
         self.assertNotIn("(№", text)
 

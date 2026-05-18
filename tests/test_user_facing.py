@@ -69,7 +69,7 @@ class UserFacingIntentCoherenceTest(unittest.TestCase):
         action = build_executive_action(document)
 
         self.assertEqual(reason, "Обновлены условия льготного кредитования")
-        self.assertEqual(action, "Проверить условия кредитования, сроки и применимость для АПК.")
+        self.assertEqual(action, "Проверить условия кредитования и применимость для АПК.")
 
     def test_export_duty_signal_uses_trade_reason_and_action(self) -> None:
         document = self._doc(
@@ -88,7 +88,7 @@ class UserFacingIntentCoherenceTest(unittest.TestCase):
         action = build_executive_action(document)
 
         self.assertEqual(reason, "Изменение экспортных пошлин")
-        self.assertEqual(action, "Проверить влияние на экспорт и контрагентов.")
+        self.assertEqual(action, "Проверить влияние на экспортные контракты и логистику.")
 
     def test_market_observation_uses_passive_reason_and_action(self) -> None:
         document = self._doc(
@@ -143,7 +143,7 @@ class UserFacingIntentCoherenceTest(unittest.TestCase):
         action = build_executive_action(document, section="strategy_signals")
 
         self.assertEqual(reason, "Стратегический федеральный сигнал по господдержке или порядку регулирования.")
-        self.assertEqual(action, "Оценить влияние на регулирование.")
+        self.assertEqual(action, "Оценить влияние на регулирование АПК.")
 
     def test_mcx_official_support_news_uses_specific_watchlist_wording(self) -> None:
         document = self._doc(
@@ -161,7 +161,7 @@ class UserFacingIntentCoherenceTest(unittest.TestCase):
         action = build_executive_action(document)
 
         self.assertEqual(reason, "Изменены условия поддержки")
-        self.assertEqual(action, "Проверить влияние на условия поддержки.")
+        self.assertEqual(action, "Проверить влияние на условия поддержки и регламент применения.")
 
     def test_mcx_official_legislative_news_uses_specific_watchlist_wording(self) -> None:
         document = self._doc(
@@ -181,7 +181,7 @@ class UserFacingIntentCoherenceTest(unittest.TestCase):
         self.assertEqual(reason, "Законодательный сигнал по регулированию АПК")
         self.assertEqual(
             action,
-            "Проверить, какие законопроекты одобрены и есть ли влияние на регулирование.",
+            "Проверить, какие законопроекты одобрены, и оценить влияние на регулирование АПК.",
         )
 
     def test_ocr_placeholder_uses_manual_review_reason_and_action(self) -> None:
@@ -372,7 +372,10 @@ class UserFacingIntentCoherenceTest(unittest.TestCase):
         action = build_executive_action(document)
 
         self.assertEqual(reason, "Открыт прием заявок")
-        self.assertEqual(action, "Проверить сроки подачи и ответственного.")
+        self.assertEqual(
+            action,
+            "Проверить сроки подачи документов и готовность заявки.",
+        )
 
     # --- Intent taxonomy: trade vs support distinction --------------------
     def test_export_duty_with_support_words_in_signal_still_renders_as_trade(self) -> None:
@@ -406,7 +409,7 @@ class UserFacingIntentCoherenceTest(unittest.TestCase):
         action = build_executive_action(document)
 
         self.assertEqual(reason, "Изменение экспортных пошлин")
-        self.assertEqual(action, "Проверить влияние на экспорт и контрагентов.")
+        self.assertEqual(action, "Проверить влияние на экспортные контракты и логистику.")
         self.assertNotIn("поддерж", reason.lower())
         self.assertNotIn("поддерж", action.lower())
 
@@ -427,7 +430,7 @@ class UserFacingIntentCoherenceTest(unittest.TestCase):
         action = build_executive_action(document)
 
         self.assertEqual(reason, "Изменение экспортных квот")
-        self.assertEqual(action, "Проверить влияние на экспорт и контрагентов.")
+        self.assertEqual(action, "Проверить влияние на экспортные контракты и логистику.")
 
     def test_export_restriction_signal_uses_restriction_wording(self) -> None:
         document = self._doc(
@@ -446,7 +449,10 @@ class UserFacingIntentCoherenceTest(unittest.TestCase):
         action = build_executive_action(document)
 
         self.assertEqual(reason, "Ограничения экспорта")
-        self.assertEqual(action, "Проверить влияние ограничений на экспорт и логистику.")
+        self.assertEqual(
+            action,
+            "Проверить влияние ограничений на экспортные контракты и логистику.",
+        )
 
     def test_export_logistics_signal_uses_logistics_wording(self) -> None:
         document = self._doc(
@@ -465,7 +471,7 @@ class UserFacingIntentCoherenceTest(unittest.TestCase):
         action = build_executive_action(document)
 
         self.assertEqual(reason, "Изменение условий логистики экспорта")
-        self.assertEqual(action, "Проверить влияние на логистику поставок.")
+        self.assertEqual(action, "Проверить влияние на логистику и условия поставок.")
 
     def test_pure_subsidy_item_still_classified_as_support_not_trade(self) -> None:
         # Defensive test: a subsidy doc with no trade markers must not flip
@@ -486,7 +492,7 @@ class UserFacingIntentCoherenceTest(unittest.TestCase):
         action = build_executive_action(document)
 
         self.assertEqual(reason, "Изменены условия поддержки")
-        self.assertEqual(action, "Проверить влияние на условия поддержки.")
+        self.assertEqual(action, "Проверить влияние на условия поддержки и регламент применения.")
         self.assertNotIn("экспорт", reason.lower())
 
     def test_restriction_word_alone_without_export_context_is_not_trade(self) -> None:

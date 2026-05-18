@@ -173,13 +173,15 @@ def _choose_group_suffixes(group: Sequence[RawDocument]) -> list[str]:
         _suffix_npa_field,
         _suffix_title_npa,
         _suffix_title_date,
-        _suffix_url,
         _suffix_title_keyword,
     ):
         suffixes = [extractor(doc) for doc in group]
         if all(suffixes) and len(set(suffixes)) == len(suffixes):
             return suffixes
-    return [str(i + 1) for i in range(len(group))]
+    # No safe disambiguation — return empty suffixes so titles stay clean.
+    # Duplicate titles are still distinguishable by URL further down the item;
+    # showing parser-looking "(1)" / "(2)" tokens is worse for executive UX.
+    return [""] * len(group)
 
 
 def _suffix_npa_field(doc: RawDocument) -> str:
@@ -203,59 +205,70 @@ def _suffix_title_date(doc: RawDocument) -> str:
     return f"от {m.group(1)}.{m.group(2)}" if m else ""
 
 
-_MEANINGLESS_TITLE_SUFFIX_WORDS = {
-    "агропромышленном",
-    "правитель",
-    "правительства",
-    "постановлениями",
-    "комплексе",
-    "реализации",
-    "территорий",
-    "сельских",
-    "мелиорации",
-}
+# Topical stem → executive-friendly noun phrase used as disambiguation suffix.
+# Bare Russian wordforms ("займам", "полугодие", "агросмене") leaked into report
+# titles before this whitelist was introduced — they looked like parser tokens.
+# Order matters: more specific stems first.
+_TOPICAL_DISAMBIGUATION_SUFFIXES: tuple[tuple[str, str], ...] = (
+    ("агросмен", "АгроСмена"),
+    ("льготн", "льготные займы"),
+    ("займ", "льготные займы"),
+    ("грант", "гранты"),
+    ("мелиорац", "мелиорация"),
+    ("молоч", "молочное животноводство"),
+    ("животновод", "животноводство"),
+    ("растениевод", "растениеводство"),
+    ("элит", "элитное семеноводство"),
+    ("семен", "семеноводство"),
+    ("семян", "семеноводство"),
+    ("овощ", "овощеводство"),
+    ("зернов", "зерновые"),
+    ("пшениц", "зерновые"),
+    ("картофел", "картофель"),
+    ("экспорт", "экспорт"),
+    ("импорт", "импорт"),
+    ("пошлин", "пошлины"),
+    ("квот", "квоты"),
+    ("агротуризм", "агротуризм"),
+    ("возмещ", "возмещение затрат"),
+    ("кредит", "льготные кредиты"),
+)
 
 
 def _suffix_title_keyword(doc: RawDocument) -> str:
+    """Topical suffix derived from the original title.
+
+    Returns an executive-friendly noun phrase (e.g. "льготные займы") matched
+    against ``_TOPICAL_DISAMBIGUATION_SUFFIXES``. Falls back to empty string
+    when no topical stem is found — earlier callers used a bare Russian
+    wordform here, which read like a parser leak ("(займам)", "(агросмене)").
+    """
     original = _normalize_text(_get_value(doc, "title"))
     if not original or _is_technical_ocr_placeholder(original):
         return ""
     compressed = compress_visible_title(doc)
-    if not compressed or original.lower() == compressed.lower():
+    compressed_lower = compressed.lower()
+    original_lower = original.lower()
+    if not compressed or original_lower == compressed_lower:
         return ""
-    compressed_words = set(re.sub(r"[^\w]", " ", compressed.lower()).split())
-    candidates = [
-        w
-        for w in re.sub(r"[^\w]", " ", original.lower()).split()
-        if len(w) >= 5
-        and w not in compressed_words
-        and w not in _MEANINGLESS_TITLE_SUFFIX_WORDS
-    ]
-    for word in reversed(candidates):
-        if len(word) <= 20:
-            return word[:20]
+    for stem, label in _TOPICAL_DISAMBIGUATION_SUFFIXES:
+        if stem in original_lower and stem not in compressed_lower:
+            return label
     return ""
 
 
 def _suffix_url(doc: RawDocument) -> str:
+    """URL-derived suffix — intentionally narrow.
+
+    The previous numeric-stem fallbacks emitted parser-looking tokens like
+    "#1233850" or "документ aae" in visible titles. Those are dropped here.
+    Only the iblock token is kept as a last-resort, and only as a short
+    "документ XXX" form for the very narrow case where no topical suffix
+    could be derived.
+    """
     url = _normalize_text(_get_value(doc, "url"))
     if not url:
         return ""
-    m = _IBLOCK_URL_RE.search(url)
-    if m:
-        return f"документ {m.group(1)}"
-    try:
-        path = urlsplit(url).path.rstrip("/")
-        parts = [p for p in path.split("/") if p]
-        if not parts:
-            return ""
-        stem = parts[-1].split(".")[0]
-        if stem.isdigit() and 1 <= len(stem) <= 8:
-            return f"#{stem}"
-        if 3 <= len(stem) <= 12:
-            return f"документ {stem[:8]}"
-    except Exception:
-        pass
     return ""
 
 
@@ -426,6 +439,9 @@ def _compress_bureaucratic_title(document: PresentationDocument, title: str) -> 
     if _looks_like_selection_announcement(document, combined):
         if _application_is_closed(document):
             return "Прием заявок завершён"
+        topic = _selection_topic_hint(combined)
+        if topic:
+            return f"Открыт прием заявок {topic}"
         return "Открыт прием заявок"
     if "о реализации мероприятий" in lowered:
         return (
@@ -443,21 +459,57 @@ def _compress_bureaucratic_title(document: PresentationDocument, title: str) -> 
 
 
 def _subsidy_topic_hint(combined: str) -> str:
+    """Return a topic clause that slots cleanly after "Субсидии" / "на ..." paths.
+
+    All return values use either ``на …`` or ``для …`` so the caller can always
+    connect to a region with ``в {region}`` without producing double-в grammar
+    artifacts (the previous "в АПК — Краснодарском крае" form).
+    """
     lowered = combined.lower()
     if "мелиора" in lowered:
         return "на мелиорацию"
     if "семен" in lowered or "семян" in lowered:
-        return "на семеноводство"
+        return "на элитное семеноводство"
     if "молоч" in lowered or "животновод" in lowered:
-        return "в животноводстве"
+        return "на молочное животноводство"
     if "экспорт" in lowered:
         return "на экспорт"
     if "овощ" in lowered:
         return "на овощеводство"
     if "зерн" in lowered or "пшениц" in lowered:
         return "на зерновые"
+    if "агротуризм" in lowered:
+        return "на агротуризм"
     if "апк" in lowered or "агропромышлен" in lowered:
-        return "в АПК"
+        return "для АПК"
+    return ""
+
+
+def _selection_topic_hint(combined: str) -> str:
+    """Topic suffix that turns a bare "Открыт прием заявок" into a specific one.
+
+    Returned values are noun-phrase clauses that read naturally after the verb
+    "Открыт прием заявок ...". Empty string → no suffix.
+    """
+    lowered = combined.lower()
+    if "агросмен" in lowered:
+        return "на АгроСмену"
+    if "льготн" in lowered and ("займ" in lowered or "кредит" in lowered):
+        return "на льготные займы и кредиты"
+    if "грант" in lowered:
+        return "на гранты"
+    if "возмещ" in lowered and "затрат" in lowered:
+        return "на возмещение затрат"
+    if "возмещ" in lowered:
+        return "на возмещение"
+    if "мелиора" in lowered:
+        return "на мелиорацию"
+    if "молоч" in lowered or "животновод" in lowered:
+        return "по молочному животноводству"
+    if "семен" in lowered:
+        return "на семеноводство"
+    if "субсид" in lowered:
+        return "на субсидии"
     return ""
 
 
@@ -470,9 +522,11 @@ def _approval_headline(document: PresentationDocument, combined: str) -> str:
         region = _region_label(document)
         topic = _subsidy_topic_hint(combined)
         if topic and region:
-            return f"Субсидии {topic} — {region}"
+            return f"Субсидии {topic} в {region}"
+        if topic:
+            return f"Субсидии {topic}"
         if region:
-            return f"Субсидии — {region}"
+            return f"Субсидии в {region}"
         return "Утверждены условия субсидирования"
     if _is_support_context(combined):
         return "Утверждены правила поддержки"
@@ -481,6 +535,14 @@ def _approval_headline(document: PresentationDocument, combined: str) -> str:
 
 def _change_headline(document: PresentationDocument, combined: str) -> str:
     if _looks_like_subsidy(combined):
+        region = _region_label(document)
+        topic = _subsidy_topic_hint(combined)
+        if topic and region:
+            return f"Изменены субсидии {topic} в {region}"
+        if topic:
+            return f"Изменены субсидии {topic}"
+        if region:
+            return f"Изменены субсидии в {region}"
         return "Изменены условия субсидирования"
     if _is_support_context(combined):
         if "льгот" in combined and "кредит" in combined:
@@ -745,12 +807,12 @@ def _trade_action_for_document(document: PresentationDocument | None) -> str:
         _TRADE_RESTRICTION_RE.search(combined)
         and _TRADE_EXPORT_CONTEXT_RE.search(combined)
     ):
-        return "Проверить влияние ограничений на экспорт и логистику."
+        return "Проверить влияние ограничений на экспортные контракты и логистику."
     if _TRADE_LOGISTICS_RE.search(combined) and _TRADE_EXPORT_CONTEXT_RE.search(
         combined
     ):
-        return "Проверить влияние на логистику поставок."
-    return "Проверить влияние на экспорт и контрагентов."
+        return "Проверить влияние на логистику и условия поставок."
+    return "Проверить влияние на экспортные контракты и логистику."
 
 
 def _action_for_intent(
@@ -759,30 +821,33 @@ def _action_for_intent(
     document: PresentationDocument,
 ) -> str:
     if intent == INTENT_SELECTION_OPEN:
-        return "Проверить сроки подачи и ответственного."
+        deadline_text = _get_value(document, "deadline_text")
+        if deadline_text:
+            return "Проверить сроки подачи документов и готовность заявки."
+        return "Проверить применимость меры и порядок подачи заявки."
     if intent == INTENT_SELECTION_EXPIRED:
         return "Срок истёк, документ — справочно."
     if intent == INTENT_REGULATION_DISCUSSION:
         deadline = _discussion_deadline_label(document)
         if deadline:
-            return f"Проверить влияние проекта и необходимость позиции до {deadline}."
-        return "Проверить влияние проекта и необходимость позиции."
+            return f"Проверить влияние проекта и подготовить позицию до {deadline}."
+        return "Проверить влияние проекта и подготовить позицию."
     if intent == INTENT_MARKET_OBSERVATION:
         return "Оставить как отраслевой фон."
     if intent == INTENT_STRATEGY:
-        return "Оценить влияние на регулирование."
+        return "Оценить влияние на регулирование АПК."
     if intent == INTENT_REGIONAL_SUBSIDY:
-        return "Проверить изменения порядка субсидирования и сроки вступления."
+        return "Проверить изменения условий субсидирования и критерии отбора."
     if intent == INTENT_REGIONAL_RULE:
-        return "Проверить новые правила и сроки вступления."
+        return "Проверить вступление изменений в силу и применимость к холдингу."
     if intent == INTENT_CREDIT_SUPPORT:
-        return "Проверить условия кредитования, сроки и применимость для АПК."
+        return "Проверить условия кредитования и применимость для АПК."
     if intent == INTENT_SUPPORT_CHANGE:
         if _source_role(document) == "news_signals":
-            return "Проверить влияние на условия поддержки."
-        return "Проверить условия поддержки."
+            return "Проверить влияние на условия поддержки и регламент применения."
+        return "Проверить условия поддержки и регламент применения."
     if intent == INTENT_OFFICIAL_LEGISLATION_WATCHLIST:
-        return "Проверить, какие законопроекты одобрены и есть ли влияние на регулирование."
+        return "Проверить, какие законопроекты одобрены, и оценить влияние на регулирование АПК."
     if intent == INTENT_TRADE_REGULATION:
         return _trade_action_for_document(document)
     if intent == INTENT_SELECTION_CHANGE:
