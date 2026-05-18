@@ -888,6 +888,16 @@ def _looks_like_export_restriction(text: str) -> bool:
     return bool(EXPORT_RESTRICTION_RE.search(text))
 
 
+def has_trade_regulation_signal(text: str) -> bool:
+    """Public predicate: does ``text`` carry trade/export/duty/quota/restriction wording.
+
+    Thin wrapper around the internal trade-regulation detector so the
+    report-layer prioritization can consult the same definition the intent
+    taxonomy uses, without depending on a private helper.
+    """
+    return _looks_like_trade_regulation_context(text)
+
+
 def _looks_like_trade_regulation_context(text: str) -> bool:
     if TRADE_REGULATION_RE.search(text):
         return True

@@ -2475,6 +2475,289 @@ class TitleDisambiguationReportTest(unittest.TestCase):
                 self.assertLessEqual(len(line) - 4, 95)  # heading text ≤ 95 chars
 
 
+class RequiresAttentionCapTest(unittest.TestCase):
+    """Executive cap + overflow routing for the urgent block."""
+
+    def _doc(
+        self,
+        *,
+        doc_id: int,
+        source_name: str,
+        region: str,
+        title: str,
+        url: str,
+        page_type: str,
+        summary: str = "summary",
+        application_status: str = "unknown",
+        deadline_text: str | None = None,
+        business_signal: str | None = None,
+        action_level: str = "requires_attention",
+    ) -> RawDocument:
+        now = datetime.now(timezone.utc)
+        return RawDocument(
+            id=doc_id,
+            source_name=source_name,
+            source_url=url,
+            level="federal" if region == "federal" else "regional",
+            region=region,
+            title=title,
+            url=url,
+            published_at=now,
+            content_hash=f"cap-{doc_id}",
+            raw_text="text",
+            is_relevant=True,
+            relevance_reason="reason",
+            importance="high",
+            action_level=action_level,
+            page_type=page_type,
+            summary=summary,
+            impact="impact",
+            topic="topic",
+            collected_at=now,
+            application_status=application_status,
+            deadline_text=deadline_text,
+            business_signal=business_signal,
+        )
+
+    def _build(self, documents):
+        from app.reports.markdown_report import (
+            _build_display_sections,
+            REQUIRES_ATTENTION_DISPLAY_MAX,
+        )
+
+        return _build_display_sections(documents), REQUIRES_ATTENTION_DISPLAY_MAX
+
+    def test_urgent_section_capped_to_executive_max(self) -> None:
+        documents = [
+            self._doc(
+                doc_id=100 + i,
+                source_name="Нормативные акты Краснодарского края",
+                region="krasnodar",
+                title=f"О внесении изменений в порядок предоставления субсидий в АПК №{i}",
+                url=f"https://admkrai.krasnodar.ru/upload/iblock/cap{i}.pdf",
+                page_type="new_rule",
+                summary="Изменены условия субсидирования.",
+                business_signal="Изменены условия предоставления субсидии в АПК.",
+            )
+            for i in range(8)
+        ]
+        sections, cap = self._build(documents)
+        self.assertLessEqual(len(sections["requires_attention"]), cap)
+
+    def test_overflow_items_remain_visible_elsewhere(self) -> None:
+        # 8 urgent regional NPA items — 5 visible at the top, 3 overflow into
+        # regional_npa section. None must disappear.
+        documents = [
+            self._doc(
+                doc_id=200 + i,
+                source_name="Нормативные акты Краснодарского края",
+                region="krasnodar",
+                title=f"О внесении изменений в порядок предоставления субсидий в АПК №{i}",
+                url=f"https://admkrai.krasnodar.ru/upload/iblock/overflow{i}.pdf",
+                page_type="new_rule",
+                summary="Изменены условия субсидирования.",
+                business_signal="Изменены условия предоставления субсидии в АПК.",
+            )
+            for i in range(8)
+        ]
+        sections, cap = self._build(documents)
+        total = sum(len(sections[s]) for s in sections)
+        self.assertEqual(total, len(documents))
+        self.assertEqual(len(sections["requires_attention"]), cap)
+        self.assertEqual(len(sections["regional_npa"]), len(documents) - cap)
+
+    def test_overflow_routes_to_source_role_appropriate_section(self) -> None:
+        # Mix of source roles: regional NPA, support docs, news. Overflow must
+        # land in their natural sections, not collapse into one bucket.
+        urgent_regional = [
+            self._doc(
+                doc_id=300 + i,
+                source_name="Нормативные акты Краснодарского края",
+                region="krasnodar",
+                title=f"О внесении изменений в порядок субсидий в АПК №{i}",
+                url=f"https://admkrai.krasnodar.ru/iblock/regional{i}.pdf",
+                page_type="new_rule",
+                summary="Изменены условия субсидирования.",
+                business_signal="Изменены условия предоставления субсидии в АПК.",
+            )
+            for i in range(5)
+        ]
+        urgent_news = [
+            self._doc(
+                doc_id=310 + i,
+                source_name="ZOL.ru - зерновые новости",
+                region="federal",
+                title=f"Минсельхоз расширил поддержку программы АПК №{i}",
+                url=f"https://www.zol.ru/n/news{i}",
+                page_type="news_background",
+                summary="Сигнал по господдержке АПК сельхозтоваропроизводителей.",
+                business_signal="Сигнал по господдержке АПК.",
+            )
+            for i in range(3)
+        ]
+        documents = urgent_regional + urgent_news
+        sections, cap = self._build(documents)
+        self.assertEqual(len(sections["requires_attention"]), cap)
+        # All 5 regional NPA acts outrank news items, so news overflows.
+        regional_urls = {doc.url for doc in sections["requires_attention"]}
+        self.assertEqual(
+            len(regional_urls & {doc.url for doc in urgent_regional}),
+            cap,
+        )
+        # Overflow news items must land in news_signals, not regional_npa.
+        news_overflow = {doc.url for doc in sections["news_signals"]}
+        self.assertEqual(
+            news_overflow,
+            {doc.url for doc in urgent_news},
+        )
+
+    def test_export_outranks_weak_announcement(self) -> None:
+        export = self._doc(
+            doc_id=400,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Пошлины на экспорт зерна АПК останутся нулевыми с 20 мая",
+            url="https://www.zol.ru/n/export-duty",
+            page_type="news_background",
+            summary="Пошлина на экспорт пшеницы АПК будет нулевой.",
+            business_signal="Изменение экспортных пошлин по продукции АПК.",
+        )
+        soft = self._doc(
+            doc_id=401,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Стартовал прием заявок на участие в Агросмене-2026",
+            url="https://www.zol.ru/n/event",
+            page_type="news_background",
+            summary="Образовательная программа АПК для аграриев и сельхозтоваропроизводителей.",
+            application_status="open",
+        )
+        sections, _ = self._build([soft, export])
+        urgent = sections["requires_attention"]
+        # Both should still be in urgent (only 2 items, below cap), but the
+        # export item must precede the soft announcement.
+        urls = [doc.url for doc in urgent]
+        self.assertEqual(urls.index(export.url), 0)
+        self.assertLess(urls.index(export.url), urls.index(soft.url))
+
+    def test_regulation_discussion_does_not_dominate_urgent_when_capping(self) -> None:
+        # An open accepted act + 5 regulation discussions: when capping, the
+        # accepted act keeps top and discussions overflow to strategy_signals.
+        accepted_act = self._doc(
+            doc_id=500,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="О внесении изменений в порядок предоставления субсидий в АПК",
+            url="https://admkrai.krasnodar.ru/iblock/act.pdf",
+            page_type="new_rule",
+            summary="Изменены условия субсидирования в АПК.",
+            business_signal="Изменены условия предоставления субсидий в АПК.",
+        )
+        discussions = [
+            self._doc(
+                doc_id=510 + i,
+                source_name="Правительство РФ - документы",
+                region="federal",
+                title=f"Проект НПА по субсидиям АПК №{i}",
+                url=f"https://government.ru/docs/discuss{i}",
+                page_type="new_rule",
+                summary="Проект НПА по поддержке сельского хозяйства вынесен на публичное обсуждение.",
+                business_signal="Стратегический федеральный сигнал по АПК.",
+            )
+            for i in range(6)
+        ]
+        sections, cap = self._build([*discussions, accepted_act])
+        urgent_urls = [doc.url for doc in sections["requires_attention"]]
+        self.assertEqual(len(urgent_urls), cap)
+        self.assertEqual(urgent_urls[0], accepted_act.url)
+        # At least one discussion must overflow to strategy_signals; none must
+        # disappear overall.
+        strategy_overflow = [doc.url for doc in sections["strategy_signals"]]
+        self.assertGreaterEqual(len(strategy_overflow), 1)
+        all_kept = set(urgent_urls) | set(strategy_overflow)
+        self.assertEqual(
+            all_kept,
+            {accepted_act.url} | {doc.url for doc in discussions},
+        )
+
+    def test_educational_event_does_not_outrank_operational_change(self) -> None:
+        # The "Агросмена" event-style item must rank below subsidy changes.
+        event = self._doc(
+            doc_id=600,
+            source_name="Минсельхоз России - новости",
+            region="federal",
+            title="Стартовал прием заявок на участие в Агросмене-2026",
+            url="https://mcx.gov.ru/press-service/news/agrosmena/",
+            page_type="news_background",
+            summary="Образовательная программа АПК для молодых специалистов сельского хозяйства.",
+            application_status="open",
+        )
+        subsidy_change = self._doc(
+            doc_id=601,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="О внесении изменений в порядок предоставления субсидий в АПК",
+            url="https://admkrai.krasnodar.ru/iblock/subsidy.pdf",
+            page_type="new_rule",
+            summary="Изменены условия субсидирования.",
+            business_signal="Изменены условия предоставления субсидии в АПК.",
+        )
+        sections, _ = self._build([event, subsidy_change])
+        urgent = sections["requires_attention"]
+        urls = [doc.url for doc in urgent]
+        self.assertLess(urls.index(subsidy_change.url), urls.index(event.url))
+
+    def test_accepted_regional_act_stays_high_priority(self) -> None:
+        act = self._doc(
+            doc_id=700,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="О внесении изменений в порядок предоставления субсидий в АПК",
+            url="https://admkrai.krasnodar.ru/iblock/highprio.pdf",
+            page_type="new_rule",
+            summary="Изменены условия субсидирования.",
+            business_signal="Изменены условия предоставления субсидии в АПК.",
+        )
+        # Surrounded by weaker urgent items.
+        filler = [
+            self._doc(
+                doc_id=710 + i,
+                source_name="ZOL.ru - зерновые новости",
+                region="federal",
+                title=f"Минсельхоз расширил программу АПК №{i}",
+                url=f"https://www.zol.ru/n/filler{i}",
+                page_type="news_background",
+                summary="Сигнал по господдержке АПК сельхозтоваропроизводителей.",
+            )
+            for i in range(6)
+        ]
+        sections, cap = self._build([*filler, act])
+        self.assertIn(act.url, {doc.url for doc in sections["requires_attention"]})
+        self.assertEqual(len(sections["requires_attention"]), cap)
+
+    def test_deterministic_ordering_is_stable_across_runs(self) -> None:
+        documents = [
+            self._doc(
+                doc_id=800 + i,
+                source_name="Нормативные акты Краснодарского края",
+                region="krasnodar",
+                title=f"О внесении изменений в порядок предоставления субсидий в АПК №{i}",
+                url=f"https://admkrai.krasnodar.ru/iblock/stable{i}.pdf",
+                page_type="new_rule",
+                summary="Изменены условия субсидирования.",
+                business_signal="Изменены условия предоставления субсидии в АПК.",
+            )
+            for i in range(7)
+        ]
+        sections_one, _ = self._build(list(documents))
+        sections_two, _ = self._build(list(reversed(documents)))
+        urgent_one = [doc.url for doc in sections_one["requires_attention"]]
+        urgent_two = [doc.url for doc in sections_two["requires_attention"]]
+        # Same priority + same published_at → tie-break by doc.id keeps order
+        # identical regardless of input order.
+        self.assertEqual(urgent_one, urgent_two)
+
+
 class DeadlineTruthRenderingTest(unittest.TestCase):
     def _db_path(self, name: str):
         from pathlib import Path

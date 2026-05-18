@@ -19,8 +19,10 @@ from app.operational_health import (
 )
 from app.periods import PeriodSpec, build_rolling_period, format_period_label
 from app.rules.deadline_truth import (
+    classify_deadline,
     format_iso_date,
     is_deadline_expired,
+    is_deadline_today,
     parse_deadline_date,
     today_utc,
 )
@@ -29,6 +31,7 @@ from app.user_facing import (
     build_executive_action,
     build_executive_reason,
     disambiguate_visible_titles,
+    has_trade_regulation_signal,
     is_meaningful_executive_highlight,
     select_executive_summary,
     user_facing_action_level,
@@ -45,6 +48,22 @@ SHORT_SUMMARY_MAX_CHARS = 140
 REPORT_TITLE_MAX_CHARS = 90
 REPORT_REACTION_TITLE_MAX_CHARS = 70
 MEASURES_SECTION_DISPLAY_MAX = 6
+# Executive cap on the urgent block. Overflow is NOT hidden — it falls through
+# to the source-role-appropriate operational section.
+REQUIRES_ATTENTION_DISPLAY_MAX = 5
+# Operational priority tiers used to rank items inside the urgent block and to
+# decide which items overflow when the block is over capacity. Tiers are
+# spread far apart so within-tier nudges (recency, doc id) never cross tier
+# boundaries.
+_PRIORITY_TODAY_DEADLINE = 400
+_PRIORITY_TRADE_REGULATION = 380
+_PRIORITY_ACCEPTED_REGULATORY_ACT = 360
+_PRIORITY_NEAR_DEADLINE = 340
+_PRIORITY_SUPPORT_CHANGE_SIGNAL = 300
+_PRIORITY_OPEN_WITHOUT_DEADLINE = 260
+_PRIORITY_REGULATION_DISCUSSION = 200
+_PRIORITY_STRATEGIC_BACKGROUND = 180
+_PRIORITY_OPERATIONAL_DEFAULT = 100
 _ISO_DATETIME_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?")
 _ISO_FRAGMENT_RE = re.compile(r"\.\d{1,9}Z\b")
 _DEADLINE_GARBAGE_LABEL_RE = re.compile(
@@ -626,6 +645,7 @@ def _build_display_sections(
         if section in sections:
             sections[section].append(document)
     sections = _collapse_cross_section_duplicates(sections)
+    sections = _apply_requires_attention_cap(sections)
     measures = sections.get("measures_and_selections", [])
     measures.sort(
         key=_display_priority_key,
@@ -636,6 +656,150 @@ def _build_display_sections(
     else:
         sections["measures_and_selections"] = measures
     return sections
+
+
+def _apply_requires_attention_cap(
+    sections: dict[str, list[RawDocument]],
+) -> dict[str, list[RawDocument]]:
+    """Cap the urgent block and route overflow to source-role-natural sections.
+
+    Always sorts the urgent block by operational priority so the rendered
+    order is deterministic, regardless of whether overflow occurred. Overflow
+    items are appended to the section that matches their source role and the
+    section is re-sorted so the higher-priority overflow appears before
+    evergreen entries.
+    """
+    urgent = list(sections.get("requires_attention", []))
+    urgent.sort(key=_requires_attention_sort_key, reverse=True)
+    if len(urgent) <= REQUIRES_ATTENTION_DISPLAY_MAX:
+        sections["requires_attention"] = urgent
+        return sections
+
+    sections["requires_attention"] = urgent[:REQUIRES_ATTENTION_DISPLAY_MAX]
+    overflow = urgent[REQUIRES_ATTENTION_DISPLAY_MAX:]
+    touched: set[str] = set()
+    for document in overflow:
+        fallback = _fallback_display_section(document)
+        sections[fallback].append(document)
+        touched.add(fallback)
+    for section in touched:
+        # measures_and_selections is re-sorted by the existing measures path
+        # immediately after this helper returns, so we don't sort it twice.
+        if section == "measures_and_selections":
+            continue
+        sections[section].sort(key=_display_priority_key, reverse=True)
+    return sections
+
+
+def _fallback_display_section(document: RawDocument) -> str:
+    """Section an overflowed urgent item lands in.
+
+    Mirrors ``visibility.classify_display_section`` minus the
+    requires_attention short-circuit, so an item routed here ends up in the
+    section that matches its source role.
+    """
+    source_role = get_source_role(document.source_name)
+    if source_role in {"active_support_measures", "support_documents"}:
+        return "measures_and_selections"
+    if source_role == "regional_npa":
+        return "regional_npa"
+    if source_role == "strategy":
+        return "strategy_signals"
+    return "news_signals"
+
+
+def _requires_attention_sort_key(
+    document: RawDocument,
+) -> tuple[int, float, int]:
+    """Deterministic sort key for the urgent block.
+
+    Sorts by operational priority (desc), then recency (desc), then by
+    document id (asc, encoded as negative so the tuple-compare with
+    ``reverse=True`` flips it to ascending).
+    """
+    return (
+        _operational_priority_score(document),
+        _published_timestamp(document) or _published_timestamp_from_collected(document),
+        -(document.id or 0),
+    )
+
+
+def _operational_priority_score(document: RawDocument) -> int:
+    """Assign an executive priority tier to a urgent-eligible item.
+
+    Trade and support-change signals are checked against the document's own
+    text (title + summary) rather than against the full enriched context.
+    The generated ``business_signal`` and ``impact`` strings can mention
+    "экспорту/логистике" or "изменений" as generic GR commentary, which
+    would otherwise drag unrelated documents (e.g. educational event news)
+    into the trade tier.
+    """
+    document_text = " ".join(
+        part
+        for part in (
+            (document.title or "").lower(),
+            (document.summary or "").lower(),
+        )
+        if part
+    )
+    source_role = get_source_role(document.source_name)
+    page_type = document.page_type or ""
+
+    # Today's deadline on a still-open application is the most perishable
+    # operational signal and must lead the urgent block.
+    if (
+        document.application_status == "open"
+        and document.deadline_text
+        and is_deadline_today(document.deadline_text)
+    ):
+        return _PRIORITY_TODAY_DEADLINE
+
+    # Trade / export / duty / quota / restriction signals — immediate market
+    # impact, ranked second so they outrank slower-burn regulatory acts.
+    if has_trade_regulation_signal(document_text):
+        return _PRIORITY_TRADE_REGULATION
+
+    # Accepted regulatory / support acts (regional NPA, GISP support docs)
+    # that carry a new rule or measure card.
+    if (
+        source_role == "regional_npa"
+        and page_type in {"new_rule", "deadline_update"}
+    ):
+        return _PRIORITY_ACCEPTED_REGULATORY_ACT
+    if (
+        source_role in {"support_documents", "active_support_measures"}
+        and page_type in {"new_rule", "measure_card", "deadline_update"}
+    ):
+        return _PRIORITY_ACCEPTED_REGULATORY_ACT
+
+    # Near-deadline (within a week) open applications — still time to react.
+    if (
+        document.application_status == "open"
+        and document.deadline_text
+        and classify_deadline(document.deadline_text) == "near"
+    ):
+        return _PRIORITY_NEAR_DEADLINE
+
+    # Documents whose visible signal is a support-change without an accepted
+    # act status. Use the document's own text so generic rule wording in
+    # business_signal/impact does not pollute the tier.
+    if _SUPPORT_OPERATIONAL_CHANGE_RE.search(document_text):
+        return _PRIORITY_SUPPORT_CHANGE_SIGNAL
+
+    # Open applications without a known deadline — useful but unbounded.
+    if document.application_status == "open":
+        return _PRIORITY_OPEN_WITHOUT_DEADLINE
+
+    # Regulation drafts / public discussions — strategic, not operational.
+    if source_role == "strategy":
+        return _PRIORITY_REGULATION_DISCUSSION
+
+    # News-strategic background that escalated through guards but does not
+    # fit any of the above tiers (e.g. soft announcements).
+    if source_role in {"strategy", "news_signals"}:
+        return _PRIORITY_STRATEGIC_BACKGROUND
+
+    return _PRIORITY_OPERATIONAL_DEFAULT
 
 
 def _flatten_display_sections(
