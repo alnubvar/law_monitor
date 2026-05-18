@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 from app.models import SourceConfig
 from app.sources.publication_pravo_stav_source import (
     PublicationPravoStavropolSource,
     _STAVROPOL_AUTHORITIES,
     _build_synthetic_text,
+    _is_agriculture_relevant,
     _parse_date_field,
 )
 
@@ -23,6 +24,7 @@ _SOURCE_CONFIG = SourceConfig(
     description="test",
 )
 
+# Non-agricultural acts — used to verify that the filter blocks them.
 _DOC_PRAVITELSTVO = {
     "eoNumber": "2600202605120010",
     "complexName": "Постановление Правительства Ставропольского края от 08.05.2026 № 237-п «Об оказании мер социальной поддержки»",
@@ -45,6 +47,30 @@ _DOC_GUBERNATOR = {
     "signatoryAuthorityId": "312c966b-0fca-4eb8-b084-1f80c7f5d1fe",
 }
 
+# Agricultural acts from non-Минсельхоз authorities.
+_DOC_PRAVITELSTVO_AGRO = {
+    "eoNumber": "2600202605150001",
+    "complexName": "Постановление Правительства Ставропольского края от 15.05.2026 № 250-п «О предоставлении субсидий сельскохозяйственным товаропроизводителям»",
+    "name": "О предоставлении субсидий сельскохозяйственным товаропроизводителям",
+    "number": "250-п",
+    "documentDate": "2026-05-15T00:00:00",
+    "publishDateShort": "2026-05-15T00:00:00",
+    "pagesCount": 3,
+    "signatoryAuthorityId": "3d93f00f-1af0-4669-8f98-0bff04215eb3",
+}
+
+_DOC_GUBERNATOR_AGRO = {
+    "eoNumber": "2600202605070002",
+    "complexName": "Постановление Губернатора Ставропольского края от 07.05.2026 № 260 «О развитии молочного животноводства»",
+    "name": "О развитии молочного животноводства",
+    "number": "260",
+    "documentDate": "2026-05-07T00:00:00",
+    "publishDateShort": "2026-05-07T00:00:00",
+    "pagesCount": 2,
+    "signatoryAuthorityId": "312c966b-0fca-4eb8-b084-1f80c7f5d1fe",
+}
+
+# Минсельхоз СК acts — always pass the filter regardless of title content.
 _DOC_MINSELKHOZ = {
     "eoNumber": "2601201902260002",
     "complexName": "Приказ Министерства сельского хозяйства Ставропольского края от 25.02.2019 № 67-од",
@@ -56,15 +82,15 @@ _DOC_MINSELKHOZ = {
     "signatoryAuthorityId": "ed16b61b-421b-4268-a87e-6c2cc131f949",
 }
 
-_DOC_NO_COMPLEX_NAME = {
-    "eoNumber": "9900000000000001",
+_DOC_MINSELKHOZ_NO_COMPLEX_NAME = {
+    "eoNumber": "2601202601150001",
     "complexName": "",
-    "name": "Документ без complexName",
-    "number": "1",
-    "documentDate": "2026-01-01T00:00:00",
-    "publishDateShort": "2026-01-02T00:00:00",
+    "name": "Об утверждении порядка предоставления субсидий",
+    "number": "15-од",
+    "documentDate": "2026-01-15T00:00:00",
+    "publishDateShort": "2026-01-16T00:00:00",
     "pagesCount": 1,
-    "signatoryAuthorityId": "3d93f00f-1af0-4669-8f98-0bff04215eb3",
+    "signatoryAuthorityId": "ed16b61b-421b-4268-a87e-6c2cc131f949",
 }
 
 _EMPTY_RESPONSE = {"items": [], "itemsTotalCount": 0, "pagesTotalCount": 0}
@@ -111,9 +137,10 @@ class PublicationPravoStavropolSourceTest(unittest.TestCase):
 
     def test_items_from_multiple_authorities_combined(self) -> None:
         source = _make_source()
+        # authorities: 0=Pravitelstvo, 1=Gubernator, 2=Duma, 3=Minselkhoz
         responses = [
-            _response_with([_DOC_PRAVITELSTVO]),
-            _response_with([_DOC_GUBERNATOR]),
+            _response_with([_DOC_PRAVITELSTVO_AGRO]),
+            _response_with([_DOC_GUBERNATOR_AGRO]),
             _mock_response(_EMPTY_RESPONSE),
             _response_with([_DOC_MINSELKHOZ]),
         ]
@@ -121,46 +148,50 @@ class PublicationPravoStavropolSourceTest(unittest.TestCase):
             items = source.fetch_items()
         self.assertEqual(len(items), 3)
         urls = {item.url for item in items}
-        self.assertIn("http://publication.pravo.gov.ru/Document/View/2600202605120010", urls)
-        self.assertIn("http://publication.pravo.gov.ru/Document/View/2600202605070001", urls)
+        self.assertIn("http://publication.pravo.gov.ru/Document/View/2600202605150001", urls)
+        self.assertIn("http://publication.pravo.gov.ru/Document/View/2600202605070002", urls)
         self.assertIn("http://publication.pravo.gov.ru/Document/View/2601201902260002", urls)
 
     def test_title_uses_complex_name_when_present(self) -> None:
         source = _make_source()
-        responses = [_response_with([_DOC_PRAVITELSTVO])] + [_mock_response(_EMPTY_RESPONSE)] * 3
+        responses = [_response_with([_DOC_PRAVITELSTVO_AGRO])] + [_mock_response(_EMPTY_RESPONSE)] * 3
         with patch.object(source, "get", side_effect=responses):
             items = source.fetch_items()
         self.assertIn("Постановление Правительства", items[0].title)
 
     def test_title_falls_back_to_name_when_complex_name_empty(self) -> None:
+        # Uses Минсельхоз doc (always passes filter) to test the name fallback path.
         source = _make_source()
-        responses = [_response_with([_DOC_NO_COMPLEX_NAME])] + [_mock_response(_EMPTY_RESPONSE)] * 3
+        responses = (
+            [_mock_response(_EMPTY_RESPONSE)] * 3
+            + [_response_with([_DOC_MINSELKHOZ_NO_COMPLEX_NAME])]
+        )
         with patch.object(source, "get", side_effect=responses):
             items = source.fetch_items()
         self.assertEqual(len(items), 1)
-        self.assertEqual(items[0].title, "Документ без complexName")
+        self.assertEqual(items[0].title, "Об утверждении порядка предоставления субсидий")
 
     def test_document_url_uses_eo_number(self) -> None:
         source = _make_source()
-        responses = [_response_with([_DOC_PRAVITELSTVO])] + [_mock_response(_EMPTY_RESPONSE)] * 3
+        responses = [_response_with([_DOC_PRAVITELSTVO_AGRO])] + [_mock_response(_EMPTY_RESPONSE)] * 3
         with patch.object(source, "get", side_effect=responses):
             items = source.fetch_items()
         self.assertEqual(
             items[0].url,
-            "http://publication.pravo.gov.ru/Document/View/2600202605120010",
+            "http://publication.pravo.gov.ru/Document/View/2600202605150001",
         )
 
     def test_published_at_parsed_from_publish_date_short(self) -> None:
         source = _make_source()
-        responses = [_response_with([_DOC_PRAVITELSTVO])] + [_mock_response(_EMPTY_RESPONSE)] * 3
+        responses = [_response_with([_DOC_PRAVITELSTVO_AGRO])] + [_mock_response(_EMPTY_RESPONSE)] * 3
         with patch.object(source, "get", side_effect=responses):
             items = source.fetch_items()
-        expected = datetime(2026, 5, 12, 0, 0, 0, tzinfo=timezone.utc)
+        expected = datetime(2026, 5, 15, 0, 0, 0, tzinfo=timezone.utc)
         self.assertEqual(items[0].published_at, expected)
 
     def test_raw_text_is_populated(self) -> None:
         source = _make_source()
-        responses = [_response_with([_DOC_PRAVITELSTVO])] + [_mock_response(_EMPTY_RESPONSE)] * 3
+        responses = [_response_with([_DOC_PRAVITELSTVO_AGRO])] + [_mock_response(_EMPTY_RESPONSE)] * 3
         with patch.object(source, "get", side_effect=responses):
             items = source.fetch_items()
         self.assertIsNotNone(items[0].raw_text)
@@ -168,7 +199,7 @@ class PublicationPravoStavropolSourceTest(unittest.TestCase):
 
     def test_raw_text_contains_authority_name(self) -> None:
         source = _make_source()
-        responses = [_response_with([_DOC_PRAVITELSTVO])] + [_mock_response(_EMPTY_RESPONSE)] * 3
+        responses = [_response_with([_DOC_PRAVITELSTVO_AGRO])] + [_mock_response(_EMPTY_RESPONSE)] * 3
         with patch.object(source, "get", side_effect=responses):
             items = source.fetch_items()
         self.assertIn("Правительство Ставропольского края", items[0].raw_text or "")
@@ -176,8 +207,8 @@ class PublicationPravoStavropolSourceTest(unittest.TestCase):
     def test_different_documents_produce_different_raw_text(self) -> None:
         source = _make_source()
         responses = [
-            _response_with([_DOC_PRAVITELSTVO, _DOC_GUBERNATOR]),
-            _mock_response(_EMPTY_RESPONSE),
+            _response_with([_DOC_PRAVITELSTVO_AGRO]),
+            _response_with([_DOC_GUBERNATOR_AGRO]),
             _mock_response(_EMPTY_RESPONSE),
             _mock_response(_EMPTY_RESPONSE),
         ]
@@ -187,7 +218,7 @@ class PublicationPravoStavropolSourceTest(unittest.TestCase):
         self.assertNotEqual(items[0].raw_text, items[1].raw_text)
 
     def test_skips_doc_without_eo_number(self) -> None:
-        doc_missing_eo = {**_DOC_PRAVITELSTVO, "eoNumber": ""}
+        doc_missing_eo = {**_DOC_PRAVITELSTVO_AGRO, "eoNumber": ""}
         source = _make_source()
         responses = [_response_with([doc_missing_eo])] + [_mock_response(_EMPTY_RESPONSE)] * 3
         with patch.object(source, "get", side_effect=responses):
@@ -195,12 +226,48 @@ class PublicationPravoStavropolSourceTest(unittest.TestCase):
         self.assertEqual(items, [])
 
     def test_skips_doc_without_title(self) -> None:
-        doc_no_title = {**_DOC_PRAVITELSTVO, "complexName": "", "name": ""}
+        doc_no_title = {**_DOC_PRAVITELSTVO_AGRO, "complexName": "", "name": ""}
         source = _make_source()
         responses = [_response_with([doc_no_title])] + [_mock_response(_EMPTY_RESPONSE)] * 3
         with patch.object(source, "get", side_effect=responses):
             items = source.fetch_items()
         self.assertEqual(items, [])
+
+    def test_non_agro_act_from_government_is_filtered(self) -> None:
+        source = _make_source()
+        responses = [_response_with([_DOC_PRAVITELSTVO])] + [_mock_response(_EMPTY_RESPONSE)] * 3
+        with patch.object(source, "get", side_effect=responses):
+            items = source.fetch_items()
+        self.assertEqual(items, [])
+
+    def test_non_agro_act_from_gubernator_is_filtered(self) -> None:
+        source = _make_source()
+        responses = [
+            _mock_response(_EMPTY_RESPONSE),
+            _response_with([_DOC_GUBERNATOR]),
+            _mock_response(_EMPTY_RESPONSE),
+            _mock_response(_EMPTY_RESPONSE),
+        ]
+        with patch.object(source, "get", side_effect=responses):
+            items = source.fetch_items()
+        self.assertEqual(items, [])
+
+    def test_agro_act_from_government_passes_filter(self) -> None:
+        source = _make_source()
+        responses = [_response_with([_DOC_PRAVITELSTVO_AGRO])] + [_mock_response(_EMPTY_RESPONSE)] * 3
+        with patch.object(source, "get", side_effect=responses):
+            items = source.fetch_items()
+        self.assertEqual(len(items), 1)
+        self.assertIn("2600202605150001", items[0].url)
+
+    def test_minselkhoz_act_passes_filter_regardless_of_title(self) -> None:
+        # _DOC_MINSELKHOZ title has no agro keywords — filter must pass it via authority name.
+        source = _make_source()
+        responses = [_mock_response(_EMPTY_RESPONSE)] * 3 + [_response_with([_DOC_MINSELKHOZ])]
+        with patch.object(source, "get", side_effect=responses):
+            items = source.fetch_items()
+        self.assertEqual(len(items), 1)
+        self.assertIn("2601201902260002", items[0].url)
 
     def test_malformed_json_skips_that_authority(self) -> None:
         source = _make_source()
@@ -208,14 +275,14 @@ class PublicationPravoStavropolSourceTest(unittest.TestCase):
         bad_mock.json.side_effect = ValueError("bad json")
         responses = [
             bad_mock,
-            _response_with([_DOC_GUBERNATOR]),
+            _response_with([_DOC_GUBERNATOR_AGRO]),
             _mock_response(_EMPTY_RESPONSE),
             _mock_response(_EMPTY_RESPONSE),
         ]
         with patch.object(source, "get", side_effect=responses):
             items = source.fetch_items()
         self.assertEqual(len(items), 1)
-        self.assertIn("2600202605070001", items[0].url)
+        self.assertIn("2600202605070002", items[0].url)
 
     def test_non_dict_response_skips_that_authority(self) -> None:
         source = _make_source()
@@ -232,10 +299,10 @@ class PublicationPravoStavropolSourceTest(unittest.TestCase):
         self.assertEqual(items, [])
 
     def test_duplicate_eo_numbers_across_authorities_deduplicated(self) -> None:
-        doc_dup = {**_DOC_GUBERNATOR, "signatoryAuthorityId": "3d93f00f-1af0-4669-8f98-0bff04215eb3"}
+        doc_dup = {**_DOC_GUBERNATOR_AGRO, "signatoryAuthorityId": "3d93f00f-1af0-4669-8f98-0bff04215eb3"}
         source = _make_source()
         responses = [
-            _response_with([_DOC_GUBERNATOR]),
+            _response_with([_DOC_GUBERNATOR_AGRO]),
             _response_with([doc_dup]),
             _mock_response(_EMPTY_RESPONSE),
             _mock_response(_EMPTY_RESPONSE),
@@ -246,7 +313,7 @@ class PublicationPravoStavropolSourceTest(unittest.TestCase):
 
     def test_source_metadata_from_config(self) -> None:
         source = _make_source()
-        responses = [_response_with([_DOC_PRAVITELSTVO])] + [_mock_response(_EMPTY_RESPONSE)] * 3
+        responses = [_response_with([_DOC_PRAVITELSTVO_AGRO])] + [_mock_response(_EMPTY_RESPONSE)] * 3
         with patch.object(source, "get", side_effect=responses):
             items = source.fetch_items()
         self.assertEqual(items[0].source_name, _SOURCE_CONFIG.name)
@@ -262,6 +329,65 @@ class PublicationPravoStavropolSourceTest(unittest.TestCase):
         self.assertIn("SignatoryAuthorityId=3d93f00f", first_url)
         self.assertIn("pageIndex=1", first_url)
         self.assertIn("pageSize=", first_url)
+
+
+class IsAgricultureRelevantTest(unittest.TestCase):
+
+    def test_minselkhoz_always_passes_regardless_of_title(self) -> None:
+        doc = {"complexName": "Приказ об административных изменениях", "name": ""}
+        self.assertTrue(
+            _is_agriculture_relevant(doc, "Министерство сельского хозяйства Ставропольского края")
+        )
+
+    def test_strong_agro_marker_in_complex_name_passes(self) -> None:
+        doc = {"complexName": "Постановление о развитии растениеводства в крае", "name": ""}
+        self.assertTrue(_is_agriculture_relevant(doc, "Правительство Ставропольского края"))
+
+    def test_strong_agro_marker_in_name_passes(self) -> None:
+        doc = {"complexName": "", "name": "О субсидировании сельскохозяйственных производителей"}
+        self.assertTrue(_is_agriculture_relevant(doc, "Правительство Ставропольского края"))
+
+    def test_apk_in_title_passes(self) -> None:
+        doc = {"complexName": "Об утверждении государственной программы развития АПК", "name": ""}
+        self.assertTrue(_is_agriculture_relevant(doc, "Дума Ставропольского края"))
+
+    def test_moloch_in_title_passes(self) -> None:
+        doc = {"complexName": "О развитии молочного животноводства в крае", "name": ""}
+        self.assertTrue(_is_agriculture_relevant(doc, "Губернатор Ставропольского края"))
+
+    def test_zern_in_title_passes(self) -> None:
+        doc = {"complexName": "О регулировании рынка зерновых культур", "name": ""}
+        self.assertTrue(_is_agriculture_relevant(doc, "Правительство Ставропольского края"))
+
+    def test_non_agro_subsidy_act_is_rejected(self) -> None:
+        doc = {
+            "complexName": "Постановление о предоставлении субсидий организациям жилищно-коммунального хозяйства",
+            "name": "",
+        }
+        self.assertFalse(_is_agriculture_relevant(doc, "Правительство Ставропольского края"))
+
+    def test_generic_change_act_is_rejected(self) -> None:
+        doc = {"complexName": "О внесении изменений в постановление краевого правительства", "name": ""}
+        self.assertFalse(_is_agriculture_relevant(doc, "Правительство Ставропольского края"))
+
+    def test_social_support_act_is_rejected(self) -> None:
+        doc = {"complexName": "Об оказании мер социальной поддержки гражданам", "name": ""}
+        self.assertFalse(_is_agriculture_relevant(doc, "Правительство Ставропольского края"))
+
+    def test_empty_combined_text_is_rejected(self) -> None:
+        doc = {"complexName": "", "name": ""}
+        self.assertFalse(_is_agriculture_relevant(doc, "Правительство Ставропольского края"))
+
+    def test_agro_subsidy_from_government_passes(self) -> None:
+        doc = {
+            "complexName": "О предоставлении субсидий сельскохозяйственным товаропроизводителям",
+            "name": "",
+        }
+        self.assertTrue(_is_agriculture_relevant(doc, "Правительство Ставропольского края"))
+
+    def test_fermer_in_title_passes(self) -> None:
+        doc = {"complexName": "О грантовой поддержке фермерских хозяйств", "name": ""}
+        self.assertTrue(_is_agriculture_relevant(doc, "Правительство Ставропольского края"))
 
 
 class BuildSyntheticTextTest(unittest.TestCase):

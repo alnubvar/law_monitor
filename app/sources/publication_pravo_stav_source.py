@@ -17,6 +17,46 @@ _STAVROPOL_AUTHORITIES: list[tuple[str, str]] = [
 
 _MIN_PAGE_SIZE = 10
 
+_AGRO_STRONG_MARKERS: tuple[str, ...] = (
+    "апк",
+    "агро",
+    "сельск",
+    "сельхоз",
+    "растениевод",
+    "животновод",
+    "молок",
+    "молоч",
+    "зерн",
+    "мелиорац",
+    "семен",
+    "фермер",
+    "крестьянск",
+    "пищев",
+    "переработ",
+)
+_MINSELKHOZ_NAME_FRAGMENT = "министерство сельского хозяйства"
+
+
+def _is_agriculture_relevant(doc: dict, authority_name: str) -> bool:
+    """Return True if the act is likely agriculture-relevant for AHSTEP GR monitoring.
+
+    Минсельхоз СК is always relevant by authority. For other authorities (Правительство,
+    Губернатор, Дума) the act title must explicitly contain an agricultural domain term,
+    because their acts cover many non-agricultural topics that only become distinguishable
+    once the full document text is available.
+    """
+    if _MINSELKHOZ_NAME_FRAGMENT in authority_name.lower():
+        return True
+    combined = " ".join(
+        part
+        for part in (
+            (doc.get("complexName") or "").strip(),
+            (doc.get("name") or "").strip(),
+        )
+        if part
+    ).lower()
+    return bool(combined) and any(marker in combined for marker in _AGRO_STRONG_MARKERS)
+
 
 def _build_synthetic_text(doc: dict, authority_name: str) -> str:
     lines: list[str] = []
@@ -102,6 +142,8 @@ class PublicationPravoStavropolSource(BaseSource):
                     (doc.get("complexName") or doc.get("name") or "").split()
                 )
                 if not title:
+                    continue
+                if not _is_agriculture_relevant(doc, authority_name):
                     continue
                 doc_url = f"{_DOCUMENT_BASE}/{eo_number}"
                 if doc_url in seen_urls:
