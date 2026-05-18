@@ -227,6 +227,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=7,
         help="Период для ежедневного отчета в днях.",
     )
+    scheduler_parser.add_argument(
+        "--force-daily-digest",
+        action="store_true",
+        help="Принудительно отправить ежедневный Telegram digest повторно за текущую дату.",
+    )
 
     subparsers.add_parser(
         "notify-test",
@@ -636,7 +641,11 @@ def _cli_run(args: argparse.Namespace) -> int:
 
 
 def _cli_run_scheduler(args: argparse.Namespace) -> int:
-    run_scheduler(once=args.once, days=args.days)
+    run_scheduler(
+        once=args.once,
+        days=args.days,
+        force_daily_digest=args.force_daily_digest,
+    )
     print("Scheduler run completed." if args.once else "Scheduler started.")
     return 0
 

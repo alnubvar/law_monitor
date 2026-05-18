@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import mimetypes
 import re
 import time
 from collections.abc import Sequence
@@ -220,6 +221,84 @@ def send_digest(
 
     notices = collect_operational_notices(db_path=db_path) if db_path is not None else []
     return send_message(build_digest_message(documents, operational_notices=notices))
+
+
+def send_daily_report_digest(
+    documents: Sequence[RawDocument],
+    *,
+    report_path: Path | str | None,
+    db_path: Path | str | None = None,
+) -> bool:
+    notices = collect_operational_notices(db_path=db_path) if db_path is not None else []
+    if documents:
+        text = build_digest_message(
+            documents,
+            operational_notices=notices,
+            force_daily=True,
+        )
+    else:
+        lines = [
+            "🧾 Ежедневная GR-сводка",
+            "Срочных изменений не найдено, источники проверены.",
+        ]
+        if notices:
+            lines.append("")
+            lines.extend(format_operational_notices_telegram(notices))
+        text = "\n".join(lines)
+
+    if report_path is not None:
+        text = f"{text}\n\nПолная версия отчета — во вложении."
+
+    if not send_message(text):
+        return False
+
+    if report_path is None:
+        return True
+    return send_document(Path(report_path))
+
+
+def send_document(path: Path | str) -> bool:
+    if not is_configured():
+        logger.info("Telegram is not configured. Skipping document send.")
+        return False
+
+    document_path = Path(path)
+    if not document_path.exists():
+        logger.warning("Telegram document path does not exist: %s", document_path.name)
+        return False
+
+    proxies = _build_proxies()
+    mime_type = mimetypes.guess_type(document_path.name)[0] or "text/plain"
+    timeout = max(config.TELEGRAM_API_TIMEOUT + 5, 10)
+    for attempt in range(1, TELEGRAM_SEND_ATTEMPTS + 1):
+        try:
+            with document_path.open("rb") as document_file:
+                response = requests.post(
+                    f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendDocument",
+                    data={"chat_id": config.TELEGRAM_CHAT_ID},
+                    files={"document": (document_path.name, document_file, mime_type)},
+                    timeout=timeout,
+                    proxies=proxies,
+                )
+            response.raise_for_status()
+            payload = response.json()
+            if not payload.get("ok", True):
+                raise RuntimeError("telegram_api_error")
+            logger.info("Telegram document sent successfully.")
+            return True
+        except (requests.RequestException, ValueError, RuntimeError) as exc:
+            error_code = _describe_request_error(exc) if isinstance(exc, requests.RequestException) else "telegram_api_error"
+            logger.warning(
+                "Telegram document send attempt %s/%s failed: %s",
+                attempt,
+                TELEGRAM_SEND_ATTEMPTS,
+                error_code,
+            )
+            if attempt < TELEGRAM_SEND_ATTEMPTS:
+                time.sleep(TELEGRAM_RETRY_BACKOFF_SECONDS * attempt)
+
+    logger.error("Telegram document send failed after %s attempts.", TELEGRAM_SEND_ATTEMPTS)
+    return False
 
 
 def build_command_response(

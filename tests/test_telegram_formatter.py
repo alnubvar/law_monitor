@@ -82,6 +82,24 @@ class TelegramFormatterTest(unittest.TestCase):
         self.assertIn("источники:", text)
         self.assertIn("Льготное кредитование АПК", text)
 
+    def test_daily_digest_report_path_does_not_leak_server_path(self) -> None:
+        urgent = self._doc(
+            doc_id=10,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Льготное кредитование АПК",
+            url="https://gisp.gov.ru/nmp/measure/9564204",
+            action_level="requires_attention",
+            page_type="measure_card",
+        )
+        urgent.notified = True
+
+        text = build_digest_message([urgent], report_path="reports/gr_monitoring_2026-05-18.md")
+
+        self.assertIn("Полная версия отчета — во вложении.", text)
+        self.assertNotIn("reports/", text)
+        self.assertNotIn("report: reports", text)
+
     def test_daily_digest_source_heat_counts_only_visible_documents(self) -> None:
         urgent = self._doc(
             doc_id=11,

@@ -53,6 +53,7 @@ def build_digest_message(
     *,
     report_path: str | None = None,
     operational_notices: Sequence[OperationalNotice] | None = None,
+    force_daily: bool = False,
 ) -> str:
     if not documents:
         return "Новых документов для уведомления не найдено."
@@ -61,7 +62,7 @@ def build_digest_message(
     if not requires_attention and not watchlist:
         return "Новых документов для уведомления не найдено."
 
-    if _looks_like_hourly_alert(requires_attention, watchlist):
+    if not force_daily and _looks_like_hourly_alert(requires_attention, watchlist):
         enrichment_by_url = list_document_enrichments([document.url for document in requires_attention])
         return _build_hourly_alert(requires_attention, enrichment_by_url=enrichment_by_url)
     enrichment_by_url = list_document_enrichments(
@@ -151,7 +152,7 @@ def _build_daily_digest(
         _build_daily_summary_line(sections),
     ]
     if report_path:
-        lines.append(f"Полный report: {report_path}")
+        lines.append("Полная версия отчета — во вложении.")
     if operational_notices:
         lines.append("")
         lines.extend(format_operational_notices_telegram(operational_notices))

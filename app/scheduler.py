@@ -8,11 +8,13 @@ from app.config import (
     DB_PATH,
     SCHEDULER_DAILY_REPORT_HOUR,
     SCHEDULER_HOURLY_INTERVAL_MINUTES,
+    SCHEDULER_TIMEZONE,
+    SCHEDULER_TIMEZONE_NAME,
 )
 from app.notify.telegram import (
     is_configured,
+    send_daily_report_digest,
     send_digest,
-    send_message,
     send_test_message,
 )
 from app.pipeline.analyze import run_analyze
@@ -26,10 +28,13 @@ from app.storage import (
     list_recent_documents,
     list_unnotified_requires_attention,
     mark_documents_notified,
+    get_runtime_event,
+    mark_runtime_event,
 )
 from app.user_facing import user_facing_action_level
 
 logger = logging.getLogger(__name__)
+DAILY_DIGEST_EVENT_NAME = "daily_digest"
 
 try:
     from apscheduler.schedulers.blocking import BlockingScheduler
@@ -113,18 +118,38 @@ def run_hourly_cycle() -> tuple[int, int, int]:
         return 0, 0, 0
 
 
-def run_daily_report_cycle(days: int = 7) -> str:
+def run_daily_report_cycle(
+    days: int = 7,
+    *,
+    force: bool = False,
+    now: datetime | None = None,
+) -> str:
     try:
         with writer_lock("scheduler-daily-report"):
+            current_time = _scheduler_now(now)
+            digest_date = _scheduler_date(current_time)
+            if not force and _daily_digest_already_sent(digest_date):
+                logger.info("Daily report cycle skipped: digest already sent for %s.", digest_date)
+                return ""
             logger.info("Daily report cycle started.")
             report_path = str(run_digest(days=days))
             visible_documents = _build_visible_digest_documents(days=days)
-            if visible_documents:
-                send_digest(visible_documents, db_path=DB_PATH)
+            sent = send_daily_report_digest(
+                visible_documents,
+                report_path=report_path,
+                db_path=DB_PATH,
+            )
+            if sent:
+                _mark_daily_digest_sent(
+                    digest_date=digest_date,
+                    report_path=report_path,
+                    sent_at=current_time,
+                )
             logger.info(
-                "Daily report cycle finished: report=%s visible_documents=%s",
+                "Daily report cycle finished: report=%s visible_documents=%s sent=%s",
                 report_path,
                 len(visible_documents),
+                sent,
             )
             return report_path
     except WriterLockHeldError:
@@ -132,13 +157,13 @@ def run_daily_report_cycle(days: int = 7) -> str:
         return ""
 
 
-def run_scheduler(*, once: bool = False, days: int = 7) -> None:
+def run_scheduler(*, once: bool = False, days: int = 7, force_daily_digest: bool = False) -> None:
     init_db()
 
     if once:
         logger.info("Running scheduler in single-cycle mode.")
         run_hourly_cycle()
-        run_daily_report_cycle(days=days)
+        run_daily_report_cycle(days=days, force=force_daily_digest)
         return
 
     if BlockingScheduler is None:
@@ -148,7 +173,7 @@ def run_scheduler(*, once: bool = False, days: int = 7) -> None:
         _run_loop_scheduler(days=days)
         return
 
-    scheduler = BlockingScheduler()
+    scheduler = BlockingScheduler(timezone=SCHEDULER_TIMEZONE)
     scheduler.add_job(
         run_hourly_cycle,
         "interval",
@@ -166,29 +191,79 @@ def run_scheduler(*, once: bool = False, days: int = 7) -> None:
         kwargs={"days": days},
     )
     logger.info(
-        "Scheduler started. Hourly interval=%s minutes, daily report at %02d:00",
+        "Scheduler started. Hourly interval=%s minutes, daily report at %02d:00 %s",
         SCHEDULER_HOURLY_INTERVAL_MINUTES,
         SCHEDULER_DAILY_REPORT_HOUR,
+        SCHEDULER_TIMEZONE_NAME,
     )
     scheduler.start()
 
 
 def _run_loop_scheduler(*, days: int = 7) -> None:
     logger.info(
-        "Loop scheduler started. Hourly interval=%s minutes, daily report at %02d:00",
+        "Loop scheduler started. Hourly interval=%s minutes, daily report at %02d:00 %s",
         SCHEDULER_HOURLY_INTERVAL_MINUTES,
         SCHEDULER_DAILY_REPORT_HOUR,
+        SCHEDULER_TIMEZONE_NAME,
     )
-    last_report_date: str | None = None
     interval_seconds = max(SCHEDULER_HOURLY_INTERVAL_MINUTES, 1) * 60
     while True:
         run_hourly_cycle()
-        now = datetime.now()
-        current_date = now.strftime("%Y-%m-%d")
-        if now.hour == SCHEDULER_DAILY_REPORT_HOUR and last_report_date != current_date:
-            run_daily_report_cycle(days=days)
-            last_report_date = current_date
+        now = datetime.now(SCHEDULER_TIMEZONE)
+        if _daily_digest_due(now):
+            run_daily_report_cycle(days=days, now=now)
         time.sleep(interval_seconds)
+
+
+def _scheduler_now(now: datetime | None = None) -> datetime:
+    if now is None:
+        return datetime.now(SCHEDULER_TIMEZONE)
+    if now.tzinfo is None:
+        return now.replace(tzinfo=SCHEDULER_TIMEZONE)
+    return now.astimezone(SCHEDULER_TIMEZONE)
+
+
+def _scheduler_date(now: datetime | None = None) -> str:
+    return _scheduler_now(now).date().isoformat()
+
+
+def _daily_digest_due(now: datetime | None = None) -> bool:
+    current_time = _scheduler_now(now)
+    digest_date = _scheduler_date(current_time)
+    return (
+        current_time.hour >= SCHEDULER_DAILY_REPORT_HOUR
+        and not _daily_digest_already_sent(digest_date)
+    )
+
+
+def _daily_digest_already_sent(digest_date: str) -> bool:
+    event = get_runtime_event(DAILY_DIGEST_EVENT_NAME, db_path=DB_PATH)
+    if not event:
+        return False
+    return _runtime_details_value(str(event.get("details") or ""), "sent_date") == digest_date
+
+
+def _mark_daily_digest_sent(
+    *,
+    digest_date: str,
+    report_path: str,
+    sent_at: datetime,
+) -> None:
+    mark_runtime_event(
+        DAILY_DIGEST_EVENT_NAME,
+        details=f"sent_date={digest_date}; report={report_path}",
+        occurred_at=sent_at,
+        db_path=DB_PATH,
+    )
+
+
+def _runtime_details_value(details: str, key: str) -> str | None:
+    prefix = f"{key}="
+    for part in details.split(";"):
+        normalized = part.strip()
+        if normalized.startswith(prefix):
+            return normalized[len(prefix):].strip()
+    return None
 
 
 def send_test_notification(command_name: str = "notify-test") -> bool:

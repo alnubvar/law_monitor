@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import timedelta, timezone
 from functools import lru_cache
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 from dotenv import load_dotenv
@@ -30,12 +32,72 @@ def _get_env_str(name: str, default: str = "") -> str:
     return str(value).strip()
 
 
-def _get_env_int(name: str, default: int) -> int:
-    return int(_get_env_str(name, str(default)))
+def _get_env_int(
+    name: str,
+    default: int,
+    *,
+    min_value: int | None = None,
+    max_value: int | None = None,
+) -> int:
+    raw_value = _get_env_str(name, str(default))
+    try:
+        value = int(raw_value)
+    except ValueError:
+        logging.getLogger(__name__).warning(
+            "Invalid integer env value for %s=%r. Using default=%s.",
+            name,
+            raw_value,
+            default,
+        )
+        return default
+    if min_value is not None and value < min_value:
+        logging.getLogger(__name__).warning(
+            "Env value %s=%s is below minimum %s. Using default=%s.",
+            name,
+            value,
+            min_value,
+            default,
+        )
+        return default
+    if max_value is not None and value > max_value:
+        logging.getLogger(__name__).warning(
+            "Env value %s=%s is above maximum %s. Using default=%s.",
+            name,
+            value,
+            max_value,
+            default,
+        )
+        return default
+    return value
 
 
 def _get_env_float(name: str, default: float) -> float:
-    return float(_get_env_str(name, str(default)))
+    raw_value = _get_env_str(name, str(default))
+    try:
+        return float(raw_value)
+    except ValueError:
+        logging.getLogger(__name__).warning(
+            "Invalid float env value for %s=%r. Using default=%s.",
+            name,
+            raw_value,
+            default,
+        )
+        return default
+
+
+def _get_timezone(name: str, default: str = "Europe/Moscow") -> ZoneInfo | timezone:
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        logging.getLogger(__name__).warning(
+            "Invalid timezone env value LAW_MONITOR_TIMEZONE=%r. Using %s.",
+            name,
+            default,
+        )
+        try:
+            return ZoneInfo(default)
+        except ZoneInfoNotFoundError:
+            return timezone(timedelta(hours=3), "MSK")
 
 
 def _get_env_bool(name: str, default: bool) -> bool:
@@ -44,32 +106,41 @@ def _get_env_bool(name: str, default: bool) -> bool:
 
 
 DB_PATH = Path(_get_env_str("LAW_MONITOR_DB_PATH", str(DATA_DIR / "law_monitor.db")))
-REQUEST_TIMEOUT = _get_env_int("LAW_MONITOR_REQUEST_TIMEOUT", 30)
-REQUEST_RETRIES = _get_env_int("LAW_MONITOR_REQUEST_RETRIES", 2)
+REQUEST_TIMEOUT = _get_env_int("LAW_MONITOR_REQUEST_TIMEOUT", 30, min_value=1)
+REQUEST_RETRIES = _get_env_int("LAW_MONITOR_REQUEST_RETRIES", 2, min_value=0)
 REQUEST_BACKOFF_FACTOR = _get_env_float("LAW_MONITOR_REQUEST_BACKOFF_FACTOR", 1.0)
 USER_AGENT = _get_env_str("LAW_MONITOR_USER_AGENT", "law-monitor-mvp/0.1")
 LOG_LEVEL = _get_env_str("LAW_MONITOR_LOG_LEVEL", "INFO").upper()
 LOG_FILE_PATH = Path(_get_env_str("LAW_MONITOR_LOG_FILE", str(LOGS_DIR / "app.log")))
-LOG_MAX_BYTES = _get_env_int("LAW_MONITOR_LOG_MAX_BYTES", 5 * 1024 * 1024)
-LOG_BACKUP_COUNT = _get_env_int("LAW_MONITOR_LOG_BACKUP_COUNT", 5)
+LOG_MAX_BYTES = _get_env_int("LAW_MONITOR_LOG_MAX_BYTES", 5 * 1024 * 1024, min_value=1024)
+LOG_BACKUP_COUNT = _get_env_int("LAW_MONITOR_LOG_BACKUP_COUNT", 5, min_value=0)
 TELEGRAM_BOT_TOKEN = _get_env_str("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = _get_env_str("TELEGRAM_CHAT_ID")
 TELEGRAM_PROXY_URL = _get_env_str("TELEGRAM_PROXY_URL")
-TELEGRAM_API_TIMEOUT = _get_env_int("TELEGRAM_API_TIMEOUT", 30)
+TELEGRAM_API_TIMEOUT = _get_env_int("TELEGRAM_API_TIMEOUT", 30, min_value=1)
 TELEGRAM_PROXY_ENABLED = bool(TELEGRAM_PROXY_URL)
 OCR_ENABLED = _get_env_bool("LAW_MONITOR_OCR_ENABLED", False)
 OCR_LANGUAGE = _get_env_str("LAW_MONITOR_OCR_LANGUAGE", "rus+eng")
-OCR_MAX_PAGES = max(1, _get_env_int("LAW_MONITOR_OCR_MAX_PAGES", 5))
-OCR_TIMEOUT_SECONDS = max(1, _get_env_int("LAW_MONITOR_OCR_TIMEOUT", 120))
+OCR_MAX_PAGES = max(1, _get_env_int("LAW_MONITOR_OCR_MAX_PAGES", 5, min_value=1))
+OCR_TIMEOUT_SECONDS = max(1, _get_env_int("LAW_MONITOR_OCR_TIMEOUT", 120, min_value=1))
 OCR_TESSDATA_PATH = _get_env_str("LAW_MONITOR_OCR_TESSDATA_PATH", "")
 LLM_ENRICHMENT_ENABLED = _get_env_bool("LLM_ENRICHMENT_ENABLED", False)
 LLM_PROVIDER = _get_env_str("LLM_PROVIDER", "mock")
 LLM_BASE_URL = _get_env_str("LLM_BASE_URL", "")
 LLM_API_KEY = _get_env_str("LLM_API_KEY", "")
 LLM_MODEL = _get_env_str("LLM_MODEL", "")
-SCHEDULER_DAILY_REPORT_HOUR = _get_env_int("LAW_MONITOR_DAILY_REPORT_HOUR", 9)
+SCHEDULER_TIMEZONE_NAME = _get_env_str("LAW_MONITOR_TIMEZONE", "Europe/Moscow")
+SCHEDULER_TIMEZONE = _get_timezone(SCHEDULER_TIMEZONE_NAME)
+SCHEDULER_DAILY_REPORT_HOUR = _get_env_int(
+    "LAW_MONITOR_DAILY_REPORT_HOUR",
+    9,
+    min_value=0,
+    max_value=23,
+)
 SCHEDULER_HOURLY_INTERVAL_MINUTES = _get_env_int(
-    "LAW_MONITOR_HOURLY_INTERVAL_MINUTES", 60
+    "LAW_MONITOR_HOURLY_INTERVAL_MINUTES",
+    360,
+    min_value=1,
 )
 DEFAULT_REQUEST_HEADERS = {"User-Agent": USER_AGENT}
 

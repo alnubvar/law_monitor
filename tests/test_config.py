@@ -4,6 +4,7 @@ import logging
 import importlib
 import os
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -71,6 +72,26 @@ class ConfigSmokeTest(unittest.TestCase):
         ):
             reloaded = importlib.reload(config_module)
             self.assertEqual(reloaded.OCR_TESSDATA_PATH, expected_path)
+        importlib.reload(config_module)
+
+    def test_scheduler_interval_and_timezone_env_are_loaded(self) -> None:
+        import app.config as config_module
+
+        with patch.dict(
+            os.environ,
+            {
+                "LAW_MONITOR_HOURLY_INTERVAL_MINUTES": "360",
+                "LAW_MONITOR_TIMEZONE": "Europe/Moscow",
+            },
+            clear=False,
+        ):
+            reloaded = importlib.reload(config_module)
+            self.assertEqual(reloaded.SCHEDULER_HOURLY_INTERVAL_MINUTES, 360)
+            self.assertEqual(reloaded.SCHEDULER_TIMEZONE_NAME, "Europe/Moscow")
+            self.assertEqual(
+                datetime(2026, 5, 18).replace(tzinfo=reloaded.SCHEDULER_TIMEZONE).utcoffset().total_seconds(),
+                3 * 3600,
+            )
         importlib.reload(config_module)
 
 

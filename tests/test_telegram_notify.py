@@ -126,6 +126,45 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         self.assertEqual(post.call_count, telegram.TELEGRAM_SEND_ATTEMPTS)
         self.assertEqual(sleep.call_count, telegram.TELEGRAM_SEND_ATTEMPTS - 1)
 
+    def test_daily_report_digest_sends_empty_state_and_attachment(self) -> None:
+        report_path = Path("data/test_artifacts/daily_report.md")
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text("# report", encoding="utf-8")
+
+        with patch("app.notify.telegram.collect_operational_notices", return_value=[]):
+            with patch("app.notify.telegram.send_message", return_value=True) as send_message:
+                with patch("app.notify.telegram.send_document", return_value=True) as send_document:
+                    sent = telegram.send_daily_report_digest([], report_path=report_path)
+
+        self.assertTrue(sent)
+        message_text = send_message.call_args.args[0]
+        self.assertIn("Срочных изменений не найдено, источники проверены.", message_text)
+        self.assertIn("Полная версия отчета — во вложении.", message_text)
+        self.assertNotIn("сервер", message_text.lower())
+        self.assertNotIn("data/test_artifacts", message_text)
+        send_document.assert_called_once_with(report_path)
+
+    def test_daily_report_digest_sends_visible_docs_as_daily_not_hourly(self) -> None:
+        document = self._doc(
+            doc_id=900,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Льготное кредитование АПК",
+            url="https://example.com/daily-visible",
+            action_level="requires_attention",
+            page_type="measure_card",
+        )
+
+        with patch("app.notify.telegram.collect_operational_notices", return_value=[]):
+            with patch("app.notify.telegram.send_message", return_value=True) as send_message:
+                with patch("app.notify.telegram.send_document", return_value=True):
+                    sent = telegram.send_daily_report_digest([document], report_path=None)
+
+        self.assertTrue(sent)
+        message_text = send_message.call_args.args[0]
+        self.assertIn("Ежедневная GR-сводка", message_text)
+        self.assertNotIn("Новые документы, требующие внимания", message_text)
+
     def test_help_command_lists_supported_commands(self) -> None:
         text = telegram.build_command_response("/help")
 

@@ -577,6 +577,37 @@ class TelegramBotTest(unittest.TestCase):
         self.assertIn("Период: последние 7 дней", content)
         path.unlink(missing_ok=True)
 
+    def test_report_attachment_paths_are_unique_per_request(self) -> None:
+        db_path = self._offset_path("telegram_report_unique_attachment.db")
+        init_db(db_path)
+
+        first = telegram_bot._build_period_report_attachment(days=7, db_path=str(db_path))
+        second = telegram_bot._build_period_report_attachment(days=7, db_path=str(db_path))
+
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        assert first is not None
+        assert second is not None
+        self.assertNotEqual(first, second)
+        self.assertTrue(first.exists())
+        self.assertTrue(second.exists())
+        first.unlink(missing_ok=True)
+        second.unlink(missing_ok=True)
+
+    def test_report_attachment_returns_none_when_writer_lock_is_held(self) -> None:
+        db_path = self._offset_path("telegram_report_lock_held.db")
+        init_db(db_path)
+
+        with patch(
+            "app.notify.telegram_bot.writer_lock",
+            side_effect=WriterLockHeldError(lock_path=Path("data/runtime/writer.lock")),
+        ):
+            with patch("app.notify.telegram_bot.backfill_missing_published_at") as backfill:
+                path = telegram_bot._build_period_report_attachment(days=7, db_path=str(db_path))
+
+        self.assertIsNone(path)
+        backfill.assert_not_called()
+
     def test_yesterday_attachment_contains_previous_calendar_date_label(self) -> None:
         db_path = self._offset_path("telegram_report_yesterday_attachment.db")
         init_db(db_path)

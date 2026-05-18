@@ -5,6 +5,7 @@ import logging
 import re
 import threading
 import time
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -703,50 +704,55 @@ def _build_period_report_attachment(
     db_path: Path | str | None,
 ) -> Path | None:
     try:
-        resolved_db_path = db_path or config.DB_PATH
-        init_db(resolved_db_path)
-        backfill_missing_published_at(resolved_db_path)
-        resolved_command_text = command_text or f"/report {max(1, min(int(days or 7), 365))}"
-        period = _resolve_report_period(resolved_command_text)
-        documents = list_recent_documents(
-            db_path=resolved_db_path,
-            days=period.days,
-            relevant_only=False,
-            action_levels=None,
-        )
-        documents = filter_documents_for_period(documents, period)
-        source_errors = list_recent_source_errors(db_path=resolved_db_path, days=period.days)
-        period_context_lines: list[str] = []
-        if period.kind == "today":
-            summary = get_interface_summary(db_path=resolved_db_path, days=14)
-            has_today_urgent = any(
-                (document.action_level == "requires_attention")
-                and (document.published_at or document.collected_at)
-                for document in documents
+        with writer_lock("telegram-report-attachment"):
+            resolved_db_path = db_path or config.DB_PATH
+            init_db(resolved_db_path)
+            backfill_missing_published_at(resolved_db_path)
+            resolved_command_text = command_text or f"/report {max(1, min(int(days or 7), 365))}"
+            period = _resolve_report_period(resolved_command_text)
+            documents = list_recent_documents(
+                db_path=resolved_db_path,
+                days=period.days,
+                relevant_only=False,
+                action_levels=None,
             )
-            if not has_today_urgent:
-                period_context_lines.append("Сегодня новых срочных документов нет.")
-                if summary["requires_attention"] > 0:
-                    period_context_lines.append(
-                        f"Активные срочные вопросы за последние 14 дней: {summary['requires_attention']}. Откройте 🚨 Срочное."
-                    )
-        markdown = generate_markdown_report(
-            documents,
-            report_date=datetime.now().strftime("%Y-%m-%d"),
-            period_days=period.days,
-            period_label=format_period_label(period),
-            period_context_lines=period_context_lines,
-            operational_notices=collect_operational_notices(db_path=resolved_db_path),
-            source_errors=source_errors,
-            db_path=resolved_db_path,
-        )
-        txt_content = _markdown_to_plain_text(markdown)
-        timestamp = datetime.now().strftime("%Y-%m-%d")
-        attachment_dir = config.DATA_DIR / "telegram_attachments"
-        attachment_dir.mkdir(parents=True, exist_ok=True)
-        txt_path = attachment_dir / f"gr_monitoring_{timestamp}_{period.kind}_{period.days}d.txt"
-        txt_path.write_text(txt_content, encoding="utf-8")
-        return txt_path
+            documents = filter_documents_for_period(documents, period)
+            source_errors = list_recent_source_errors(db_path=resolved_db_path, days=period.days)
+            period_context_lines: list[str] = []
+            if period.kind == "today":
+                summary = get_interface_summary(db_path=resolved_db_path, days=14)
+                has_today_urgent = any(
+                    (document.action_level == "requires_attention")
+                    and (document.published_at or document.collected_at)
+                    for document in documents
+                )
+                if not has_today_urgent:
+                    period_context_lines.append("Сегодня новых срочных документов нет.")
+                    if summary["requires_attention"] > 0:
+                        period_context_lines.append(
+                            f"Активные срочные вопросы за последние 14 дней: {summary['requires_attention']}. Откройте 🚨 Срочное."
+                        )
+            markdown = generate_markdown_report(
+                documents,
+                report_date=datetime.now(config.SCHEDULER_TIMEZONE).strftime("%Y-%m-%d"),
+                period_days=period.days,
+                period_label=format_period_label(period),
+                period_context_lines=period_context_lines,
+                operational_notices=collect_operational_notices(db_path=resolved_db_path),
+                source_errors=source_errors,
+                db_path=resolved_db_path,
+            )
+            txt_content = _markdown_to_plain_text(markdown)
+            timestamp = datetime.now(config.SCHEDULER_TIMEZONE).strftime("%Y-%m-%d")
+            suffix = uuid.uuid4().hex[:8]
+            attachment_dir = config.DATA_DIR / "telegram_attachments"
+            attachment_dir.mkdir(parents=True, exist_ok=True)
+            txt_path = attachment_dir / f"gr_monitoring_{timestamp}_{period.kind}_{period.days}d_{suffix}.txt"
+            txt_path.write_text(txt_content, encoding="utf-8")
+            return txt_path
+    except WriterLockHeldError:
+        logger.info("Report attachment skipped because another write operation is running.")
+        return None
     except Exception:
         logger.exception("Failed to build report attachment for command %s.", command_text or days)
         return None
