@@ -103,9 +103,6 @@ def _build_operational_status_lines(
     elif is_active is True and accepting_applications:
         lines.append("Прием заявок открыт.")
 
-    if accepting_applications:
-        lines.append(f"Статус приема заявок: {accepting_applications}.")
-
     return lines
 
 
@@ -169,7 +166,6 @@ def _build_raw_text(item: Mapping[str, object]) -> str:
         f"endDate: {_normalize_text(item.get('endDate'))}",
         f"maxAmountForPersonInfo: {_normalize_text(item.get('maxAmountForPersonInfo'))}",
         f"isActive: {_normalize_text(item.get('isActive'))}",
-        f"acceptingApplicationsInfo: {accepting_applications}",
         f"activityId: {_normalize_text(item.get('activityId'))}",
         f"competitionId: {_normalize_text(item.get('competitionId'))}",
         f"id: {_normalize_text(item.get('id'))}",

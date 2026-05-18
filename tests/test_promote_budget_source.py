@@ -156,7 +156,8 @@ class PromoteBudgetSourceTest(unittest.TestCase):
         raw_text = items[0].raw_text or ""
         self.assertIn("endDate: 2026-05-14T20:59:00Z", raw_text)
         self.assertIn("maxAmountForPersonInfo: 13 682 538,80 ₽", raw_text)
-        self.assertIn("acceptingApplicationsInfo: меньше 1 дня", raw_text)
+        self.assertNotIn("acceptingApplicationsInfo", raw_text)
+        self.assertNotIn("меньше 1 дня", raw_text)
         self.assertNotIn("countDaysEndDate", raw_text)
         self.assertIn("activityId: activity-1", raw_text)
         self.assertIn("competitionId: competition-1", raw_text)
@@ -271,10 +272,11 @@ class PromoteBudgetHelpersTest(unittest.TestCase):
         self.assertIn("endDate:", raw_text)
         self.assertIn("id: x", raw_text)
 
-    def test_build_raw_text_excludes_count_days_end_date(self) -> None:
+    def test_build_raw_text_excludes_volatile_countdown_fields(self) -> None:
         raw_text = _build_raw_text(_AGRO_ITEM)
         self.assertNotIn("countDaysEndDate", raw_text)
-        self.assertIn("acceptingApplicationsInfo: меньше 1 дня", raw_text)
+        self.assertNotIn("acceptingApplicationsInfo", raw_text)
+        self.assertNotIn("меньше 1 дня", raw_text)
 
     def test_build_raw_text_renders_open_window_in_analysis_friendly_form(self) -> None:
         item = {
@@ -290,7 +292,8 @@ class PromoteBudgetHelpersTest(unittest.TestCase):
 
         self.assertIn("Активная мера поддержки.", raw_text)
         self.assertIn("Прием заявок открыт до 20.05.2026.", raw_text)
-        self.assertIn("Статус приема заявок: 4 дня.", raw_text)
+        self.assertNotIn("Статус приема заявок", raw_text)
+        self.assertNotIn("4 дня", raw_text)
         self.assertNotIn("countDaysEndDate", raw_text)
 
     def test_build_raw_text_marks_expired_window_as_closed(self) -> None:
@@ -300,7 +303,7 @@ class PromoteBudgetHelpersTest(unittest.TestCase):
         self.assertIn("Прием заявок до 14.05.2026.", raw_text)
         self.assertIn("Прием завершен. Отбор завершен.", raw_text)
 
-    def test_build_raw_text_is_stable_when_only_count_days_changes(self) -> None:
+    def test_build_raw_text_is_stable_when_only_countdown_changes(self) -> None:
         open_item = {
             **_AGRO_ITEM,
             "endDate": "2026-05-20T20:59:00Z",
@@ -312,7 +315,7 @@ class PromoteBudgetHelpersTest(unittest.TestCase):
         changed_count_days_item = {
             **open_item,
             "selectionAcceptingApplicationInfo": {
-                "acceptingApplicationsInfo": "4 дня",
+                "acceptingApplicationsInfo": "3 дня",
                 "countDaysEndDate": 3.25,
             },
         }
@@ -322,6 +325,9 @@ class PromoteBudgetHelpersTest(unittest.TestCase):
             second = _build_raw_text(changed_count_days_item)
 
         self.assertEqual(first, second)
+        self.assertIn("Прием заявок открыт до 20.05.2026.", first)
+        self.assertNotIn("4 дня", first)
+        self.assertNotIn("3 дня", second)
 
     def test_extract_page_items_returns_only_mapping_items(self) -> None:
         items = _extract_page_items(

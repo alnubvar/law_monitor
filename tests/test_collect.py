@@ -1326,12 +1326,15 @@ class RefreshExistingUrlTest(unittest.TestCase):
             {
                 **base_item,
                 "selectionAcceptingApplicationInfo": {
-                    "acceptingApplicationsInfo": "4 дня",
+                    "acceptingApplicationsInfo": "3 дня",
                     "countDaysEndDate": 3.25,
                 },
             }
         )
         self.assertEqual(old_text, new_text)
+        self.assertIn("Прием заявок открыт до 20.05.2026.", old_text)
+        self.assertNotIn("4 дня", old_text)
+        self.assertNotIn("3 дня", new_text)
         old_hash = compute_content_hash(old_text, fallback=f"Мера поддержки\n{url}")
         self._saved_doc(db_path, url, old_text, old_hash)
 
