@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date
 import re
 
 from pydantic import BaseModel
 
 from app.extractors.date_extractor import parse_russian_date
 from app.models import ApplicationStatus, SupportStatus
+from app.rules.deadline_truth import (
+    parse_deadline_date as _parse_deadline_date_truth,
+    today_utc as _today_utc_truth,
+)
 
 WHITESPACE_RE = re.compile(r"\s+")
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
@@ -228,9 +232,14 @@ def _extract_application_status(
             return "regular"
         return "unknown"
     deadline_date = _extract_deadline_date(deadline_text)
+    # Deadline truth: a parsable deadline strictly in the past closes the window
+    # regardless of "прием открыт" markers in the snippet, because those markers
+    # are stale.
+    if deadline_date is not None and deadline_date < _today_utc():
+        return "closed"
     if any(marker in text for marker in EXPLICIT_OPEN_MARKERS):
         return "open"
-    if deadline_date is not None and deadline_date >= _today_utc():
+    if deadline_date is not None:
         return "open"
     if is_continuous and deadline_text is None:
         return "regular"
@@ -394,24 +403,9 @@ def _score_deadline_candidate(text: str, matched_date_text: str) -> int:
 
 
 def _extract_deadline_date(deadline_text: str | None) -> date | None:
-    if not deadline_text:
-        return None
-    candidate_date: date | None = None
-    for match in DEADLINE_RANGE_RE.finditer(deadline_text):
-        parsed_date = parse_russian_date(match.group("end"))
-        if parsed_date is not None:
-            candidate_date = parsed_date
-    for match in DEADLINE_DATE_RE.finditer(deadline_text):
-        parsed_date = parse_russian_date(match.group("date"))
-        if parsed_date is not None:
-            candidate_date = parsed_date
-    if candidate_date is not None:
-        return candidate_date
-    for match in DATE_TOKEN_RE.finditer(deadline_text):
-        parsed_date = parse_russian_date(match.group(1))
-        if parsed_date is not None:
-            candidate_date = parsed_date
-    return candidate_date
+    # Delegates to the shared deadline-truth helper so classification and
+    # rendering parse the same dates.
+    return _parse_deadline_date_truth(deadline_text)
 
 
 def _limit_snippet(text: str) -> str:
@@ -421,4 +415,4 @@ def _limit_snippet(text: str) -> str:
 
 
 def _today_utc() -> date:
-    return datetime.now(timezone.utc).date()
+    return _today_utc_truth()

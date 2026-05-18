@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 from app.config import get_source_role
 from app.llm.enrichment import is_generic_enrichment_text
 from app.models import DigestItem, RawDocument
+from app.rules.deadline_truth import is_deadline_expired
 
 OCR_FALLBACK_KRASNODAR_TITLE = "НПА Краснодарского края: документ после OCR"
 OCR_FALLBACK_GENERIC_TITLE = "Документ после OCR: требуется ручная проверка"
@@ -45,9 +46,21 @@ EXPORT_RESTRICTION_RE = re.compile(
     re.IGNORECASE,
 )
 TRADE_REGULATION_RE = re.compile(
-    r"импорт|квот|пошлин|пошлина|тариф|ограничен|запрет|тамож|вывоз"
+    r"импорт|квот|пошлин|пошлина|тариф|тамож|вывоз"
     r"|правил\w*\s+экспорт|экспортн\w*\s+правил",
     re.IGNORECASE,
+)
+# Sub-markers used to pick precise wording inside the trade intent. They do
+# NOT participate in intent dispatch — they only refine the rendered reason
+# and action once the trade intent has been chosen.
+_TRADE_DUTY_RE = re.compile(r"пошлин|тариф", re.IGNORECASE)
+_TRADE_QUOTA_RE = re.compile(r"квот", re.IGNORECASE)
+_TRADE_RESTRICTION_RE = re.compile(r"запрет|ограничен", re.IGNORECASE)
+_TRADE_LOGISTICS_RE = re.compile(
+    r"логистик|терминал|перевозк|поставк", re.IGNORECASE
+)
+_TRADE_EXPORT_CONTEXT_RE = re.compile(
+    r"экспорт|вывоз|тамож|импорт|ввоз", re.IGNORECASE
 )
 OCR_FALLBACK_TITLE_RE = re.compile(r"\bдокумент после ocr\b", re.IGNORECASE)
 OCR_MEANINGFUL_MARKERS = (
@@ -70,6 +83,7 @@ OCR_WEAK_TEXT_RE = re.compile(
     re.IGNORECASE,
 )
 INTENT_SELECTION_OPEN = "selection_open"
+INTENT_SELECTION_EXPIRED = "selection_expired"
 INTENT_SELECTION_CHANGE = "selection_change"
 INTENT_MARKET_OBSERVATION = "market_observation"
 INTENT_STRATEGY = "strategy_general"
@@ -410,6 +424,8 @@ def _compress_bureaucratic_title(document: PresentationDocument, title: str) -> 
     lowered = title.lower()
     combined = _combined_text(document, title=title)
     if _looks_like_selection_announcement(document, combined):
+        if _application_is_closed(document):
+            return "Прием заявок завершён"
         return "Открыт прием заявок"
     if "о реализации мероприятий" in lowered:
         return (
@@ -485,7 +501,7 @@ def _deterministic_reason(
     section: str | None,
 ) -> str:
     intent = _detect_deterministic_intent(document, section=section)
-    return _reason_for_intent(intent)
+    return _reason_for_intent(intent, document=document)
 
 
 def _deterministic_action(
@@ -521,6 +537,8 @@ def _deterministic_summary(document: PresentationDocument) -> str:
         if _looks_like_subsidy(_combined_text(document)):
             return "Открыт приём заявок на субсидии для АПК."
         return "Открыт приём заявок по профильной мере поддержки."
+    if intent == INTENT_SELECTION_EXPIRED:
+        return "Приём заявок по данной мере поддержки завершён."
     if intent == INTENT_SUPPORT_CHANGE:
         return "Изменены условия предоставления меры поддержки."
     return ""
@@ -532,7 +550,7 @@ def _compress_freeform_reason(text: str, *, document: PresentationDocument) -> s
         return ""
     combined = f"{normalized} {_combined_text(document)}"
     intent = _detect_deterministic_intent(document, combined_text=combined)
-    deterministic = _reason_for_intent(intent)
+    deterministic = _reason_for_intent(intent, document=document)
     if deterministic:
         return deterministic
     return normalized
@@ -564,12 +582,17 @@ def _detect_deterministic_intent(
 
     if is_weak_ocr_placeholder_document(document):
         return INTENT_OCR_PLACEHOLDER
+    application_is_closed = _application_is_closed(document)
     if _looks_like_selection_announcement(document, combined):
+        if application_is_closed:
+            return INTENT_SELECTION_EXPIRED
         return INTENT_SELECTION_OPEN
     if _looks_like_regulation_public_discussion(document, combined):
         return INTENT_REGULATION_DISCUSSION
-    if application_status == "open":
+    if application_status == "open" and not application_is_closed:
         return INTENT_SELECTION_OPEN
+    if application_is_closed and _looks_like_selection(combined):
+        return INTENT_SELECTION_EXPIRED
     if _looks_like_mcx_official_support_watchlist(document, combined):
         return INTENT_SUPPORT_CHANGE
     if _looks_like_mcx_official_legislative_watchlist(document, combined):
@@ -598,12 +621,16 @@ def _detect_deterministic_intent(
         combined
     ):
         return INTENT_CREDIT_SUPPORT
+    # Trade/export signals must win over generic "support change" wording —
+    # otherwise a doc whose business_signal or impact text mentions
+    # "господдержки/мер поддержки/изменений" would render as a support change
+    # even when its core subject is duties, quotas, or export restrictions.
+    if _looks_like_trade_regulation_context(combined):
+        return INTENT_TRADE_REGULATION
     if _looks_like_selection(combined) and _contains_change_signal(combined):
         return INTENT_SELECTION_CHANGE
     if _is_support_context(combined) and _contains_change_signal(combined):
         return INTENT_SUPPORT_CHANGE
-    if _looks_like_trade_regulation_context(combined):
-        return INTENT_TRADE_REGULATION
     if _is_support_measure_context(document, combined):
         return INTENT_SUPPORT_MEASURE
     if _is_support_context(combined) and action_level == "requires_attention":
@@ -647,6 +674,8 @@ def _summary_from_title(document: PresentationDocument) -> str:
             "объявлен отбор",
         )
     ):
+        if _application_is_closed(document):
+            return "Приём заявок по данной мере поддержки завершён."
         if "субсид" in lowered:
             return "Открыт приём заявок на субсидии для АПК."
         return "Открыт приём заявок по профильной мере поддержки."
@@ -657,9 +686,15 @@ def _summary_from_title(document: PresentationDocument) -> str:
     return ""
 
 
-def _reason_for_intent(intent: str) -> str:
+def _reason_for_intent(
+    intent: str,
+    *,
+    document: PresentationDocument | None = None,
+) -> str:
     if intent == INTENT_SELECTION_OPEN:
         return "Открыт прием заявок"
+    if intent == INTENT_SELECTION_EXPIRED:
+        return "Прием заявок завершён"
     if intent == INTENT_REGULATION_DISCUSSION:
         return "Проект НПА на публичном обсуждении"
     if intent == INTENT_MARKET_OBSERVATION:
@@ -677,12 +712,45 @@ def _reason_for_intent(intent: str) -> str:
     if intent == INTENT_OFFICIAL_LEGISLATION_WATCHLIST:
         return "Законодательный сигнал по регулированию АПК"
     if intent == INTENT_TRADE_REGULATION:
-        return "Подготовлены экспортные ограничения"
+        return _trade_reason_for_document(document)
     if intent == INTENT_SELECTION_CHANGE:
         return "Обновлены правила отбора"
     if intent == INTENT_OCR_PLACEHOLDER:
         return "Документ после OCR требует ручной проверки"
     return ""
+
+
+def _trade_reason_for_document(document: PresentationDocument | None) -> str:
+    """Pick precise trade wording (duty/quota/restriction/logistics/general)."""
+    combined = _combined_text(document) if document is not None else ""
+    if _TRADE_DUTY_RE.search(combined):
+        return "Изменение экспортных пошлин"
+    if _TRADE_QUOTA_RE.search(combined):
+        return "Изменение экспортных квот"
+    if (
+        _TRADE_RESTRICTION_RE.search(combined)
+        and _TRADE_EXPORT_CONTEXT_RE.search(combined)
+    ):
+        return "Ограничения экспорта"
+    if _TRADE_LOGISTICS_RE.search(combined) and _TRADE_EXPORT_CONTEXT_RE.search(
+        combined
+    ):
+        return "Изменение условий логистики экспорта"
+    return "Изменение экспортных условий"
+
+
+def _trade_action_for_document(document: PresentationDocument | None) -> str:
+    combined = _combined_text(document) if document is not None else ""
+    if (
+        _TRADE_RESTRICTION_RE.search(combined)
+        and _TRADE_EXPORT_CONTEXT_RE.search(combined)
+    ):
+        return "Проверить влияние ограничений на экспорт и логистику."
+    if _TRADE_LOGISTICS_RE.search(combined) and _TRADE_EXPORT_CONTEXT_RE.search(
+        combined
+    ):
+        return "Проверить влияние на логистику поставок."
+    return "Проверить влияние на экспорт и контрагентов."
 
 
 def _action_for_intent(
@@ -692,6 +760,8 @@ def _action_for_intent(
 ) -> str:
     if intent == INTENT_SELECTION_OPEN:
         return "Проверить сроки подачи и ответственного."
+    if intent == INTENT_SELECTION_EXPIRED:
+        return "Срок истёк, документ — справочно."
     if intent == INTENT_REGULATION_DISCUSSION:
         deadline = _discussion_deadline_label(document)
         if deadline:
@@ -714,9 +784,7 @@ def _action_for_intent(
     if intent == INTENT_OFFICIAL_LEGISLATION_WATCHLIST:
         return "Проверить, какие законопроекты одобрены и есть ли влияние на регулирование."
     if intent == INTENT_TRADE_REGULATION:
-        return (
-            "Проверить влияние пошлины/торгового регулирования на рынок и контрагентов."
-        )
+        return _trade_action_for_document(document)
     if intent == INTENT_SELECTION_CHANGE:
         return "Проверить условия и сроки отбора."
     if intent == INTENT_SUPPORT_MEASURE:
@@ -821,7 +889,19 @@ def _looks_like_export_restriction(text: str) -> bool:
 
 
 def _looks_like_trade_regulation_context(text: str) -> bool:
-    return bool(TRADE_REGULATION_RE.search(text))
+    if TRADE_REGULATION_RE.search(text):
+        return True
+    # Restriction wording (ограничение / запрет) on its own is ambiguous —
+    # "ограничение приема заявок" is a support context, not a trade one. Treat
+    # it as trade only when paired with explicit export/import wording.
+    if _TRADE_RESTRICTION_RE.search(text) and _TRADE_EXPORT_CONTEXT_RE.search(text):
+        return True
+    # Logistics wording (логистика / терминал / поставки / перевозки) on its
+    # own is ambiguous too — only treat it as a trade signal when explicit
+    # export/import context is also present.
+    if _TRADE_LOGISTICS_RE.search(text) and _TRADE_EXPORT_CONTEXT_RE.search(text):
+        return True
+    return False
 
 
 def _looks_like_regulation_public_discussion(
@@ -929,6 +1009,20 @@ def _page_type(document: PresentationDocument) -> str:
 
 def _action_level(document: PresentationDocument) -> str:
     return _get_value(document, "action_level").lower()
+
+
+def _application_is_closed(document: PresentationDocument) -> bool:
+    """True when the application window is no longer alive.
+
+    Checks both the stored ``application_status`` (analysis-time decision) and
+    the parsed deadline at render time. The render-time recheck protects
+    against stored ``open`` rows whose deadline silently elapsed between
+    analyze and report runs.
+    """
+    if _get_value(document, "application_status").lower() == "closed":
+        return True
+    deadline_text = _get_value(document, "deadline_text")
+    return bool(deadline_text) and is_deadline_expired(deadline_text)
 
 
 def _get_value(document: PresentationDocument, field_name: str) -> str:

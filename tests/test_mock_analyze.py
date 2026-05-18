@@ -467,7 +467,7 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
 
         result = client.analyze_document(
             "Объявлен конкурсный отбор заявок на субсидии для АПК",
-            "Прием заявок открыт до 15 мая 2026 года. НПА 338а.",
+            "Прием заявок открыт до 15 мая 2099 года. НПА 338а.",
             source_name="Минсельхоз Ставропольского края - господдержка",
             url="https://mshsk.ru/subsidy-open/",
             level="support_measures",
@@ -475,7 +475,7 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
 
         self.assertEqual(result.application_status, "open")
         self.assertIsNotNone(result.deadline_text)
-        self.assertIn("до 15 мая 2026 года", result.deadline_text or "")
+        self.assertIn("до 15 мая 2099 года", result.deadline_text or "")
         self.assertEqual(result.npa_number, "НПА 338а")
         self.assertIsNone(result.terms_text)
 
@@ -1530,10 +1530,10 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
             "Объявление об отборе на возмещение части затрат, связанных с посадкой ягодных культур",
             (
                 "Объявление об отборе на возмещение части затрат, связанных с посадкой ягодных культур. "
-                "Прием заявок открыт до 20 февраля 2026 года."
+                "Прием заявок открыт до 20 февраля 2099 года."
             ),
             source_name="Минсельхоз Ставропольского края - господдержка",
-            url="https://mshsk.ru/gospodderzhka/selection-berry-2026.php",
+            url="https://mshsk.ru/gospodderzhka/selection-berry-2099.php",
             level="regional",
             region="stavropol",
         )
@@ -2506,6 +2506,49 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
 
         self.assertNotEqual(result.action_level, "requires_attention")
         self.assertIn(result.action_level, {"background", "watchlist"})
+
+    def test_expired_selection_no_longer_requires_attention(self) -> None:
+        # Same Stavropol selection text as the live-deadline case above, but the
+        # window already expired. It must drop out of requires_attention.
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        result = client.analyze_document(
+            "Объявление об отборе на возмещение части затрат, связанных с посадкой ягодных культур",
+            (
+                "Объявление об отборе на возмещение части затрат, связанных с посадкой ягодных культур. "
+                "Прием заявок открыт до 01.01.2020."
+            ),
+            source_name="Минсельхоз Ставропольского края - господдержка",
+            url="https://mshsk.ru/gospodderzhka/selection-berry-expired.php",
+            level="regional",
+            region="stavropol",
+        )
+
+        self.assertEqual(result.application_status, "closed")
+        self.assertNotEqual(result.action_level, "requires_attention")
+
+    def test_regulation_discussion_future_deadline_still_classified(self) -> None:
+        # A regulation.gov.ru draft with a future discussion deadline must
+        # remain visible on the strategy track. Expiry guards must not demote
+        # alive drafts.
+        client = MockLLMClient(["субсидии сельское хозяйство"])
+
+        from datetime import datetime, timedelta, timezone
+
+        future_deadline = datetime.now(timezone.utc) + timedelta(days=14)
+        raw_text = self._regulation_public_discussion_text(future_deadline, agro=True)
+
+        result = client.analyze_document(
+            "Проект НПА: Об утверждении порядка предоставления субсидий",
+            raw_text,
+            source_name="Regulation.gov - проекты НПА",
+            url="https://regulation.gov.ru/projects/View/156432",
+            level="federal",
+            region="federal",
+        )
+
+        self.assertIn(result.action_level, {"watchlist", "requires_attention"})
+        self.assertNotEqual(result.application_status, "closed")
 
 
 if __name__ == "__main__":

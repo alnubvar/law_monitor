@@ -286,7 +286,7 @@ class TelegramFormatterTest(unittest.TestCase):
             text,
         )
         self.assertNotIn("Что проверить: Оставить как отраслевой фон.", text)
-        self.assertNotIn("Подготовлены экспортные ограничения", text)
+        self.assertNotIn("Изменение экспортных пошлин", text)
         self.assertNotIn("Проверить влияние на экспорт и меры поддержки.", text)
 
     def test_formatter_credit_news_keeps_credit_hint_even_with_trade_words(self) -> None:
@@ -313,7 +313,7 @@ class TelegramFormatterTest(unittest.TestCase):
             text,
         )
         self.assertNotIn(
-            "Что проверить: Проверить влияние пошлины/торгового регулирования на рынок и контрагентов.",
+            "Что проверить: Проверить влияние на экспорт и контрагентов.",
             text,
         )
 
@@ -369,7 +369,7 @@ class TelegramFormatterTest(unittest.TestCase):
         text = build_digest_message([document])
 
         self.assertIn(
-            "Что проверить: Проверить влияние пошлины/торгового регулирования на рынок и контрагентов.",
+            "Что проверить: Проверить влияние на экспорт и контрагентов.",
             text,
         )
         self.assertNotIn("Проверить условия кредитования, сроки и применимость для АПК.", text)

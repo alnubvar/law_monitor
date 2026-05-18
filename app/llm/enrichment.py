@@ -13,6 +13,11 @@ from pydantic import BaseModel, Field
 from app import config
 from app.config import get_source_role
 from app.models import AnalysisResult, ActionLevel
+from app.rules.deadline_truth import (
+    format_iso_date,
+    is_deadline_expired,
+    parse_deadline_date,
+)
 
 ELIGIBLE_ACTION_LEVELS: set[str] = {"requires_attention", "watchlist"}
 READ_PATH_MIN_CONFIDENCE = 0.5
@@ -138,7 +143,16 @@ class MockEnrichmentProvider(BaseEnrichmentProvider):
 
     def _build_deadline_hint(self, analysis: AnalysisResult) -> str | None:
         if analysis.deadline_text:
-            return analysis.deadline_text.strip()
+            text = analysis.deadline_text.strip()
+            parsed = parse_deadline_date(text)
+            # Truth-format expired hints so non-truth-aware surfaces (Telegram
+            # digest, search) never render an elapsed deadline as if it were
+            # still alive.
+            if parsed is not None and is_deadline_expired(text):
+                return f"Срок истёк: {format_iso_date(parsed)}"
+            if analysis.application_status == "closed":
+                return None
+            return text
         if analysis.key_dates:
             first_date = str(analysis.key_dates[0]).strip()
             if first_date:

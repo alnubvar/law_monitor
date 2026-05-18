@@ -218,7 +218,8 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             "Новая редакция меры меняет условия участия для заемщиков АПК.", markdown
         )
         self.assertIn("Проверить применимость меры, сроки и ответственного.", markdown)
-        self.assertIn("До 30 июня 2026 года.", markdown)
+        # Truth-aware renderer reformats raw deadline text to executive wording.
+        self.assertIn("Срок: до 30.06.2026", markdown)
 
     def test_report_strips_legacy_ai_prefixes_from_enrichment(self) -> None:
         db_path = self._db_path("report_enrichment_legacy_prefix.db")
@@ -297,7 +298,10 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             db_path=db_path,
         )
 
-        self.assertIn("- Срок: Конец обсуждения: 26.05.2026", markdown)
+        # The renderer now emits a complete executive label without a
+        # redundant "Срок:" prefix when the label already carries its own
+        # ("Конец обсуждения: ...").
+        self.assertIn("- Конец обсуждения: 26.05.2026", markdown)
         self.assertNotIn("Проблема:", markdown)
         self.assertNotIn("замен", markdown)
 
@@ -548,10 +552,12 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         )
 
         self.assertIn(
-            "Проверить влияние пошлины/торгового регулирования на рынок и контрагентов.",
+            "Проверить влияние на экспорт и контрагентов.",
             markdown,
         )
         self.assertNotIn("Оставить как отраслевой фон.", markdown)
+        # The signal must be a trade reason, not a generic support change.
+        self.assertNotIn("Изменены условия поддержки", markdown)
 
     def test_credit_news_report_keeps_credit_action_even_with_trade_words(self) -> None:
         document = self._doc(
@@ -584,7 +590,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             markdown,
         )
         self.assertNotIn(
-            "Проверить влияние пошлины/торгового регулирования на рынок и контрагентов.",
+            "Проверить влияние на экспорт и контрагентов.",
             markdown,
         )
 
@@ -2467,6 +2473,140 @@ class TitleDisambiguationReportTest(unittest.TestCase):
         for line in markdown.splitlines():
             if line.startswith("### "):
                 self.assertLessEqual(len(line) - 4, 95)  # heading text ≤ 95 chars
+
+
+class DeadlineTruthRenderingTest(unittest.TestCase):
+    def _db_path(self, name: str):
+        from pathlib import Path
+
+        path = Path("data/test_artifacts") / name
+        if path.exists():
+            path.unlink()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _doc(
+        self,
+        *,
+        doc_id: int,
+        title: str,
+        url: str,
+        action_level: str,
+        application_status: str,
+        deadline_text: str | None,
+        page_type: str = "selection_announcement",
+    ) -> RawDocument:
+        now = datetime.now(timezone.utc)
+        return RawDocument(
+            id=doc_id,
+            source_name="Минсельхоз Ставропольского края - господдержка",
+            source_url=url,
+            level="regional",
+            region="stavropol",
+            title=title,
+            url=url,
+            published_at=now,
+            content_hash=f"deadline-{doc_id}",
+            raw_text="Объявление об отборе на субсидии для АПК сельхозтоваропроизводителям.",
+            is_relevant=True,
+            relevance_reason="reason",
+            importance="high",
+            action_level=action_level,
+            page_type=page_type,
+            summary="Объявление об отборе на субсидии АПК для сельхозтоваропроизводителей.",
+            impact="impact",
+            topic="topic",
+            collected_at=now,
+            application_status=application_status,
+            deadline_text=deadline_text,
+        )
+
+    def test_expired_deadline_renders_as_сurok_istek(self) -> None:
+        db_path = self._db_path("deadline_expired.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=900,
+            title="Объявление об отборе",
+            url="https://mshsk.ru/gospodderzhka/expired.php",
+            action_level="watchlist",
+            application_status="closed",
+            deadline_text="Прием заявок открыт до 01.01.2020",
+        )
+        # Mirror enrichment that the renderer pulls from storage.
+        save_document_enrichment(
+            document_id=document.id,
+            document_url=document.url,
+            provider="mock",
+            model="mock-enrichment",
+            enrichment=EnrichmentResult(
+                executive_summary="Объявление об отборе.",
+                business_impact="Конкурсный отбор.",
+                recommended_action="Проверить применимость меры.",
+                deadline_hint="Прием заявок открыт до 01.01.2020",
+                confidence=0.8,
+            ),
+            db_path=db_path,
+        )
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-18",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+            db_path=db_path,
+        )
+
+        self.assertIn("Срок истёк: 01.01.2020", markdown)
+        # The renderer must not regress to selection-open wording.
+        self.assertNotIn("Открыт прием заявок", markdown)
+        self.assertNotIn(
+            "Проверить сроки и подачу: Прием заявок открыт до 01.01.2020",
+            markdown,
+        )
+
+    def test_today_deadline_renders_as_сegodnya(self) -> None:
+        db_path = self._db_path("deadline_today.db")
+        init_db(db_path)
+        from app.rules.deadline_truth import format_iso_date, today_utc
+
+        today = today_utc()
+        deadline_snippet = f"Прием заявок открыт до {format_iso_date(today)}"
+
+        document = self._doc(
+            doc_id=901,
+            title="Объявление об отборе",
+            url="https://mshsk.ru/gospodderzhka/today.php",
+            action_level="requires_attention",
+            application_status="open",
+            deadline_text=deadline_snippet,
+        )
+        save_document_enrichment(
+            document_id=document.id,
+            document_url=document.url,
+            provider="mock",
+            model="mock-enrichment",
+            enrichment=EnrichmentResult(
+                executive_summary="Объявление об отборе.",
+                business_impact="Конкурсный отбор.",
+                recommended_action="Проверить применимость меры.",
+                deadline_hint=deadline_snippet,
+                confidence=0.8,
+            ),
+            db_path=db_path,
+        )
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-18",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+            db_path=db_path,
+        )
+
+        self.assertIn(f"Срок: сегодня ({format_iso_date(today)})", markdown)
+        # Same-day deadline may still legitimately appear in requires_attention,
+        # but must not be rendered with an "истёк" label.
+        self.assertNotIn("Срок истёк", markdown)
 
 
 if __name__ == "__main__":

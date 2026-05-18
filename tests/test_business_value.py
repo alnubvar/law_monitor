@@ -105,5 +105,39 @@ class BusinessValueSmokeTest(unittest.TestCase):
         self.assertIn("неактивна", result.impact)
 
 
+class DeadlineTruthClassificationTest(unittest.TestCase):
+    def test_expired_deadline_closes_application_status(self) -> None:
+        facts = extract_document_facts(
+            "Объявление об отборе на возмещение части затрат",
+            "Прием заявок открыт до 01.01.2020. Конкурсный отбор для АПК.",
+        )
+
+        # Expired deadlines must demote the application window even when the
+        # surrounding text still contains "открыт" markers.
+        self.assertEqual(facts.application_status, "closed")
+        self.assertIn("01.01.2020", facts.deadline_text or "")
+
+    def test_future_deadline_stays_open(self) -> None:
+        facts = extract_document_facts(
+            "Объявление об отборе",
+            "Прием заявок открыт до 15 мая 2099 года. Конкурсный отбор для АПК.",
+        )
+
+        self.assertEqual(facts.application_status, "open")
+        self.assertIn("до 15 мая 2099 года", facts.deadline_text or "")
+
+    def test_continuous_measure_without_deadline_stays_regular(self) -> None:
+        # Permanent support programs (continuous, no deadline) must remain
+        # operational — the deadline-truth fix should not over-demote them.
+        facts = extract_document_facts(
+            "Льготное кредитование АПК",
+            "Активная мера поддержки. На регулярной основе. Льготное кредитование АПК.",
+        )
+
+        self.assertEqual(facts.support_status, "active")
+        self.assertEqual(facts.application_status, "regular")
+        self.assertIsNone(facts.deadline_text)
+
+
 if __name__ == "__main__":
     unittest.main()

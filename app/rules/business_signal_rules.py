@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import date, datetime, timezone
+from datetime import date
 import re
 
 from app.extractors.date_extractor import parse_russian_date
 from app.llm.facts_extractor import DocumentFacts
 from app.models import SourceRole
+from app.rules.deadline_truth import (
+    is_deadline_expired,
+    parse_deadline_date,
+    today_utc,
+)
 from app.rules.ahstep_domain_rules import (
     has_ahstep_domain_relevance,
     is_non_ahstep_domain_document,
@@ -527,6 +532,7 @@ def detect_action_level(
             domain != "regulation.gov.ru"
             and has_project_discussion_signal
             and facts.deadline_text
+            and not is_deadline_expired(facts.deadline_text)
         ):
             return "requires_attention"
         if (
@@ -692,9 +698,14 @@ def _has_strong_support_action_signal(
     text = f"{title_text} {lead_text}"
     if facts.application_status == "open" and allow_open_requires_attention:
         return True
-    if page_type == "deadline_update" and facts.deadline_text:
+    # A deadline snippet that has already passed must not escalate to
+    # requires_attention via "deadline_update" / SUPPORT_CHANGE_MARKERS paths.
+    deadline_alive = facts.deadline_text and not is_deadline_expired(
+        facts.deadline_text
+    )
+    if page_type == "deadline_update" and deadline_alive:
         return True
-    if facts.deadline_text and any(marker in text for marker in SUPPORT_CHANGE_MARKERS):
+    if deadline_alive and any(marker in text for marker in SUPPORT_CHANGE_MARKERS):
         return True
     return False
 
@@ -718,7 +729,7 @@ def _is_near_open_support_deadline(deadline_text: str | None, *, near_days: int)
     deadline_date = _extract_regulation_deadline_date(deadline_text)
     if deadline_date is None:
         return False
-    days_left = (deadline_date - _today_utc()).days
+    days_left = (deadline_date - today_utc()).days
     return 0 <= days_left <= near_days
 
 
@@ -734,7 +745,7 @@ def _has_strong_regional_npa_action_signal(
     has_support_change = any(marker in text for marker in SUPPORT_CHANGE_MARKERS)
     if not has_support_change:
         return False
-    if facts.deadline_text:
+    if facts.deadline_text and not is_deadline_expired(facts.deadline_text):
         return True
     return "порядок предоставления субсид" in text or "изменени" in text
 
@@ -812,7 +823,7 @@ def _regulation_discussion_deadline_status(
         deadline_date = _extract_regulation_deadline_date(text)
     if deadline_date is None:
         return None
-    days_left = (deadline_date - _today_utc()).days
+    days_left = (deadline_date - today_utc()).days
     if days_left < 0:
         return "expired"
     if days_left <= REGULATION_DISCUSSION_NEAR_DAYS:
@@ -844,7 +855,7 @@ def _is_regulation_discussion_deadline_text(text: str | None) -> bool:
 
 
 def _today_utc() -> date:
-    return datetime.now(timezone.utc).date()
+    return today_utc()
 
 
 def build_business_signal(

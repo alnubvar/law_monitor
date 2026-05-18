@@ -18,6 +18,12 @@ from app.operational_health import (
     format_operational_notices_markdown,
 )
 from app.periods import PeriodSpec, build_rolling_period, format_period_label
+from app.rules.deadline_truth import (
+    format_iso_date,
+    is_deadline_expired,
+    parse_deadline_date,
+    today_utc,
+)
 from app.storage import list_document_enrichments
 from app.user_facing import (
     build_executive_action,
@@ -800,20 +806,31 @@ def _format_deadline_hint(text: str | None) -> str | None:
     normalized = re.sub(r"\s+", " ", _clean_iso_timestamps(text)).strip(" ;,-")
     if not normalized:
         return None
-    discussion_match = _DISCUSSION_DEADLINE_RE.search(normalized)
-    if discussion_match:
-        label = discussion_match.group(1).capitalize()
-        return f"{label}: {discussion_match.group(2)}"
     normalized = _DEADLINE_GARBAGE_LABEL_RE.split(normalized, maxsplit=1)[0].strip(
         " ;,-"
     )
     if not normalized:
         return None
+
+    parsed_date = parse_deadline_date(normalized)
     discussion_match = _DISCUSSION_DEADLINE_RE.search(normalized)
-    if discussion_match:
-        label = discussion_match.group(1).capitalize()
-        return f"{label}: {discussion_match.group(2)}"
-    return _shorten_summary(normalized)
+    if parsed_date is None:
+        # No parsable date: keep the existing prose so we never hallucinate a
+        # status from an unparsable snippet.
+        if discussion_match is not None:
+            label = discussion_match.group(1).capitalize()
+            return f"{label}: {discussion_match.group(2)}"
+        return _shorten_summary(normalized)
+
+    formatted = format_iso_date(parsed_date)
+    days_left = (parsed_date - today_utc()).days
+    if days_left < 0:
+        return f"Срок истёк: {formatted}"
+    if days_left == 0:
+        return f"Срок: сегодня ({formatted})"
+    if discussion_match is not None:
+        return f"Конец обсуждения: {formatted}"
+    return f"Срок: до {formatted}"
 
 
 def _format_human_item(
@@ -839,7 +856,10 @@ def _format_human_item(
         enrichment.get("deadline_hint") if enrichment else None
     )
     if deadline_text:
-        lines.append(f"- Срок: {deadline_text}")
+        # The helper returns a complete executive-friendly label
+        # ("Срок: до …", "Срок истёк: …", "Конец обсуждения: …") so the
+        # caller emits it as-is and does not prepend a redundant prefix.
+        lines.append(f"- {deadline_text}")
     action_text = _build_human_action_text(item, enrichment=enrichment)
     if require_action or action_text:
         lines.append(
@@ -882,8 +902,14 @@ def _build_human_action_text(
     )
     if action_text:
         return _shorten_summary(action_text)
-    if item.application_status == "open" and item.deadline_text:
+    if (
+        item.application_status == "open"
+        and item.deadline_text
+        and not is_deadline_expired(item.deadline_text)
+    ):
         return f"Проверить сроки и подачу: {_shorten_summary(item.deadline_text)}"
+    if item.deadline_text and is_deadline_expired(item.deadline_text):
+        return "Срок истёк, документ — справочно."
     return "Оставить на наблюдении."
 
 
