@@ -77,20 +77,14 @@ UNKNOWN_COMMAND_MESSAGE = (
 BOT_COMMANDS: tuple[tuple[str, str], ...] = (
     ("start", "открыть меню"),
     ("help", "помощь"),
-    ("status", "состояние системы"),
-    ("today", "сводка за сегодня"),
     ("urgent", "требует внимания"),
-    ("watchlist", "наблюдение"),
     ("report", "последний отчет"),
-    ("sources", "источники"),
     ("search", "поиск по архиву"),
     ("refresh", "обновить данные"),
 )
 REPLY_KEYBOARD_LAYOUT: tuple[tuple[str, ...], ...] = (
-    ("📊 Статус", "🚨 Срочное"),
-    ("👀 Наблюдение", "📅 Сегодня"),
-    ("📄 Отчёт", "🛰 Источники"),
-    ("🔎 Поиск", "🔄 Обновить данные"),
+    ("🚨 Срочное", "📄 Отчёт"),
+    ("🔎 Поиск", "🔄 Обновить"),
     ("ℹ️ Помощь",),
 )
 BUTTON_TO_COMMAND: Mapping[str, str] = {
@@ -101,6 +95,7 @@ BUTTON_TO_COMMAND: Mapping[str, str] = {
     "📄 Отчёт": "/report",
     "🛰 Источники": "/sources",
     "🔎 Поиск": "/search",
+    "🔄 Обновить": "/refresh",
     "🔄 Обновить данные": "/refresh",
     "ℹ️ Помощь": "/help",
 }
@@ -798,7 +793,7 @@ def _run_manual_refresh(*, db_path: Path | str | None) -> str:
             f"Обработано: {analyzed}\n"
             f"Включено в интерфейс: {interface_summary['visible_total']}\n"
             f"Требует реакции: {interface_summary['requires_attention']}\n"
-            f"На наблюдении: {interface_summary['watchlist']}\n"
+            f"Отраслевых сигналов: {interface_summary['watchlist']}\n"
             "Период проверки: последние 7 дней"
         ]
         if problematic_sources > 0:
@@ -808,7 +803,7 @@ def _run_manual_refresh(*, db_path: Path | str | None) -> str:
         return "\n".join(lines)
     except Exception:
         logger.exception("Manual refresh failed.")
-        return "❌ Обновление завершилось с ошибкой. Проверьте /sources и повторите позже."
+        return "❌ Обновление завершилось с ошибкой. Повторите позже."
     finally:
         try:
             lock_context.__exit__(None, None, None)  # type: ignore[union-attr]

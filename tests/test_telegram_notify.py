@@ -168,13 +168,17 @@ class TelegramNotifySmokeTest(unittest.TestCase):
     def test_help_command_lists_supported_commands(self) -> None:
         text = telegram.build_command_response("/help")
 
-        self.assertIn("/status", text)
-        self.assertIn("/today", text)
-        self.assertIn("/urgent", text)
-        self.assertIn("/watchlist", text)
-        self.assertIn("/report", text)
-        self.assertIn("/sources", text)
-        self.assertIn("/refresh", text)
+        self.assertIn("🚨 Срочное — документы, требующие внимания", text)
+        self.assertIn("📄 Отчёт — ежедневная сводка и новые сигналы", text)
+        self.assertIn("🔎 Поиск — поиск по документам и мерам поддержки", text)
+        self.assertIn("🔄 Обновить — запустить проверку новых данных", text)
+        self.assertNotIn("/status", text)
+        self.assertNotIn("/today", text)
+        self.assertNotIn("/urgent", text)
+        self.assertNotIn("/watchlist", text)
+        self.assertNotIn("/report", text)
+        self.assertNotIn("/sources", text)
+        self.assertNotIn("/refresh", text)
         self.assertNotIn("/ocr", text)
         self.assertNotIn("/track", text)
         self.assertNotIn("/untrack", text)
@@ -230,7 +234,7 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         self.assertIn("Найдено документов: 1", text)
         self.assertIn("Уровень: требует внимания", text)
         self.assertIn("Льготное кредитование АПК", text)
-        self.assertIn("Для сегодняшних сигналов используйте 📅 Сегодня.", text)
+        self.assertIn("Для общей сводки используйте 📄 Отчёт.", text)
 
     def test_status_counts_follow_user_facing_visibility_and_match_urgent_after_downgrade_and_dedup(self) -> None:
         db_path = self._db_path("telegram_status_user_facing_counts.db")
@@ -315,8 +319,8 @@ class TelegramNotifySmokeTest(unittest.TestCase):
 
         text = telegram.build_command_response("/today", db_path=db_path)
 
-        self.assertIn("Сегодня", text)
-        self.assertIn("Сегодня новых срочных документов нет", text)
+        self.assertIn("Новые сигналы сегодня", text)
+        self.assertIn("Новых срочных документов сегодня нет", text)
         self.assertIn("Отраслевые сигналы", text)
         self.assertIn("Пошлина на экспорт пшеницы останется нулевой", text)
         self.assertNotIn("Старый документ", text)
@@ -340,7 +344,7 @@ class TelegramNotifySmokeTest(unittest.TestCase):
 
         text = telegram.build_command_response("/today", db_path=db_path)
 
-        self.assertEqual(text, "📅 Сегодня новых срочных документов нет.")
+        self.assertEqual(text, "Новых срочных документов сегодня нет.")
 
     def test_today_empty_state_includes_active_urgent_count_for_last_14_days(self) -> None:
         db_path = self._db_path("telegram_today_active_urgent_context.db")
@@ -361,7 +365,7 @@ class TelegramNotifySmokeTest(unittest.TestCase):
 
         text = telegram.build_command_response("/today", db_path=db_path)
 
-        self.assertIn("Сегодня новых срочных документов нет.", text)
+        self.assertIn("Новых срочных документов сегодня нет.", text)
         self.assertIn("Активные срочные вопросы за последние 14 дней: 1. Откройте 🚨 Срочное.", text)
 
     def test_today_deduplicates_government_news_and_docs_pair(self) -> None:
@@ -416,7 +420,7 @@ class TelegramNotifySmokeTest(unittest.TestCase):
 
         text = telegram.build_command_response("/watchlist", db_path=db_path)
 
-        self.assertIn("Документы на наблюдении", text)
+        self.assertIn("Отраслевые сигналы", text)
         self.assertIn("Уровень: наблюдение", text)
         self.assertIn("Пошлина на экспорт пшеницы останется нулевой", text)
 
@@ -708,7 +712,7 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         with patch("app.notify.telegram.get_runtime_event", return_value=fresh_event):
             text = telegram.build_command_response("/status", db_path=db_path)
 
-        self.assertIn("Статус AHSTEP GR Monitor", text)
+        self.assertIn("Состояние AHSTEP GR Monitor", text)
         self.assertIn("Документов в базе: 1", text)
         self.assertIn("требует внимания", text)
         self.assertNotIn("RTZ", text)
@@ -730,7 +734,7 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         with patch("app.notify.telegram.list_latest_source_audit", return_value=audits):
             text = telegram.build_command_response("/sources", db_path=db_path)
 
-        self.assertIn("Источники (", text)
+        self.assertIn("Проверка источников (", text)
         self.assertIn("ZOL.ru - зерновые новости", text)
         self.assertIn("ГИСП - меры поддержки АПК", text)
         self.assertNotIn("RA=", text)
@@ -755,7 +759,7 @@ class TelegramNotifySmokeTest(unittest.TestCase):
 
         self.assertEqual(
             text,
-            "🚨 Требует внимания GR: новых документов нет за 7 дней.\nДля сегодняшних сигналов используйте 📅 Сегодня.",
+            "🚨 Требует внимания GR: новых документов нет за 7 дней.\nДля общей сводки используйте 📄 Отчёт.",
         )
 
     def test_report_command_does_not_show_local_report_path(self) -> None:
@@ -875,7 +879,7 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         save_document(doc_future, db_path)
 
         text = telegram.build_command_response("/status", db_path=db_path)
-        self.assertIn("Статус AHSTEP GR Monitor", text)
+        self.assertIn("Состояние AHSTEP GR Monitor", text)
 
     def test_sources_hides_raw_exception_details(self) -> None:
         db_path = self._db_path("telegram_sources_errors.db")

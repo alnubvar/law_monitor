@@ -411,7 +411,7 @@ def _build_status_message(db_path: Path | str) -> str:
         if user_facing_action_level(document) == "watchlist"
     )
     lines = [
-        "📊 Статус AHSTEP GR Monitor",
+        "ℹ️ Состояние AHSTEP GR Monitor",
         f"Обновлено: {now.strftime('%Y-%m-%d %H:%M')}",
         f"Документов в базе: {len(all_documents)}",
         (
@@ -444,7 +444,7 @@ def _build_today_message(db_path: Path | str) -> str:
         else datetime.now(timezone.utc).strftime("%d.%m.%Y")
     )
     if not today_documents:
-        lines = ["📅 Сегодня новых срочных документов нет."]
+        lines = ["Новых срочных документов сегодня нет."]
         if active_urgent_last_14_days > 0:
             lines.append(
                 f"Активные срочные вопросы за последние 14 дней: {active_urgent_last_14_days}. Откройте 🚨 Срочное."
@@ -455,10 +455,10 @@ def _build_today_message(db_path: Path | str) -> str:
     watchlist_documents = [document for document in today_documents if user_facing_action_level(document) == "watchlist"]
     urgent_documents = [document for document in today_documents if user_facing_action_level(document) == "requires_attention"]
     lines = [
-        f"📅 Сегодня ({today_label})",
+        f"Новые сигналы сегодня ({today_label})",
     ]
     if urgent_count == 0:
-        lines.append("Сегодня новых срочных документов нет.")
+        lines.append("Новых срочных документов сегодня нет.")
         if active_urgent_last_14_days > 0:
             lines.append(
                 f"Активные срочные вопросы за последние 14 дней: {active_urgent_last_14_days}. Откройте 🚨 Срочное."
@@ -489,7 +489,7 @@ def _build_urgent_message(db_path: Path | str, *, days: int) -> str:
     if not urgent_documents:
         return (
             f"🚨 Требует внимания GR: новых документов нет за {days} дней.\n"
-            "Для сегодняшних сигналов используйте 📅 Сегодня."
+            "Для общей сводки используйте 📄 Отчёт."
         )
     enrichment_by_url = list_document_enrichments([document.url for document in urgent_documents], db_path=db_path)
     lines = [
@@ -497,7 +497,7 @@ def _build_urgent_message(db_path: Path | str, *, days: int) -> str:
         f"Найдено документов: {len(urgent_documents)}",
     ]
     lines.extend(_format_document_lines(urgent_documents, include_summary=False, enrichment_by_url=enrichment_by_url))
-    lines.append("Для сегодняшних сигналов используйте 📅 Сегодня.")
+    lines.append("Для общей сводки используйте 📄 Отчёт.")
     return _cap_message("\n".join(lines))
 
 
@@ -557,11 +557,11 @@ def _build_watchlist_message(db_path: Path | str, *, days: int) -> str:
         if should_show_document(document, surface="telegram_list", relevant_only=False)
     ]
     if not watchlist_documents:
-        return f"👀 Документов на наблюдении за {days} дней нет."
+        return f"Отраслевых сигналов за {days} дней нет."
     enrichment_by_url = list_document_enrichments([document.url for document in watchlist_documents], db_path=db_path)
     shown_count = min(TELEGRAM_WATCHLIST_USER_LIMIT, len(watchlist_documents))
     lines = [
-        f"👀 Документы на наблюдении (за {days} дней)",
+        f"Отраслевые сигналы (за {days} дней)",
     ]
     lines.extend(
         _format_document_lines(
@@ -695,7 +695,7 @@ def _build_sources_message(db_path: Path | str) -> str:
     snapshot = build_diagnostics_snapshot(recent_documents, days=7)
     rows_by_name = {row.source_name: row for row in snapshot.rows}
     audit_by_source = {row["source_name"]: row for row in list_latest_source_audit(db_path=db_path)}
-    lines = [f"🛰 Источники (активных: {len(sources)})"]
+    lines = [f"Проверка источников (активных: {len(sources)})"]
     for source in sources:
         row = rows_by_name.get(source.name)
         audit_row = audit_by_source.get(source.name)
@@ -766,20 +766,29 @@ def _build_report_summary_action_hint(
 
 
 def _build_help_message() -> str:
-    return _cap_message("\n".join(
-        [
-            "ℹ️ AHSTEP GR Monitor",
-            "Кнопки ниже открывают основные разделы мониторинга.",
-            "/status — состояние данных и источников",
-            "/urgent — документы, где нужна GR-реакция",
-            "/watchlist — материалы на наблюдении",
-            "/today — новое за сегодня",
-            "/report — краткая сводка и файл отчета",
-            "/sources — здоровье источников",
-            "/search <запрос> — поиск по архиву",
-            "/refresh — запустить обновление данных",
-        ]
-    ))
+    return _cap_message(
+        "\n".join(
+            [
+                "ℹ️ AHSTEP GR Monitor",
+                "",
+                "Система отслеживает:",
+                "• меры господдержки",
+                "• нормативные акты",
+                "• отборы и субсидии",
+                "• отраслевые GR-сигналы",
+                "",
+                "Основные разделы:",
+                "",
+                "🚨 Срочное — документы, требующие внимания",
+                "📄 Отчёт — ежедневная сводка и новые сигналы",
+                "🔎 Поиск — поиск по документам и мерам поддержки",
+                "🔄 Обновить — запустить проверку новых данных",
+                "",
+                "Рекомендация:",
+                "начинайте работу с раздела «📄 Отчёт».",
+            ]
+        )
+    )
 
 
 def _build_ocr_queue_message(db_path: Path | str) -> str:

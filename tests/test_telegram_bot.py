@@ -111,12 +111,8 @@ class TelegramBotTest(unittest.TestCase):
                 "commands": [
                     {"command": "start", "description": "открыть меню"},
                     {"command": "help", "description": "помощь"},
-                    {"command": "status", "description": "состояние системы"},
-                    {"command": "today", "description": "сводка за сегодня"},
                     {"command": "urgent", "description": "требует внимания"},
-                    {"command": "watchlist", "description": "наблюдение"},
                     {"command": "report", "description": "последний отчет"},
-                    {"command": "sources", "description": "источники"},
                     {"command": "search", "description": "поиск по архиву"},
                     {"command": "refresh", "description": "обновить данные"},
                 ]
@@ -127,15 +123,16 @@ class TelegramBotTest(unittest.TestCase):
         payload = telegram_bot.build_reply_keyboard_payload()
 
         keyboard = payload["keyboard"]
-        self.assertEqual(keyboard[0][0]["text"], "📊 Статус")
-        self.assertEqual(keyboard[0][1]["text"], "🚨 Срочное")
-        self.assertEqual(keyboard[1][0]["text"], "👀 Наблюдение")
-        self.assertEqual(keyboard[1][1]["text"], "📅 Сегодня")
-        self.assertEqual(keyboard[2][0]["text"], "📄 Отчёт")
-        self.assertEqual(keyboard[2][1]["text"], "🛰 Источники")
-        self.assertEqual(keyboard[3][0]["text"], "🔎 Поиск")
-        self.assertEqual(keyboard[3][1]["text"], "🔄 Обновить данные")
-        self.assertEqual(keyboard[4][0]["text"], "ℹ️ Помощь")
+        self.assertEqual(keyboard[0][0]["text"], "🚨 Срочное")
+        self.assertEqual(keyboard[0][1]["text"], "📄 Отчёт")
+        self.assertEqual(keyboard[1][0]["text"], "🔎 Поиск")
+        self.assertEqual(keyboard[1][1]["text"], "🔄 Обновить")
+        self.assertEqual(keyboard[2][0]["text"], "ℹ️ Помощь")
+        flattened = [button["text"] for row in keyboard for button in row]
+        self.assertNotIn("📊 Статус", flattened)
+        self.assertNotIn("👀 Наблюдение", flattened)
+        self.assertNotIn("📅 Сегодня", flattened)
+        self.assertNotIn("🛰 Источники", flattened)
         self.assertTrue(payload["resize_keyboard"])
         self.assertTrue(payload["is_persistent"])
         self.assertIn("one_time_keyboard", payload)
@@ -167,6 +164,7 @@ class TelegramBotTest(unittest.TestCase):
     def test_button_text_maps_to_command(self) -> None:
         self.assertEqual(telegram_bot.normalize_incoming_command("📊 Статус"), "/status")
         self.assertEqual(telegram_bot.normalize_incoming_command("🚨 Срочное"), "/urgent")
+        self.assertEqual(telegram_bot.normalize_incoming_command("🔄 Обновить"), "/refresh")
         self.assertEqual(telegram_bot.normalize_incoming_command("🔄 Обновить данные"), "/refresh")
         self.assertEqual(telegram_bot.normalize_incoming_command("🔎 Поиск"), "/search")
 
@@ -183,12 +181,8 @@ class TelegramBotTest(unittest.TestCase):
 
     def test_all_reply_keyboard_buttons_dispatch_to_slash_handlers(self) -> None:
         cases = {
-            "📊 Статус": "/status",
             "🚨 Срочное": "/urgent",
-            "👀 Наблюдение": "/watchlist",
-            "📅 Сегодня": "/today",
             "📄 Отчёт": "/report",
-            "🛰 Источники": "/sources",
             "ℹ️ Помощь": "/help",
         }
         for button_text, expected_command in cases.items():
@@ -198,6 +192,8 @@ class TelegramBotTest(unittest.TestCase):
                 self.assertEqual(result.command, expected_command)
                 self.assertEqual(result.response_text, "mapped")
                 build.assert_called_once_with(expected_command, db_path=None, default_days=7, chat_id=None)
+        self.assertEqual(telegram_bot.dispatch_input_text("🔎 Поиск").command, "/search")
+        self.assertEqual(telegram_bot.dispatch_input_text("🔄 Обновить").command, "/refresh")
 
     def test_unknown_command_returns_help_hint(self) -> None:
         result = telegram_bot.dispatch_input_text("/unknown")
@@ -384,7 +380,7 @@ class TelegramBotTest(unittest.TestCase):
         self.assertIn("Новых документов: 3", text)
         self.assertIn("Включено в интерфейс: 5", text)
         self.assertIn("Требует реакции: 1", text)
-        self.assertIn("На наблюдении: 4", text)
+        self.assertIn("Отраслевых сигналов: 4", text)
         self.assertIn("Период проверки: последние 7 дней", text)
         self.assertIn("Ошибки источников: 0", text)
 
@@ -454,7 +450,6 @@ class TelegramBotTest(unittest.TestCase):
         db_path = self._offset_path("telegram_period_buttons.db")
         cases = {
             "🚨 Срочное": "/urgent 7",
-            "👀 Наблюдение": "/watchlist 7",
         }
         with patch.multiple(telegram_bot.config, TELEGRAM_CHAT_ID="123"):
             for button_text, expected_text in cases.items():
