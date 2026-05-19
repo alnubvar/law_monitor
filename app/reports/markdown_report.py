@@ -37,6 +37,7 @@ from app.user_facing import (
     user_facing_action_level,
     user_facing_title,
 )
+from app.rules.gr_topic_ontology import detect_gr_topic
 from app.visibility import (
     classify_display_section as visibility_display_section,
     deduplicate_user_facing_documents,
@@ -82,6 +83,17 @@ _PRIORITY_OPEN_WITHOUT_DEADLINE = 260
 _PRIORITY_REGULATION_DISCUSSION = 200
 _PRIORITY_STRATEGIC_BACKGROUND = 180
 _PRIORITY_OPERATIONAL_DEFAULT = 100
+_GR_TOPIC_PRIORITY_BOOSTS = {
+    "postanovlenie_1528": 18,
+    "concessional_credit": 14,
+    "regional_subsidy_distribution": 14,
+    "grain_compensation": 12,
+    "dairy": 10,
+    "elite_seed": 10,
+    "processing_modernization": 10,
+    "export_support": 10,
+    "direct_indirect_subsidies": 8,
+}
 _ISO_DATETIME_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?")
 _ISO_FRAGMENT_RE = re.compile(r"\.\d{1,9}Z\b")
 _DEADLINE_GARBAGE_LABEL_RE = re.compile(
@@ -197,6 +209,7 @@ def _to_digest_item(document: RawDocument, *, title: str | None = None) -> Diges
         action_level=user_facing_action_level(document),
         page_type=document.page_type,
         summary=document.summary,
+        topic=document.topic,
         impact=document.impact,
         relevance_reason=document.relevance_reason,
         published_at=document.published_at,
@@ -762,6 +775,7 @@ def _operational_priority_score(document: RawDocument) -> int:
     )
     source_role = get_source_role(document.source_name)
     page_type = document.page_type or ""
+    topic_boost = _gr_topic_priority_boost(document)
 
     # Today's deadline on a still-open application is the most perishable
     # operational signal and must lead the urgent block.
@@ -770,12 +784,12 @@ def _operational_priority_score(document: RawDocument) -> int:
         and document.deadline_text
         and is_deadline_today(document.deadline_text)
     ):
-        return _PRIORITY_TODAY_DEADLINE
+        return _PRIORITY_TODAY_DEADLINE + topic_boost
 
     # Trade / export / duty / quota / restriction signals — immediate market
     # impact, ranked second so they outrank slower-burn regulatory acts.
     if has_trade_regulation_signal(document_text):
-        return _PRIORITY_TRADE_REGULATION
+        return _PRIORITY_TRADE_REGULATION + topic_boost
 
     # Accepted regulatory / support acts (regional NPA, GISP support docs)
     # that carry a new rule or measure card.
@@ -783,12 +797,12 @@ def _operational_priority_score(document: RawDocument) -> int:
         source_role == "regional_npa"
         and page_type in {"new_rule", "deadline_update"}
     ):
-        return _PRIORITY_ACCEPTED_REGULATORY_ACT
+        return _PRIORITY_ACCEPTED_REGULATORY_ACT + topic_boost
     if (
         source_role in {"support_documents", "active_support_measures"}
         and page_type in {"new_rule", "measure_card", "deadline_update"}
     ):
-        return _PRIORITY_ACCEPTED_REGULATORY_ACT
+        return _PRIORITY_ACCEPTED_REGULATORY_ACT + topic_boost
 
     # Near-deadline (within a week) open applications — still time to react.
     if (
@@ -796,28 +810,28 @@ def _operational_priority_score(document: RawDocument) -> int:
         and document.deadline_text
         and classify_deadline(document.deadline_text) == "near"
     ):
-        return _PRIORITY_NEAR_DEADLINE
+        return _PRIORITY_NEAR_DEADLINE + topic_boost
 
     # Documents whose visible signal is a support-change without an accepted
     # act status. Use the document's own text so generic rule wording in
     # business_signal/impact does not pollute the tier.
     if _SUPPORT_OPERATIONAL_CHANGE_RE.search(document_text):
-        return _PRIORITY_SUPPORT_CHANGE_SIGNAL
+        return _PRIORITY_SUPPORT_CHANGE_SIGNAL + topic_boost
 
     # Open applications without a known deadline — useful but unbounded.
     if document.application_status == "open":
-        return _PRIORITY_OPEN_WITHOUT_DEADLINE
+        return _PRIORITY_OPEN_WITHOUT_DEADLINE + topic_boost
 
     # Regulation drafts / public discussions — strategic, not operational.
     if source_role == "strategy":
-        return _PRIORITY_REGULATION_DISCUSSION
+        return _PRIORITY_REGULATION_DISCUSSION + topic_boost
 
     # News-strategic background that escalated through guards but does not
     # fit any of the above tiers (e.g. soft announcements).
     if source_role in {"strategy", "news_signals"}:
-        return _PRIORITY_STRATEGIC_BACKGROUND
+        return _PRIORITY_STRATEGIC_BACKGROUND + topic_boost
 
-    return _PRIORITY_OPERATIONAL_DEFAULT
+    return _PRIORITY_OPERATIONAL_DEFAULT + topic_boost
 
 
 def _flatten_display_sections(
@@ -924,7 +938,21 @@ def _display_priority_score(document: RawDocument) -> int:
         score += 2
     if _has_regulation_subsidy_watchlist_priority(document):
         score += 30
+    score += _gr_topic_priority_boost(document)
     return score
+
+
+def _gr_topic_priority_boost(document: RawDocument) -> int:
+    ontology_match = detect_gr_topic(
+        document.topic,
+        document.title,
+        document.summary,
+        document.business_signal,
+        document.impact,
+    )
+    if ontology_match is None:
+        return 0
+    return _GR_TOPIC_PRIORITY_BOOSTS.get(ontology_match.family, 0)
 
 
 def _has_regulation_subsidy_watchlist_priority(document: RawDocument) -> bool:

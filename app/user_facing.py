@@ -9,6 +9,7 @@ from app.config import get_source_role
 from app.llm.enrichment import is_generic_enrichment_text
 from app.models import DigestItem, RawDocument
 from app.rules.deadline_truth import is_deadline_expired
+from app.rules.gr_topic_ontology import GRTopicMatch, detect_gr_topic
 
 OCR_FALLBACK_KRASNODAR_TITLE = "НПА Краснодарского края: документ после OCR"
 OCR_FALLBACK_GENERIC_TITLE = "Документ после OCR: требуется ручная проверка"
@@ -100,6 +101,58 @@ INTENT_REGULATION_DISCUSSION = "regulation_discussion"
 _DISCUSSION_DATE_RE = re.compile(
     r"(\d{4})-(\d{2})-(\d{2})|\b(\d{1,2})[.](\d{1,2})[.](\d{4})\b"
 )
+_TOPIC_SUBSIDY_CLAUSES = {
+    "postanovlenie_1528": "по Постановлению №1528",
+    "concessional_credit": "на льготное кредитование",
+    "export_support": "на поддержку экспорта АПК",
+    "dairy": "на молочное животноводство",
+    "elite_seed": "на элитное семеноводство",
+    "grain_compensation": "на компенсации зерновым",
+    "processing_modernization": "на переработку сельхозпродукции",
+    "regional_subsidy_distribution": "по распределению субъектам РФ",
+    "direct_indirect_subsidies": "на прямые/косвенные субсидии",
+}
+_TOPIC_SELECTION_CLAUSES = {
+    "concessional_credit": "на льготные кредиты",
+    "export_support": "на поддержку экспорта АПК",
+    "dairy": "по молочному животноводству",
+    "elite_seed": "на элитное семеноводство",
+    "grain_compensation": "на компенсации зерновым",
+    "processing_modernization": "на переработку сельхозпродукции",
+    "direct_indirect_subsidies": "на прямые/косвенные субсидии",
+}
+_TOPIC_REASONS = {
+    "postanovlenie_1528": "Сигнал по Постановлению №1528",
+    "concessional_credit": "Обновлены условия льготного кредитования",
+    "export_support": "Сигнал по поддержке экспорта АПК",
+    "dairy": "Изменены условия поддержки молочного животноводства",
+    "elite_seed": "Сигнал по поддержке элитного семеноводства",
+    "grain_compensation": "Компенсации производителям зерновых культур",
+    "processing_modernization": "Субсидии на переработку сельхозпродукции",
+    "regional_subsidy_distribution": "Распределение субсидий субъектам РФ",
+    "direct_indirect_subsidies": "Прямые/косвенные субсидии сельхозпроизводителям",
+}
+_TOPIC_ACTIONS = {
+    "postanovlenie_1528": "Проверить изменения порядка господдержки по Постановлению №1528.",
+    "concessional_credit": "Проверить условия кредитования и применимость для АПК.",
+    "export_support": "Проверить меры поддержки экспорта, критерии участия и логистику.",
+    "dairy": "Проверить ставки, получателей и условия для молочного направления.",
+    "elite_seed": "Проверить требования к элитным семенам, получателям и срокам.",
+    "grain_compensation": "Проверить порядок компенсации затрат по зерновым культурам.",
+    "processing_modernization": "Проверить требования к объектам переработки и модернизации.",
+    "regional_subsidy_distribution": "Проверить распределение лимитов по субъектам РФ и целевым регионам.",
+    "direct_indirect_subsidies": "Проверить, какие прямые или косвенные субсидии применимы к холдингу.",
+}
+_TOPIC_SUMMARIES = {
+    "postanovlenie_1528": "Выявлен сигнал по изменениям Постановления №1528.",
+    "export_support": "Выявлен сигнал по мерам поддержки экспорта АПК.",
+    "dairy": "Выявлен сигнал по поддержке молочного животноводства.",
+    "elite_seed": "Выявлен сигнал по поддержке элитного семеноводства.",
+    "grain_compensation": "Выявлен сигнал по компенсациям производителям зерновых культур.",
+    "processing_modernization": "Выявлен сигнал по переработке сельхозпродукции.",
+    "regional_subsidy_distribution": "Выявлен сигнал по распределению субсидий субъектам РФ.",
+    "direct_indirect_subsidies": "Выявлен сигнал по прямым/косвенным субсидиям сельхозпроизводителям.",
+}
 
 
 def user_facing_action_level(document: RawDocument) -> str | None:
@@ -436,6 +489,9 @@ def _base_visible_title(document: PresentationDocument) -> str:
 def _compress_bureaucratic_title(document: PresentationDocument, title: str) -> str:
     lowered = title.lower()
     combined = _combined_text(document, title=title)
+    topic_headline = _topic_headline(document, combined)
+    if topic_headline:
+        return topic_headline
     if _looks_like_selection_announcement(document, combined):
         if _application_is_closed(document):
             return "Прием заявок завершён"
@@ -465,6 +521,11 @@ def _subsidy_topic_hint(combined: str) -> str:
     connect to a region with ``в {region}`` without producing double-в grammar
     artifacts (the previous "в АПК — Краснодарском крае" form).
     """
+    ontology_match = detect_gr_topic(combined)
+    if ontology_match is not None:
+        topic_clause = _TOPIC_SUBSIDY_CLAUSES.get(ontology_match.family)
+        if topic_clause:
+            return topic_clause
     lowered = combined.lower()
     if "мелиора" in lowered:
         return "на мелиорацию"
@@ -491,6 +552,11 @@ def _selection_topic_hint(combined: str) -> str:
     Returned values are noun-phrase clauses that read naturally after the verb
     "Открыт прием заявок ...". Empty string → no suffix.
     """
+    ontology_match = detect_gr_topic(combined)
+    if ontology_match is not None:
+        topic_clause = _TOPIC_SELECTION_CLAUSES.get(ontology_match.family)
+        if topic_clause:
+            return topic_clause
     lowered = combined.lower()
     if "агросмен" in lowered:
         return "на АгроСмену"
@@ -510,6 +576,15 @@ def _selection_topic_hint(combined: str) -> str:
         return "на семеноводство"
     if "субсид" in lowered:
         return "на субсидии"
+    return ""
+
+
+def _topic_headline(document: PresentationDocument, combined: str) -> str:
+    ontology_match = _document_gr_topic_match(document, combined_text=combined)
+    if ontology_match is None:
+        return ""
+    if ontology_match.family == "postanovlenie_1528":
+        return "Постановление №1528: изменения господдержки"
     return ""
 
 
@@ -563,6 +638,16 @@ def _deterministic_reason(
     section: str | None,
 ) -> str:
     intent = _detect_deterministic_intent(document, section=section)
+    if intent == INTENT_TRADE_REGULATION:
+        return _reason_for_intent(intent, document=document)
+    topic_reason = _topic_specific_reason(document)
+    if topic_reason and intent not in {
+        INTENT_SELECTION_OPEN,
+        INTENT_SELECTION_EXPIRED,
+        INTENT_OCR_PLACEHOLDER,
+        INTENT_SUPPORT_MEASURE,
+    }:
+        return topic_reason
     return _reason_for_intent(intent, document=document)
 
 
@@ -572,6 +657,15 @@ def _deterministic_action(
     section: str | None,
 ) -> str:
     intent = _detect_deterministic_intent(document, section=section)
+    if intent == INTENT_TRADE_REGULATION:
+        return _action_for_intent(intent, document=document)
+    topic_action = _topic_specific_action(document)
+    if topic_action and intent not in {
+        INTENT_SELECTION_EXPIRED,
+        INTENT_OCR_PLACEHOLDER,
+        INTENT_SUPPORT_MEASURE,
+    }:
+        return topic_action
     return _action_for_intent(intent, document=document)
 
 
@@ -584,6 +678,9 @@ def _deterministic_summary(document: PresentationDocument) -> str:
     title_summary = _summary_from_title(document)
     if title_summary:
         return title_summary
+    topic_summary = _topic_specific_summary(document)
+    if topic_summary:
+        return topic_summary
 
     intent = _detect_deterministic_intent(document)
     if intent == INTENT_REGULATION_DISCUSSION:
@@ -628,6 +725,27 @@ def _compress_freeform_action(text: str, *, document: PresentationDocument) -> s
     if deterministic:
         return deterministic
     return normalized
+
+
+def _topic_specific_reason(document: PresentationDocument) -> str:
+    ontology_match = _document_gr_topic_match(document)
+    if ontology_match is None:
+        return ""
+    return _TOPIC_REASONS.get(ontology_match.family, "")
+
+
+def _topic_specific_action(document: PresentationDocument) -> str:
+    ontology_match = _document_gr_topic_match(document)
+    if ontology_match is None:
+        return ""
+    return _TOPIC_ACTIONS.get(ontology_match.family, "")
+
+
+def _topic_specific_summary(document: PresentationDocument) -> str:
+    ontology_match = _document_gr_topic_match(document)
+    if ontology_match is None:
+        return ""
+    return _TOPIC_SUMMARIES.get(ontology_match.family, "")
 
 
 def _detect_deterministic_intent(
@@ -706,6 +824,9 @@ def _summary_from_title(document: PresentationDocument) -> str:
         return ""
     lowered = title.lower()
     region_label = _region_label(document)
+    topic_summary = _topic_specific_summary(document)
+    if topic_summary:
+        return topic_summary
 
     if "льготн" in lowered and "кредит" in lowered:
         if "минсельхоз" in lowered and any(
@@ -866,6 +987,7 @@ def _combined_text(document: PresentationDocument, *, title: str | None = None) 
         _normalize_text(part).lower()
         for part in (
             title or _get_value(document, "title"),
+            _get_value(document, "topic"),
             _get_value(document, "summary"),
             _get_value(document, "impact"),
             _get_value(document, "business_signal"),
@@ -873,6 +995,24 @@ def _combined_text(document: PresentationDocument, *, title: str | None = None) 
             _get_value(document, "terms_text"),
         )
         if _normalize_text(part)
+    )
+
+
+def _document_gr_topic_match(
+    document: PresentationDocument,
+    *,
+    combined_text: str | None = None,
+) -> GRTopicMatch | None:
+    if combined_text is not None:
+        return detect_gr_topic(_get_value(document, "topic"), combined_text)
+    return detect_gr_topic(
+        _get_value(document, "topic"),
+        _get_value(document, "title"),
+        _get_value(document, "summary"),
+        _get_value(document, "impact"),
+        _get_value(document, "business_signal"),
+        _get_value(document, "deadline_text"),
+        _get_value(document, "terms_text"),
     )
 
 

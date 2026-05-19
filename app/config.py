@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Mapping
 from datetime import timedelta, timezone
 from functools import lru_cache
 from logging.handlers import RotatingFileHandler
@@ -212,6 +213,8 @@ def load_keyword_groups(path: Path | None = None) -> dict[str, list[str]]:
 
     normalized: dict[str, list[str]] = {}
     for group_name, values in grouped_keywords.items():
+        if isinstance(values, Mapping):
+            continue
         if isinstance(values, str):
             candidates = [values]
         else:
@@ -236,6 +239,26 @@ def load_keywords(path: Path | None = None) -> list[str]:
                 flattened.append(normalized)
                 seen.add(normalized)
     return flattened
+
+
+@lru_cache(maxsize=1)
+def load_gr_topic_families(path: Path | None = None) -> dict[str, dict[str, object]]:
+    config_path = path or CONFIG_DIR / "keywords.yaml"
+    data = _load_yaml(config_path)
+    if not isinstance(data, Mapping):
+        return {}
+    raw_families = data.get("topic_families", {})
+    if not isinstance(raw_families, Mapping):
+        return {}
+    families: dict[str, dict[str, object]] = {}
+    for family_name, raw_config in raw_families.items():
+        if not isinstance(raw_config, Mapping):
+            continue
+        normalized_name = str(family_name).strip()
+        if not normalized_name:
+            continue
+        families[normalized_name] = dict(raw_config)
+    return families
 
 
 @lru_cache(maxsize=1)

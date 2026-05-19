@@ -15,6 +15,7 @@ from app.rules.business_signal_rules import (
     detect_importance,
     detect_topic,
 )
+from app.rules.gr_topic_ontology import GRTopicMatch, detect_gr_topic
 from app.rules.news_background_guard import guard_news_signal_action_level
 from app.rules.news_rules import has_news_signal
 from app.rules.noise_rules import (
@@ -64,6 +65,7 @@ class MockLLMClient(BaseLLMClient):
         cleaned_text = extracted.text
         combined_text = f"{title}\n{cleaned_text}".lower()
         facts = extract_document_facts(title, cleaned_text)
+        topic_match = detect_gr_topic(title, cleaned_text)
         matched_keywords = [
             keyword for keyword in self.keywords if keyword.lower() in combined_text
         ]
@@ -93,7 +95,11 @@ class MockLLMClient(BaseLLMClient):
         )
         is_relevant = action_level != "irrelevant"
         importance = self._detect_importance(action_level)
-        topic = self._detect_topic(combined_text)
+        topic = (
+            topic_match.label
+            if topic_match is not None
+            else self._detect_topic(combined_text)
+        )
         summary = self._build_summary(
             title,
             cleaned_text,
@@ -161,7 +167,11 @@ class MockLLMClient(BaseLLMClient):
             risk_notes=facts.risk_notes,
             key_dates=[facts.deadline_text] if facts.deadline_text else [],
             regions=[],
-            source_facts=self._build_source_facts(matched_keywords, facts),
+            source_facts=self._build_source_facts(
+                matched_keywords,
+                facts,
+                topic_match=topic_match,
+            ),
         )
 
     def _detect_page_type(
@@ -396,8 +406,13 @@ class MockLLMClient(BaseLLMClient):
         self,
         matched_keywords: Sequence[str],
         facts: DocumentFacts,
+        *,
+        topic_match: GRTopicMatch | None = None,
     ) -> list[str]:
-        values = list(matched_keywords[:5])
+        values: list[str] = []
+        if topic_match is not None:
+            values.append(f"topic_family:{topic_match.family}")
+        values.extend(matched_keywords[:5])
         if facts.support_status != "unknown":
             values.append(f"support_status:{facts.support_status}")
         if facts.application_status != "unknown":

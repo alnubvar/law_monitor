@@ -42,6 +42,7 @@ from app.rules.support_measure_rules import (
     is_target_region,
     looks_support_catalog_page,
 )
+from app.rules.gr_topic_ontology import detect_gr_topic
 
 TOPIC_RULES = {
     "молоч": "Молочное животноводство",
@@ -208,6 +209,11 @@ def detect_importance(action_level: str) -> str:
 
 
 def detect_topic(text: str) -> str | None:
+    ontology_match = detect_gr_topic(text)
+    if ontology_match is not None:
+        return ontology_match.label
+    if any(marker in text for marker in ("рыбопереработ", "рыбохозяй", "рыболов")):
+        text = text.replace("переработ", "")
     for marker, topic in TOPIC_RULES.items():
         if marker in text:
             return topic
@@ -254,6 +260,12 @@ def build_impact(
                 "для проработки участия, сверки условий и планирования финансирования."
             )
     if action_level == "requires_attention":
+        if topic:
+            return (
+                f"Материал требует реакции GR-команды по теме «{topic}»: в тексте есть "
+                "признаки мер поддержки, регуляторных изменений, сроков подачи или иных "
+                "условий, которые могут потребовать действия."
+            )
         return (
             "Материал требует реакции GR-команды: в тексте есть признаки мер поддержки, "
             "регуляторных изменений, сроков подачи или иных условий, которые могут потребовать действия."

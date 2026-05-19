@@ -2747,6 +2747,39 @@ class RequiresAttentionCapTest(unittest.TestCase):
         self.assertIn(act.url, {doc.url for doc in sections["requires_attention"]})
         self.assertEqual(len(sections["requires_attention"]), cap)
 
+    def test_gr_topic_family_boosts_urgent_report_priority(self) -> None:
+        published_at = datetime(2026, 5, 19, tzinfo=timezone.utc)
+        generic_subsidy_act = self._doc(
+            doc_id=901,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="О внесении изменений в порядок предоставления субсидий в АПК",
+            url="https://admkrai.krasnodar.ru/iblock/generic-subsidy.pdf",
+            page_type="new_rule",
+            summary="Изменены условия субсидирования.",
+            business_signal="Изменены условия предоставления субсидий в АПК.",
+        )
+        family_specific_act = self._doc(
+            doc_id=902,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="Постановление №1528 о внесении изменений в порядок господдержки АПК",
+            url="https://admkrai.krasnodar.ru/iblock/postanovlenie-1528.pdf",
+            page_type="new_rule",
+            summary="Изменения по Постановлению 1528 и субсидиям АПК.",
+            business_signal="Сигнал по Постановлению №1528.",
+        )
+        generic_subsidy_act.published_at = published_at
+        family_specific_act.published_at = published_at
+
+        sections, _ = self._build([generic_subsidy_act, family_specific_act])
+        urgent_urls = [doc.url for doc in sections["requires_attention"]]
+
+        self.assertLess(
+            urgent_urls.index(family_specific_act.url),
+            urgent_urls.index(generic_subsidy_act.url),
+        )
+
     def test_deterministic_ordering_is_stable_across_runs(self) -> None:
         documents = [
             self._doc(

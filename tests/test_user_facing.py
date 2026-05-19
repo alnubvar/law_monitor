@@ -9,6 +9,7 @@ from app.user_facing import (
     build_executive_reason,
     is_meaningful_executive_highlight,
     select_executive_summary,
+    user_facing_title,
 )
 
 
@@ -142,8 +143,8 @@ class UserFacingIntentCoherenceTest(unittest.TestCase):
         reason = build_executive_reason(document, section="strategy_signals")
         action = build_executive_action(document, section="strategy_signals")
 
-        self.assertEqual(reason, "Стратегический федеральный сигнал по господдержке или порядку регулирования.")
-        self.assertEqual(action, "Оценить влияние на регулирование АПК.")
+        self.assertEqual(reason, "Сигнал по поддержке экспорта АПК")
+        self.assertEqual(action, "Проверить меры поддержки экспорта, критерии участия и логистику.")
 
     def test_mcx_official_support_news_uses_specific_watchlist_wording(self) -> None:
         document = self._doc(
@@ -160,8 +161,63 @@ class UserFacingIntentCoherenceTest(unittest.TestCase):
         reason = build_executive_reason(document)
         action = build_executive_action(document)
 
-        self.assertEqual(reason, "Изменены условия поддержки")
-        self.assertEqual(action, "Проверить влияние на условия поддержки и регламент применения.")
+        self.assertEqual(reason, "Изменены условия поддержки молочного животноводства")
+        self.assertEqual(action, "Проверить ставки, получателей и условия для молочного направления.")
+
+    def test_postanovlenie_1528_uses_specific_visible_wording(self) -> None:
+        document = self._doc(
+            doc_id=53,
+            source_name="Правительство РФ - документы",
+            region="federal",
+            title="Постановление №1528 о внесении изменений в порядок господдержки АПК",
+            url="https://government.ru/docs/1528/",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="Изменены условия субсидирования.",
+            raw_text="Постановление 1528 изменения порядка государственной поддержки АПК.",
+        )
+
+        title = user_facing_title(document)
+        reason = build_executive_reason(document)
+        action = build_executive_action(document)
+
+        self.assertEqual(title, "Постановление №1528: изменения господдержки")
+        self.assertEqual(reason, "Сигнал по Постановлению №1528")
+        self.assertEqual(action, "Проверить изменения порядка господдержки по Постановлению №1528.")
+
+    def test_export_support_uses_specific_wording_without_overriding_trade_quota(self) -> None:
+        support_document = self._doc(
+            doc_id=54,
+            source_name="Правительство РФ - документы",
+            region="federal",
+            title="Правительство расширило поддержку экспорта АПК",
+            url="https://government.ru/docs/export-support/",
+            action_level="watchlist",
+            page_type="new_rule",
+            summary="Господдержка экспортеров АПК и субсидии на экспорт сельхозпродукции.",
+            raw_text="Программа поддержки экспорта АПК меняет условия участия.",
+        )
+        quota_document = self._doc(
+            doc_id=55,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Правительство утвердило квоту на экспорт зерна",
+            url="https://www.zol.ru/n/quota-specific",
+            action_level="requires_attention",
+            page_type="news_background",
+            summary="Изменение экспортной квоты по зерну.",
+            raw_text="Экспортная квота на зерно установлена на следующий период.",
+        )
+
+        self.assertEqual(
+            build_executive_reason(support_document),
+            "Сигнал по поддержке экспорта АПК",
+        )
+        self.assertEqual(
+            build_executive_action(support_document),
+            "Проверить меры поддержки экспорта, критерии участия и логистику.",
+        )
+        self.assertEqual(build_executive_reason(quota_document), "Изменение экспортных квот")
 
     def test_mcx_official_legislative_news_uses_specific_watchlist_wording(self) -> None:
         document = self._doc(
@@ -491,8 +547,8 @@ class UserFacingIntentCoherenceTest(unittest.TestCase):
         reason = build_executive_reason(document)
         action = build_executive_action(document)
 
-        self.assertEqual(reason, "Изменены условия поддержки")
-        self.assertEqual(action, "Проверить влияние на условия поддержки и регламент применения.")
+        self.assertEqual(reason, "Изменены условия поддержки молочного животноводства")
+        self.assertEqual(action, "Проверить ставки, получателей и условия для молочного направления.")
         self.assertNotIn("экспорт", reason.lower())
 
     def test_restriction_word_alone_without_export_context_is_not_trade(self) -> None:

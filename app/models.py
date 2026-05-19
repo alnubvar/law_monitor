@@ -162,6 +162,7 @@ class DigestItem(BaseModel):
     action_level: str | None = None
     page_type: str | None = None
     summary: str | None = None
+    topic: str | None = None
     impact: str | None = None
     relevance_reason: str | None = None
     published_at: datetime | None = None

@@ -2551,5 +2551,155 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         self.assertNotEqual(result.application_status, "closed")
 
 
+class MedialogiaOntologyAnalyzeTest(unittest.TestCase):
+    def _analyze(self, title: str, raw_text: str):
+        client = MockLLMClient(
+            [
+                "государственная поддержка АПК",
+                "субсидии сельское хозяйство",
+                "льготные кредиты в АПК",
+            ]
+        )
+        return client.analyze_document(
+            title,
+            raw_text,
+            source_name="Правительство РФ - документы",
+            url="http://government.ru/docs/ontology-test/",
+            level="federal",
+            region="federal",
+        )
+
+    def assertTopicFamily(self, result, family: str, label: str) -> None:
+        self.assertEqual(result.topic, label)
+        self.assertIn(f"topic_family:{family}", result.source_facts)
+
+    def test_postanovlenie_1528_is_detected(self) -> None:
+        result = self._analyze(
+            "Постановление №1528: внесены изменения",
+            "Изменения касаются порядка предоставления субсидий и господдержки АПК.",
+        )
+
+        self.assertTopicFamily(result, "postanovlenie_1528", "Постановление №1528")
+
+    def test_concessional_and_investment_credit_terms_are_detected(self) -> None:
+        result = self._analyze(
+            "Субсидии на уплату процентов по инвестиционным кредитам",
+            "Предоставление субсидий по инвестиционным кредитам в агропромышленном комплексе.",
+        )
+
+        self.assertTopicFamily(result, "concessional_credit", "Льготное кредитование АПК")
+
+    def test_dairy_and_milk_cattle_terms_are_detected(self) -> None:
+        result = self._analyze(
+            "Субсидии на разведение КРС молочного направления",
+            "Государственная поддержка молочного животноводства для сельхозтоваропроизводителей.",
+        )
+
+        self.assertTopicFamily(result, "dairy", "Молочное животноводство")
+
+    def test_elite_seed_terms_are_detected(self) -> None:
+        result = self._analyze(
+            "Поддержка элитного семеноводства",
+            "Субсидии для АПК на элитные семена и семеноводство.",
+        )
+
+        self.assertTopicFamily(result, "elite_seed", "Элитное семеноводство")
+
+    def test_export_support_is_detected_as_support_not_trade_control(self) -> None:
+        result = self._analyze(
+            "Правительство расширило поддержку экспорта АПК",
+            "Программа господдержки экспорта сельхозпродукции меняет условия участия.",
+        )
+
+        self.assertTopicFamily(result, "export_support", "Поддержка экспорта АПК")
+        self.assertNotEqual(result.topic, "Изменение экспортных пошлин")
+
+    def test_export_control_wording_does_not_become_export_support_family(self) -> None:
+        result = self._analyze(
+            "Правительство установило экспортный контроль продукции АПК",
+            "Документ вводит квоты, пошлины и ограничения вывоза зерна.",
+        )
+
+        self.assertNotIn("topic_family:export_support", result.source_facts)
+        self.assertNotEqual(result.topic, "Поддержка экспорта АПК")
+
+    def test_grain_compensation_punctuation_variant_is_detected(self) -> None:
+        result = self._analyze(
+            "Финансовое обеспечение / возмещение производителям зерновых культур",
+            "Компенсация части затрат на производство и реализацию зерновых культур (субсидии).",
+        )
+
+        self.assertTopicFamily(
+            result,
+            "grain_compensation",
+            "Компенсации производителям зерновых культур",
+        )
+
+    def test_processing_modernization_is_detected_safely(self) -> None:
+        result = self._analyze(
+            "Субсидии на создание и модернизацию объектов переработки",
+            "Порядок касается переработки сельскохозяйственной продукции и объектов АПК.",
+        )
+
+        self.assertTopicFamily(
+            result,
+            "processing_modernization",
+            "Переработка сельхозпродукции",
+        )
+
+    def test_regional_subsidy_distribution_is_detected(self) -> None:
+        result = self._analyze(
+            "Распределение субсидий из федерального бюджета",
+            "Предоставление и распределение субсидий бюджетам субъектов Российской Федерации на АПК.",
+        )
+
+        self.assertTopicFamily(
+            result,
+            "regional_subsidy_distribution",
+            "Распределение субсидий субъектам РФ",
+        )
+
+    def test_direct_and_indirect_subsidies_are_detected(self) -> None:
+        result = self._analyze(
+            "Прямые и косвенные субсидии сельхозпроизводителям",
+            "Порядок описывает прямые субсидии и косвенные субсидии сельхозтоваропроизводителям.",
+        )
+
+        self.assertTopicFamily(
+            result,
+            "direct_indirect_subsidies",
+            "Прямые/косвенные субсидии сельхозпроизводителям",
+        )
+
+    def test_generic_agriculture_financing_support_and_fish_processing_do_not_get_topic_family(self) -> None:
+        cases = [
+            (
+                "Обзор развития сельского хозяйства",
+                "Состояние сельского хозяйства без мер поддержки, сроков или субсидий.",
+            ),
+            (
+                "Финансирование инфраструктуры",
+                "Финансирование мостов и дорог без контекста АПК.",
+            ),
+            (
+                "Поддержка молодых специалистов",
+                "Поддержка образовательных программ без сельхозконтекста.",
+            ),
+            (
+                "Постановление о развитии рыбопереработки",
+                "Рыбопереработка и рыболовство, без продукции АПК и сельхозпродукции.",
+            ),
+        ]
+
+        for title, raw_text in cases:
+            with self.subTest(title=title):
+                result = self._analyze(title, raw_text)
+                self.assertFalse(
+                    any(fact.startswith("topic_family:") for fact in result.source_facts)
+                )
+                self.assertNotEqual(result.action_level, "requires_attention")
+                self.assertNotEqual(result.topic, "Переработка сельхозпродукции")
+
+
 if __name__ == "__main__":
     unittest.main()
