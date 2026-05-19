@@ -1,363 +1,199 @@
 # Production Runbook
 
-## Назначение
+This runbook is for operating AHSTEP law_monitor on a corporate Linux server.
+It assumes:
 
-Этот runbook нужен для аккуратного запуска AHSTEP law_monitor как production-like internal GR system:
+- code checkout: `/opt/ahstep/law_monitor`
+- real env file: `/etc/ahstep-law-monitor/law-monitor.env`
+- SQLite DB: `/var/lib/ahstep-law-monitor/data/law_monitor.db`
+- reports: `/var/lib/ahstep-law-monitor/reports`
+- backups: `/var/lib/ahstep-law-monitor/backups`
+- temp files: `/var/lib/ahstep-law-monitor/tmp`
+- logs: `/var/log/ahstep-law-monitor`
 
-- с предсказуемым запуском через `.venv\Scripts\python.exe`
-- с проверяемым Telegram-каналом
-- с понятной диагностикой источников, OCR и scheduler
-- с безопасной операционной процедурой перед показом, передачей или деплоем
+The DB, reports, backups, logs, and temp files are outside git. Production
+reports generated under `/var/lib/ahstep-law-monitor/reports` should not be
+copied back into the repository or committed.
 
-## Базовое правило запуска
+## Command Wrapper
 
-Все команды запускайте через project virtualenv:
+Use this pattern for manual app commands:
 
-```powershell
-.\.venv\Scripts\python.exe <команда>
+```bash
+sudo -u ahstep bash -lc 'cd /opt/ahstep/law_monitor && set -a && . /etc/ahstep-law-monitor/law-monitor.env && set +a && .venv/bin/python main.py smoke-check'
 ```
 
-Примеры:
+If an env value contains shell-special characters, quote it in
+`law-monitor.env`.
 
-```powershell
-.\.venv\Scripts\python.exe -m unittest
-.\.venv\Scripts\python.exe main.py smoke-check
-.\.venv\Scripts\python.exe main.py report
+## Daily Service Operations
+
+Status:
+
+```bash
+sudo systemctl status ahstep-scheduler.service
+sudo systemctl status ahstep-telegram-bot.service
 ```
 
-Не смешивайте запуск через системный `python` и `.venv\Scripts\python.exe`.
+Restart:
 
-## Где настраивать `.env`
+```bash
+sudo systemctl restart ahstep-scheduler.service ahstep-telegram-bot.service
+```
 
-Файл `.env` держите в корне проекта рядом с `main.py`.
+Logs:
 
-Минимальный production-like набор:
+```bash
+sudo journalctl -u ahstep-scheduler.service -n 100 --no-pager
+sudo journalctl -u ahstep-telegram-bot.service -n 100 --no-pager
+sudo tail -n 100 /var/log/ahstep-law-monitor/app.log
+```
+
+Only one scheduler should run. Do not run `main.py run-scheduler` manually while
+`ahstep-scheduler.service` is active.
+
+## Manual Validation Checklist
+
+Run after first deployment, after env/proxy changes, and after updates:
+
+```bash
+sudo -u ahstep bash -lc 'cd /opt/ahstep/law_monitor && set -a && . /etc/ahstep-law-monitor/law-monitor.env && set +a && .venv/bin/python main.py init-db'
+
+sudo -u ahstep bash -lc 'cd /opt/ahstep/law_monitor && set -a && . /etc/ahstep-law-monitor/law-monitor.env && set +a && .venv/bin/python main.py smoke-check'
+
+sudo -u ahstep bash -lc 'cd /opt/ahstep/law_monitor && set -a && . /etc/ahstep-law-monitor/law-monitor.env && set +a && .venv/bin/python main.py telegram-check'
+
+sudo -u ahstep bash -lc 'cd /opt/ahstep/law_monitor && set -a && . /etc/ahstep-law-monitor/law-monitor.env && set +a && .venv/bin/python main.py notify-test'
+
+sudo -u ahstep bash -lc 'cd /opt/ahstep/law_monitor && set -a && . /etc/ahstep-law-monitor/law-monitor.env && set +a && .venv/bin/python main.py run-scheduler --once --force-daily-digest'
+```
+
+`telegram-check`, `notify-test`, and the forced daily digest can send Telegram
+messages. Use them only when IT/ops expects test delivery.
+
+Optional diagnostics:
+
+```bash
+sudo -u ahstep bash -lc 'cd /opt/ahstep/law_monitor && set -a && . /etc/ahstep-law-monitor/law-monitor.env && set +a && .venv/bin/python main.py diagnostics --days 7'
+sudo -u ahstep bash -lc 'cd /opt/ahstep/law_monitor && set -a && . /etc/ahstep-law-monitor/law-monitor.env && set +a && .venv/bin/python main.py ocr-check'
+sudo -u ahstep bash -lc 'cd /opt/ahstep/law_monitor && set -a && . /etc/ahstep-law-monitor/law-monitor.env && set +a && .venv/bin/python main.py ocr-queue --status pending'
+```
+
+## Telegram Proxy Change
+
+1. Edit the real env file:
+
+```bash
+sudoedit /etc/ahstep-law-monitor/law-monitor.env
+```
+
+2. Change only the env value:
 
 ```env
-LAW_MONITOR_DB_PATH=data/law_monitor.db
-LAW_MONITOR_LOG_LEVEL=INFO
-
-TELEGRAM_BOT_TOKEN=...
-TELEGRAM_CHAT_ID=...
-TELEGRAM_PROXY_URL=
-TELEGRAM_API_TIMEOUT=30
-
-LAW_MONITOR_OCR_ENABLED=false
-LAW_MONITOR_OCR_LANGUAGE=rus+eng
-LAW_MONITOR_OCR_MAX_PAGES=5
-LAW_MONITOR_OCR_TIMEOUT=120
-LAW_MONITOR_OCR_TESSDATA_PATH=
-
-LAW_MONITOR_TIMEZONE=Europe/Moscow
-LAW_MONITOR_DAILY_REPORT_HOUR=9
-LAW_MONITOR_HOURLY_INTERVAL_MINUTES=360
+TELEGRAM_PROXY_URL=socks5://<user>:<password>@proxy.example.internal:1080
 ```
 
-Дополнительные env vars, если нужно:
+3. Restart services:
 
-- `LAW_MONITOR_REQUEST_TIMEOUT`
-- `LAW_MONITOR_REQUEST_RETRIES`
-- `LAW_MONITOR_REQUEST_BACKOFF_FACTOR`
-- `LAW_MONITOR_USER_AGENT`
-- `LAW_MONITOR_LOG_FILE`
-- `LAW_MONITOR_LOG_MAX_BYTES`
-- `LAW_MONITOR_LOG_BACKUP_COUNT`
-
-LLM enrichment layer:
-
-- по умолчанию отключён: `LLM_ENRICHMENT_ENABLED=false`
-- для локальной безопасной проверки можно оставить `LLM_PROVIDER=mock`
-- OpenAI-compatible endpoint example:
-  - LM Studio: `LLM_BASE_URL=http://127.0.0.1:1234/v1`
-  - Ollama: `LLM_BASE_URL=http://127.0.0.1:11434/v1`
-- дополнительные поля:
-  - `LLM_API_KEY=`
-  - `LLM_MODEL=`
-
-## Обязательные директории и артефакты
-
-Проект использует:
-
-- `data/law_monitor.db` — основная SQLite база
-- `data/documents/` — локальные документы и вложения
-- `data/runtime/` — runtime state и writer lock
-- `reports/` — generated reports
-- `logs/` — application logs
-- `config/sources.yaml` — sources
-- `config/keywords.yaml` — keywords
-
-## Быстрый preflight
-
-Перед показом, передачей или production-like запуском:
-
-```powershell
-.\.venv\Scripts\python.exe main.py init-db
-.\.venv\Scripts\python.exe main.py smoke-check
-.\.venv\Scripts\python.exe main.py diagnostics --days 7
-.\.venv\Scripts\python.exe main.py report
+```bash
+sudo systemctl restart ahstep-telegram-bot.service ahstep-scheduler.service
 ```
 
-Если `smoke-check` не зелёный, сначала разберите warning/error и только потом продолжайте.
+4. Validate:
 
-## Как проверять Telegram
-
-Проверка конфигурации и доставки:
-
-```powershell
-.\.venv\Scripts\python.exe main.py telegram-check
+```bash
+sudo -u ahstep bash -lc 'cd /opt/ahstep/law_monitor && set -a && . /etc/ahstep-law-monitor/law-monitor.env && set +a && .venv/bin/python main.py telegram-check'
 ```
 
-Что считается нормой:
+Do not commit real proxy credentials. `TELEGRAM_PROXY_URL` applies to Telegram
+Bot API calls only. Government/regional source requests use normal server
+networking unless IT explicitly configures `HTTPS_PROXY`, `HTTP_PROXY`, or
+similar source proxy envs.
 
-- `Telegram configured: yes`
-- `Send result: success`
+## Backup
 
-Если нужен отдельный тестовый пинг (`telegram-check` и `notify-test` — алиасы одной команды):
+Preferred DB backup:
 
-```powershell
-.\.venv\Scripts\python.exe main.py notify-test
+```bash
+cd /opt/ahstep/law_monitor
+sudo -u ahstep LAW_MONITOR_ENV_FILE=/etc/ahstep-law-monitor/law-monitor.env bash scripts/backup_db.sh
 ```
 
-## Как запускать Telegram bot
+The script uses `sqlite3 .backup` when `sqlite3` is installed. If `sqlite3` is
+missing, it falls back to copying the DB and WAL/SHM sidecars. The fallback is
+safe only when services are stopped.
 
-Интерактивный bot:
+Backup before:
 
-```powershell
-.\.venv\Scripts\python.exe main.py run-telegram-bot
+- every update;
+- risky maintenance;
+- manual DB inspection or repair;
+- restore attempts.
+
+## Restore
+
+Stop services first:
+
+```bash
+sudo systemctl stop ahstep-scheduler.service ahstep-telegram-bot.service
 ```
 
-После запуска проверьте:
+On systemd hosts, `scripts/restore_db.sh` also checks these services and exits
+non-zero if either is still active. It also refuses to run if the app writer lock
+exists. For non-systemd or manual process runs, the operator must still verify
+that no `main.py` app process is running before restore.
 
-- `/status`
-- `/report`
-- `/sources`
-- `/search экспорт`
+Restore with explicit confirmation:
 
-## Как запускать scheduler
-
-One-shot цикл:
-
-```powershell
-.\.venv\Scripts\python.exe main.py run-scheduler --once
+```bash
+cd /opt/ahstep/law_monitor
+sudo -u ahstep LAW_MONITOR_ENV_FILE=/etc/ahstep-law-monitor/law-monitor.env \
+  bash scripts/restore_db.sh /var/lib/ahstep-law-monitor/backups/law_monitor_YYYYMMDD_HHMMSS.db --confirm
 ```
 
-Это лучший production acceptance запуск перед постоянным scheduler.
+The script creates a pre-restore backup before overwriting the current DB. After
+restore:
 
-Постоянный scheduler:
-
-```powershell
-.\.venv\Scripts\python.exe main.py run-scheduler
+```bash
+sudo -u ahstep bash -lc 'cd /opt/ahstep/law_monitor && set -a && . /etc/ahstep-law-monitor/law-monitor.env && set +a && .venv/bin/python main.py smoke-check'
+sudo systemctl start ahstep-scheduler.service ahstep-telegram-bot.service
+sudo journalctl -u ahstep-scheduler.service -n 100 --no-pager
+sudo journalctl -u ahstep-telegram-bot.service -n 100 --no-pager
 ```
 
-## Как запускать one-shot pipeline вручную
+## Safe Update Procedure
 
-Полный единичный прогон:
+```bash
+sudo systemctl stop ahstep-scheduler.service ahstep-telegram-bot.service
 
-```powershell
-.\.venv\Scripts\python.exe main.py run
+cd /opt/ahstep/law_monitor
+sudo -u ahstep LAW_MONITOR_ENV_FILE=/etc/ahstep-law-monitor/law-monitor.env bash scripts/backup_db.sh
+
+sudo -u ahstep git pull --ff-only
+sudo -u ahstep .venv/bin/python -m pip install -e .
+
+sudo -u ahstep bash -lc 'cd /opt/ahstep/law_monitor && set -a && . /etc/ahstep-law-monitor/law-monitor.env && set +a && .venv/bin/python main.py init-db'
+sudo -u ahstep bash -lc 'cd /opt/ahstep/law_monitor && set -a && . /etc/ahstep-law-monitor/law-monitor.env && set +a && .venv/bin/python main.py smoke-check'
+sudo -u ahstep bash -lc 'cd /opt/ahstep/law_monitor && set -a && . /etc/ahstep-law-monitor/law-monitor.env && set +a && .venv/bin/python main.py telegram-check'
+
+sudo systemctl start ahstep-scheduler.service ahstep-telegram-bot.service
+sudo journalctl -u ahstep-scheduler.service -n 100 --no-pager
+sudo journalctl -u ahstep-telegram-bot.service -n 100 --no-pager
 ```
 
-Отдельные шаги:
-
-```powershell
-.\.venv\Scripts\python.exe main.py collect
-.\.venv\Scripts\python.exe main.py analyze
-.\.venv\Scripts\python.exe main.py report
-```
-
-Форсированный re-analyze используйте только осознанно:
-
-```powershell
-.\.venv\Scripts\python.exe main.py analyze --force
-```
-
-## Как смотреть diagnostics
-
-Диагностика за 7 дней:
-
-```powershell
-.\.venv\Scripts\python.exe main.py diagnostics --days 7
-```
-
-Смотрите в первую очередь:
-
-- source coverage
-- долю noisy материалов
-- missing published dates
-- перекос по `requires_attention` / `watchlist`
-
-## Как проверять OCR
-
-Проверка runtime:
-
-```powershell
-.\.venv\Scripts\python.exe main.py ocr-check
-```
-
-Очередь OCR:
-
-```powershell
-.\.venv\Scripts\python.exe main.py ocr-queue
-.\.venv\Scripts\python.exe main.py ocr-queue --status pending
-.\.venv\Scripts\python.exe main.py ocr-queue --priority high
-```
-
-## Как запускать OCR backlog cleanup
-
-Backfill OCR queue из extraction audit:
-
-```powershell
-.\.venv\Scripts\python.exe main.py ocr-backfill --limit 50
-```
-
-Selective backfill по источнику:
-
-```powershell
-.\.venv\Scripts\python.exe main.py ocr-backfill --source "Нормативные акты Краснодарского края" --limit 20
-```
-
-Запуск OCR runtime по pending queue:
-
-```powershell
-.\.venv\Scripts\python.exe main.py ocr-run --limit 10
-```
-
-Ручное закрытие/triage элемента:
-
-```powershell
-.\.venv\Scripts\python.exe main.py ocr-mark <url> --status done
-.\.venv\Scripts\python.exe main.py ocr-mark <url> --status skipped --notes "duplicate or low value"
-```
-
-## Как понимать operational warnings
-
-В `/report`, daily digest и `/status` operational notices означают:
-
-- `источник не обновлялся N дней` — источник не даёт новых публикаций дольше ожидаемого окна
-- `были ошибки доступа за последние 24 часа` — были ошибки источника, нужен review
-- `OCR queue: в очереди N документов на обработку` — OCR backlog начал накапливаться
-
-Это не обязательно поломка, но это всегда повод на короткую операционную проверку.
-
-Практический порядок чтения:
-
-1. Сначала откройте `/status` и проверьте, нет ли stale/error warnings.
-2. Затем откройте `/sources`, чтобы понять, какой именно источник даёт проблему.
-3. После этого проверьте `diagnostics --days 7`, если нужна детализация по качеству данных.
-
-## Что делать, если source не работает
-
-1. Запустите:
-
-```powershell
-.\.venv\Scripts\python.exe main.py diagnostics --days 7
-.\.venv\Scripts\python.exe main.py collect --source "<точное имя источника>"
-```
-
-2. Проверьте:
-
-- источник не блокирует доступ по `403/429`
-- не изменился HTML/listing path
-- не требуется другой proxy/network route
-- в `config/sources.yaml` источник всё ещё включён и корректен
-
-3. Если ошибка повторяется:
-
-- зафиксируйте source name
-- сохраните текст ошибки и дату
-- не меняйте rules/classification без отдельного решения
-
-## Что делать, если OCR backlog растёт
-
-1. Проверьте runtime:
-
-```powershell
-.\.venv\Scripts\python.exe main.py ocr-check
-```
-
-2. Проверьте pending queue:
-
-```powershell
-.\.venv\Scripts\python.exe main.py ocr-queue --status pending --limit 20
-```
-
-3. Если backlog объясним:
-
-- зафиксируйте причину в acceptance notes
-- при необходимости обработайте high-priority queue first
-
-4. Если backlog не объясним:
-
-- проверьте `LAW_MONITOR_OCR_ENABLED`
-- проверьте `LAW_MONITOR_OCR_TESSDATA_PATH`
-- проверьте доступность Tesseract и языков
-
-5. Для controlled cleanup используйте:
-
-```powershell
-.\.venv\Scripts\python.exe main.py ocr-backfill --limit 50
-.\.venv\Scripts\python.exe main.py ocr-run --limit 10
-```
-
-## Что делать, если Telegram не отправляет сообщения
-
-1. Запустите:
-
-```powershell
-.\.venv\Scripts\python.exe main.py telegram-check
-```
-
-2. Проверьте:
-
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_CHAT_ID`
-- `TELEGRAM_PROXY_URL`, если нужен proxy
-- сетевую доступность Telegram API
-
-3. Если bot polling не стартует:
-
-- проверьте логи в `logs/`
-- проверьте proxy
-- убедитесь, что token не отозван
-
-## Что делать, если команда пишет "Another write operation is already running"
-
-Это single-writer protection для SQLite.
-
-Что делать:
-
-1. Дождаться завершения текущего write-heavy процесса
-2. Не запускать одновременно:
-   - `collect`
-   - `analyze`
-   - `report`
-   - `run`
-   - `ocr-run`
-   - `check-tracked`
-   - `run-scheduler --once`
-3. Если есть сомнение, проверьте `data/runtime/`
-
-Если блокировка пришла из Telegram `/refresh`, user-facing ответ должен быть:
-
-- `Обновление уже выполняется, попробуйте позже.`
-
-## Recommended acceptance command sequence
-
-Минимальная production-like проверка:
-
-```powershell
-.\.venv\Scripts\python.exe -m unittest
-.\.venv\Scripts\python.exe main.py smoke-check
-.\.venv\Scripts\python.exe main.py telegram-check
-.\.venv\Scripts\python.exe main.py diagnostics --days 7
-.\.venv\Scripts\python.exe main.py ocr-check
-.\.venv\Scripts\python.exe main.py ocr-queue --status pending
-.\.venv\Scripts\python.exe main.py run-scheduler --once
-.\.venv\Scripts\python.exe main.py report
-```
-
-## Scope note
-
-В этой фазе проект остаётся docs-first.
-
-Отдельная CLI команда вроде `backup-db` могла бы быть полезна позже, но в этой фазе она намеренно не добавляется: текущая задача закрывается безопасной документированной процедурой backup/restore.
+## Rollback Basics
+
+1. Stop both services.
+2. Check the last good git revision.
+3. Restore code with git, for example `git checkout <known-good-sha>`.
+4. Reinstall dependencies: `.venv/bin/python -m pip install -e .`.
+5. Restore DB only if the failed update changed DB state and the previous DB
+   state is required.
+6. Run `init-db`, `smoke-check`, and `telegram-check`.
+7. Start services and inspect logs.
+
+## Source Network Caveat
+
+Government/regional source behavior can differ by server network, VPN, DNS,
+TLS inspection, and proxy routing. Validate source access from the target server
+network before go-live and after network policy changes.

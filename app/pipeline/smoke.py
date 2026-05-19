@@ -15,7 +15,7 @@ from app.storage import init_db
 
 REQUIRED_TABLES = {"documents", "source_errors"}
 DEFAULT_FIXTURES_DIR = Path("tests/fixtures/regression")
-SMOKE_ARTIFACTS_DIR = config.DATA_DIR / "test_artifacts" / "smoke"
+SMOKE_ARTIFACTS_DIR = config.TMP_DIR / "test_artifacts" / "smoke"
 
 
 @dataclass(slots=True)

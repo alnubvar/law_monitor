@@ -1,0 +1,30 @@
+[Unit]
+Description=AHSTEP law_monitor scheduler
+Documentation=file:/opt/ahstep/law_monitor/docs/PRODUCTION_RUNBOOK.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=ahstep
+Group=ahstep
+WorkingDirectory=/opt/ahstep/law_monitor
+EnvironmentFile=/etc/ahstep-law-monitor/law-monitor.env
+ExecStart=/opt/ahstep/law_monitor/.venv/bin/python main.py run-scheduler
+Restart=always
+RestartSec=10
+TimeoutStopSec=60
+KillSignal=SIGINT
+StandardOutput=journal
+StandardError=journal
+
+# Safe hardening for a service that writes only to persistent app directories.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/ahstep-law-monitor /var/log/ahstep-law-monitor
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

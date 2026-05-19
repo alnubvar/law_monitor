@@ -94,6 +94,76 @@ class ConfigSmokeTest(unittest.TestCase):
             )
         importlib.reload(config_module)
 
+    def test_persistent_path_env_vars_are_loaded(self) -> None:
+        import app.config as config_module
+
+        with patch.dict(
+            os.environ,
+            {
+                "LAW_MONITOR_DATA_DIR": "prod_data",
+                "LAW_MONITOR_REPORTS_DIR": "prod_reports",
+                "LAW_MONITOR_TMP_DIR": "prod_tmp",
+                "LAW_MONITOR_LOG_DIR": "prod_logs",
+                "LAW_MONITOR_DB_PATH": "",
+                "LAW_MONITOR_LOG_FILE": "",
+            },
+            clear=False,
+        ):
+            reloaded = importlib.reload(config_module)
+            self.assertEqual(reloaded.DATA_DIR, Path("prod_data"))
+            self.assertEqual(reloaded.REPORTS_DIR, Path("prod_reports"))
+            self.assertEqual(reloaded.TMP_DIR, Path("prod_tmp"))
+            self.assertEqual(reloaded.LOGS_DIR, Path("prod_logs"))
+            self.assertEqual(reloaded.DB_PATH, Path("prod_data") / "law_monitor.db")
+            self.assertEqual(reloaded.LOG_FILE_PATH, Path("prod_logs") / "app.log")
+        importlib.reload(config_module)
+
+    def test_persistent_path_alias_env_vars_are_loaded(self) -> None:
+        import app.config as config_module
+
+        with patch.dict(
+            os.environ,
+            {
+                "LAW_MONITOR_DATA_DIR": "",
+                "LAW_MONITOR_REPORTS_DIR": "",
+                "LAW_MONITOR_TMP_DIR": "",
+                "LAW_MONITOR_LOG_DIR": "",
+                "LAW_MONITOR_DB_PATH": "",
+                "LAW_MONITOR_LOG_FILE": "",
+                "APP_DATA_DIR": "alias_data",
+                "REPORTS_DIR": "alias_reports",
+                "APP_TMP_DIR": "alias_tmp",
+                "LOG_DIR": "alias_logs",
+            },
+            clear=False,
+        ):
+            reloaded = importlib.reload(config_module)
+            self.assertEqual(reloaded.DATA_DIR, Path("alias_data"))
+            self.assertEqual(reloaded.REPORTS_DIR, Path("alias_reports"))
+            self.assertEqual(reloaded.TMP_DIR, Path("alias_tmp"))
+            self.assertEqual(reloaded.LOGS_DIR, Path("alias_logs"))
+            self.assertEqual(reloaded.DB_PATH, Path("alias_data") / "law_monitor.db")
+            self.assertEqual(reloaded.LOG_FILE_PATH, Path("alias_logs") / "app.log")
+        importlib.reload(config_module)
+
+    def test_scheduler_alias_env_vars_are_loaded(self) -> None:
+        import app.config as config_module
+
+        with patch.dict(
+            os.environ,
+            {
+                "LAW_MONITOR_HOURLY_INTERVAL_MINUTES": "",
+                "LAW_MONITOR_DAILY_REPORT_HOUR": "",
+                "SCHEDULER_INTERVAL_MINUTES": "15",
+                "SCHEDULER_DAILY_REPORT_HOUR": "8",
+            },
+            clear=False,
+        ):
+            reloaded = importlib.reload(config_module)
+            self.assertEqual(reloaded.SCHEDULER_HOURLY_INTERVAL_MINUTES, 15)
+            self.assertEqual(reloaded.SCHEDULER_DAILY_REPORT_HOUR, 8)
+        importlib.reload(config_module)
+
 
 if __name__ == "__main__":
     unittest.main()

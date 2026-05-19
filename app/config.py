@@ -18,29 +18,30 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_DIR = BASE_DIR / "config"
-DATA_DIR = BASE_DIR / "data"
-RUNTIME_DIR = DATA_DIR / "runtime"
-DOCUMENTS_DIR = DATA_DIR / "documents"
-REPORTS_DIR = BASE_DIR / "reports"
 DOCS_DIR = BASE_DIR / "docs"
-LOGS_DIR = BASE_DIR / "logs"
 
 
-def _get_env_str(name: str, default: str = "") -> str:
-    value = os.getenv(name)
-    if value is None:
-        value = default
-    return str(value).strip()
+def _get_env_str(name: str, default: str = "", *, aliases: tuple[str, ...] = ()) -> str:
+    for candidate in (name, *aliases):
+        value = os.getenv(candidate)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return str(default).strip()
+
+
+def _get_env_path(name: str, default: str | Path, *, aliases: tuple[str, ...] = ()) -> Path:
+    return Path(_get_env_str(name, str(default), aliases=aliases))
 
 
 def _get_env_int(
     name: str,
     default: int,
     *,
+    aliases: tuple[str, ...] = (),
     min_value: int | None = None,
     max_value: int | None = None,
 ) -> int:
-    raw_value = _get_env_str(name, str(default))
+    raw_value = _get_env_str(name, str(default), aliases=aliases)
     try:
         value = int(raw_value)
     except ValueError:
@@ -106,13 +107,35 @@ def _get_env_bool(name: str, default: bool) -> bool:
     return raw in {"1", "true", "yes", "y", "on"}
 
 
-DB_PATH = Path(_get_env_str("LAW_MONITOR_DB_PATH", str(DATA_DIR / "law_monitor.db")))
+DATA_DIR = _get_env_path(
+    "LAW_MONITOR_DATA_DIR",
+    BASE_DIR / "data",
+    aliases=("APP_DATA_DIR",),
+)
+RUNTIME_DIR = _get_env_path("LAW_MONITOR_RUNTIME_DIR", DATA_DIR / "runtime")
+DOCUMENTS_DIR = _get_env_path("LAW_MONITOR_DOCUMENTS_DIR", DATA_DIR / "documents")
+TMP_DIR = _get_env_path(
+    "LAW_MONITOR_TMP_DIR",
+    DATA_DIR,
+    aliases=("APP_TMP_DIR",),
+)
+REPORTS_DIR = _get_env_path(
+    "LAW_MONITOR_REPORTS_DIR",
+    BASE_DIR / "reports",
+    aliases=("REPORTS_DIR",),
+)
+LOGS_DIR = _get_env_path(
+    "LAW_MONITOR_LOG_DIR",
+    BASE_DIR / "logs",
+    aliases=("LOG_DIR",),
+)
+DB_PATH = _get_env_path("LAW_MONITOR_DB_PATH", DATA_DIR / "law_monitor.db")
 REQUEST_TIMEOUT = _get_env_int("LAW_MONITOR_REQUEST_TIMEOUT", 30, min_value=1)
 REQUEST_RETRIES = _get_env_int("LAW_MONITOR_REQUEST_RETRIES", 2, min_value=0)
 REQUEST_BACKOFF_FACTOR = _get_env_float("LAW_MONITOR_REQUEST_BACKOFF_FACTOR", 1.0)
 USER_AGENT = _get_env_str("LAW_MONITOR_USER_AGENT", "law-monitor-mvp/0.1")
 LOG_LEVEL = _get_env_str("LAW_MONITOR_LOG_LEVEL", "INFO").upper()
-LOG_FILE_PATH = Path(_get_env_str("LAW_MONITOR_LOG_FILE", str(LOGS_DIR / "app.log")))
+LOG_FILE_PATH = _get_env_path("LAW_MONITOR_LOG_FILE", LOGS_DIR / "app.log")
 LOG_MAX_BYTES = _get_env_int("LAW_MONITOR_LOG_MAX_BYTES", 5 * 1024 * 1024, min_value=1024)
 LOG_BACKUP_COUNT = _get_env_int("LAW_MONITOR_LOG_BACKUP_COUNT", 5, min_value=0)
 TELEGRAM_BOT_TOKEN = _get_env_str("TELEGRAM_BOT_TOKEN")
@@ -135,12 +158,14 @@ SCHEDULER_TIMEZONE = _get_timezone(SCHEDULER_TIMEZONE_NAME)
 SCHEDULER_DAILY_REPORT_HOUR = _get_env_int(
     "LAW_MONITOR_DAILY_REPORT_HOUR",
     9,
+    aliases=("SCHEDULER_DAILY_REPORT_HOUR",),
     min_value=0,
     max_value=23,
 )
 SCHEDULER_HOURLY_INTERVAL_MINUTES = _get_env_int(
     "LAW_MONITOR_HOURLY_INTERVAL_MINUTES",
     360,
+    aliases=("SCHEDULER_INTERVAL_MINUTES",),
     min_value=1,
 )
 DEFAULT_REQUEST_HEADERS = {"User-Agent": USER_AGENT}
@@ -185,6 +210,7 @@ def ensure_directories() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
+    TMP_DIR.mkdir(parents=True, exist_ok=True)
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
     LOGS_DIR.mkdir(parents=True, exist_ok=True)

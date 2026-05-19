@@ -740,7 +740,7 @@ def _build_period_report_attachment(
             txt_content = _markdown_to_plain_text(markdown)
             timestamp = datetime.now(config.SCHEDULER_TIMEZONE).strftime("%Y-%m-%d")
             suffix = uuid.uuid4().hex[:8]
-            attachment_dir = config.DATA_DIR / "telegram_attachments"
+            attachment_dir = config.TMP_DIR / "telegram_attachments"
             attachment_dir.mkdir(parents=True, exist_ok=True)
             txt_path = attachment_dir / f"gr_monitoring_{timestamp}_{period.kind}_{period.days}d_{suffix}.txt"
             txt_path.write_text(txt_content, encoding="utf-8")

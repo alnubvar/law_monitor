@@ -1,114 +1,79 @@
 # Backup and Restore
 
-## Когда делать backup
+Production data lives outside the git checkout:
 
-Backup обязателен:
+- DB: `/var/lib/ahstep-law-monitor/data/law_monitor.db`
+- reports: `/var/lib/ahstep-law-monitor/reports`
+- backups: `/var/lib/ahstep-law-monitor/backups`
+- temp files: `/var/lib/ahstep-law-monitor/tmp`
+- logs: `/var/log/ahstep-law-monitor`
 
-- перед ручными изменениями в базе
-- перед production-like demo
-- перед handover
-- перед любым risky maintenance запуском
-- перед массовыми collect/analyze/OCR операциями, если нужна точка отката
+Local development still defaults to `data/`, `reports/`, and `logs/` inside the
+repository.
 
-## Что сохранять
+## Backup
 
-Минимальный набор:
+Run before updates, risky maintenance, manual DB work, and restore attempts:
 
-- `data/law_monitor.db`
-- `reports/`
-- при необходимости `logs/`
-
-Если нужны вложения и локальные документы:
-
-- `data/documents/`
-
-## Где лежат данные
-
-- SQLite DB: `data/law_monitor.db`
-- runtime state: `data/runtime/`
-- local documents: `data/documents/`
-- reports: `reports/`
-- logs: `logs/`
-
-## Safe backup procedure
-
-1. Остановите write-heavy операции:
-
-- `run-scheduler`
-- `run`
-- `collect`
-- `analyze`
-- `report`
-- `ocr-run`
-- `check-tracked`
-- Telegram `/refresh`
-
-2. Убедитесь, что нет активного writer lock в `data/runtime/`, либо дождитесь завершения процесса.
-
-3. Создайте backup directory, если его ещё нет:
-
-```powershell
-New-Item -ItemType Directory -Force -Path "data\backups" | Out-Null
+```bash
+cd /opt/ahstep/law_monitor
+sudo -u ahstep LAW_MONITOR_ENV_FILE=/etc/ahstep-law-monitor/law-monitor.env \
+  bash scripts/backup_db.sh
 ```
 
-4. Скопируйте базу в backup location.
+The script uses `sqlite3 .backup` when available. If `sqlite3` is not installed,
+it copies the DB and WAL/SHM sidecars. The copy fallback should be used only
+after stopping services:
 
-Пример:
-
-```powershell
-$ts = Get-Date -Format "yyyyMMdd_HHmmss"
-Copy-Item -LiteralPath "data\law_monitor.db" -Destination "data\backups\law_monitor_$ts.db"
+```bash
+sudo systemctl stop ahstep-scheduler.service ahstep-telegram-bot.service
 ```
 
-5. Скопируйте reports:
+Backup files are timestamped as:
 
-```powershell
-$ts = Get-Date -Format "yyyyMMdd_HHmmss"
-Copy-Item -LiteralPath "reports" -Destination "data\backups\reports_$ts" -Recurse
+```text
+/var/lib/ahstep-law-monitor/backups/law_monitor_YYYYMMDD_HHMMSS.db
 ```
 
-6. Если нужен расширенный backup:
+## Restore
 
-```powershell
-$ts = Get-Date -Format "yyyyMMdd_HHmmss"
-Copy-Item -LiteralPath "data\documents" -Destination "data\backups\documents_$ts" -Recurse
+Always stop services first:
+
+```bash
+sudo systemctl stop ahstep-scheduler.service ahstep-telegram-bot.service
 ```
 
-## Restore procedure
+On systemd hosts, `scripts/restore_db.sh` enforces this and exits non-zero if
+either service is still active. It also refuses to run while the app writer lock
+exists. On non-systemd/manual deployments, the operator must verify no app
+process is running before restore.
 
-1. Остановите scheduler, bot и все write-heavy команды.
-2. Сохраните текущий broken state в отдельный backup, даже если он кажется плохим.
-3. Восстановите нужный `.db` файл поверх `data/law_monitor.db`.
+Restore requires an explicit `--confirm`:
 
-Пример:
-
-```powershell
-Copy-Item -LiteralPath "data\backups\law_monitor_20260507_150000.db" -Destination "data\law_monitor.db" -Force
+```bash
+cd /opt/ahstep/law_monitor
+sudo -u ahstep LAW_MONITOR_ENV_FILE=/etc/ahstep-law-monitor/law-monitor.env \
+  bash scripts/restore_db.sh /var/lib/ahstep-law-monitor/backups/law_monitor_YYYYMMDD_HHMMSS.db --confirm
 ```
 
-4. При необходимости верните reports:
+The restore script creates a pre-restore backup of the current DB before it
+overwrites anything.
 
-```powershell
-Copy-Item -LiteralPath "data\backups\reports_20260507_150000\*" -Destination "reports" -Recurse -Force
+Validate and start services:
+
+```bash
+sudo -u ahstep bash -lc 'cd /opt/ahstep/law_monitor && set -a && . /etc/ahstep-law-monitor/law-monitor.env && set +a && .venv/bin/python main.py smoke-check'
+sudo systemctl start ahstep-scheduler.service ahstep-telegram-bot.service
+sudo journalctl -u ahstep-scheduler.service -n 100 --no-pager
+sudo journalctl -u ahstep-telegram-bot.service -n 100 --no-pager
 ```
 
-5. Если восстанавливались локальные документы, верните и их:
+## Reports and Logs
 
-```powershell
-Copy-Item -LiteralPath "data\backups\documents_20260507_150000\*" -Destination "data\documents" -Recurse -Force
+DB scripts cover the SQLite database only. For a wider operational snapshot,
+copy these directories separately:
+
+```bash
+sudo tar -C /var/lib -czf /var/lib/ahstep-law-monitor/backups/reports_$(date +%Y%m%d_%H%M%S).tar.gz ahstep-law-monitor/reports
+sudo tar -C /var/log -czf /var/lib/ahstep-law-monitor/backups/logs_$(date +%Y%m%d_%H%M%S).tar.gz ahstep-law-monitor
 ```
-
-6. После restore обязательно выполните:
-
-```powershell
-.\.venv\Scripts\python.exe main.py smoke-check
-.\.venv\Scripts\python.exe main.py diagnostics --days 7
-```
-
-## Minimal backup checklist
-
-- [ ] write-heavy процессы остановлены
-- [ ] `data/law_monitor.db` скопирован
-- [ ] `reports/` скопирован
-- [ ] backup path записан в acceptance notes
-- [ ] после restore выполнен `smoke-check`
