@@ -33,6 +33,7 @@ class StorageSmokeTest(unittest.TestCase):
         self.assertIn("source_audit", tables)
         self.assertIn("document_extraction_audit", tables)
         self.assertIn("ocr_queue", tables)
+        self.assertIn("document_enrichments", tables)
 
         with closing(sqlite3.connect(db_path)) as connection:
             columns = {
@@ -43,6 +44,19 @@ class StorageSmokeTest(unittest.TestCase):
         self.assertIn("support_status", columns)
         self.assertIn("application_status", columns)
         self.assertIn("terms_text", columns)
+
+        with closing(sqlite3.connect(db_path)) as connection:
+            enrichment_columns = {
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA table_info(document_enrichments)"
+                ).fetchall()
+            }
+        self.assertIn("prompt_version", enrichment_columns)
+        self.assertIn("status", enrichment_columns)
+        self.assertIn("facts_json", enrichment_columns)
+        self.assertIn("source_hash", enrichment_columns)
+        self.assertIn("enriched_at", enrichment_columns)
 
     def test_ocr_queue_upsert_and_status_update(self) -> None:
         db_path = Path("data/test_artifacts/test_ocr_queue.db")

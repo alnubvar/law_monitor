@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import json
 import sqlite3
 from hashlib import sha256
 from contextlib import contextmanager
@@ -445,12 +446,17 @@ def init_db(db_path: Path | str = DB_PATH) -> None:
                 document_url TEXT NOT NULL,
                 provider TEXT NOT NULL,
                 model TEXT NOT NULL DEFAULT '',
+                prompt_version TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'success',
+                facts_json TEXT,
+                source_hash TEXT,
                 executive_summary TEXT,
                 business_impact TEXT,
                 recommended_action TEXT,
                 deadline_hint TEXT,
                 confidence REAL,
                 error TEXT,
+                enriched_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -461,6 +467,34 @@ def init_db(db_path: Path | str = DB_PATH) -> None:
         )
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_document_enrichments_updated_at ON document_enrichments(updated_at DESC)"
+        )
+        enrichment_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(document_enrichments)").fetchall()
+        }
+        if "prompt_version" not in enrichment_columns:
+            connection.execute(
+                "ALTER TABLE document_enrichments ADD COLUMN prompt_version TEXT NOT NULL DEFAULT ''"
+            )
+        if "status" not in enrichment_columns:
+            connection.execute(
+                "ALTER TABLE document_enrichments ADD COLUMN status TEXT NOT NULL DEFAULT 'success'"
+            )
+        if "facts_json" not in enrichment_columns:
+            connection.execute("ALTER TABLE document_enrichments ADD COLUMN facts_json TEXT")
+        if "source_hash" not in enrichment_columns:
+            connection.execute("ALTER TABLE document_enrichments ADD COLUMN source_hash TEXT")
+        if "enriched_at" not in enrichment_columns:
+            connection.execute("ALTER TABLE document_enrichments ADD COLUMN enriched_at TEXT")
+            connection.execute(
+                """
+                UPDATE document_enrichments
+                SET enriched_at = COALESCE(updated_at, created_at)
+                WHERE enriched_at IS NULL OR enriched_at = ''
+                """
+            )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_document_enrichments_cache ON document_enrichments(document_url, prompt_version, source_hash)"
         )
         connection.commit()
     logger.info("Database initialized at %s", db_path)
@@ -687,11 +721,28 @@ def save_document_enrichment(
     provider: str,
     model: str,
     enrichment: EnrichmentResult,
+    prompt_version: str | None = None,
+    source_hash: str | None = None,
     db_path: Path | str = DB_PATH,
 ) -> int:
     now = datetime.now(timezone.utc)
     normalized_provider = (provider or "").strip() or "unknown"
     normalized_model = (model or "").strip()
+    normalized_prompt_version = (
+        prompt_version or enrichment.prompt_version or ""
+    ).strip()
+    normalized_source_hash = (source_hash or enrichment.source_hash or "").strip() or None
+    facts_payload = enrichment.facts_payload()
+    facts_json = (
+        json.dumps(facts_payload, ensure_ascii=False, sort_keys=True)
+        if facts_payload is not None
+        else None
+    )
+    status = (enrichment.status or "").strip() or (
+        "failed" if enrichment.error else "success"
+    )
+    if enrichment.error and status == "success":
+        status = "failed"
     with _connect_db(db_path) as connection:
         connection.execute(
             """
@@ -700,23 +751,33 @@ def save_document_enrichment(
                 document_url,
                 provider,
                 model,
+                prompt_version,
+                status,
+                facts_json,
+                source_hash,
                 executive_summary,
                 business_impact,
                 recommended_action,
                 deadline_hint,
                 confidence,
                 error,
+                enriched_at,
                 created_at,
                 updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(document_url, provider, model) DO UPDATE SET
                 document_id = excluded.document_id,
+                prompt_version = excluded.prompt_version,
+                status = excluded.status,
+                facts_json = excluded.facts_json,
+                source_hash = excluded.source_hash,
                 executive_summary = excluded.executive_summary,
                 business_impact = excluded.business_impact,
                 recommended_action = excluded.recommended_action,
                 deadline_hint = excluded.deadline_hint,
                 confidence = excluded.confidence,
                 error = excluded.error,
+                enriched_at = excluded.enriched_at,
                 updated_at = excluded.updated_at
             """,
             (
@@ -724,12 +785,17 @@ def save_document_enrichment(
                 document_url,
                 normalized_provider,
                 normalized_model,
+                normalized_prompt_version,
+                status,
+                facts_json,
+                normalized_source_hash,
                 enrichment.executive_summary,
                 enrichment.business_impact,
                 enrichment.recommended_action,
                 enrichment.deadline_hint,
                 enrichment.confidence,
                 enrichment.error,
+                _serialize_dt(now),
                 _serialize_dt(now),
                 _serialize_dt(now),
             ),
@@ -752,6 +818,8 @@ def get_document_enrichment(
     *,
     provider: str | None = None,
     model: str | None = None,
+    prompt_version: str | None = None,
+    source_hash: str | None = None,
     db_path: Path | str = DB_PATH,
 ) -> dict[str, Any] | None:
     clauses = ["document_url = ?"]
@@ -762,6 +830,12 @@ def get_document_enrichment(
     if model is not None:
         clauses.append("model = ?")
         parameters.append(model)
+    if prompt_version is not None:
+        clauses.append("prompt_version = ?")
+        parameters.append(prompt_version)
+    if source_hash is not None:
+        clauses.append("source_hash = ?")
+        parameters.append(source_hash)
     query = (
         "SELECT * FROM document_enrichments "
         f"WHERE {' AND '.join(clauses)} "
@@ -779,6 +853,8 @@ def list_document_enrichments(
     *,
     provider: str | None = None,
     model: str | None = None,
+    prompt_version: str | None = None,
+    source_hash: str | None = None,
     db_path: Path | str = DB_PATH,
 ) -> dict[str, dict[str, Any]]:
     normalized_urls = [url.strip() for url in document_urls if (url or "").strip()]
@@ -793,6 +869,12 @@ def list_document_enrichments(
     if model is not None:
         clauses.append("model = ?")
         parameters.append(model)
+    if prompt_version is not None:
+        clauses.append("prompt_version = ?")
+        parameters.append(prompt_version)
+    if source_hash is not None:
+        clauses.append("source_hash = ?")
+        parameters.append(source_hash)
     query = (
         "SELECT * FROM document_enrichments "
         f"WHERE {' AND '.join(clauses)} "
@@ -823,6 +905,7 @@ def _row_to_document_enrichment(row: sqlite3.Row) -> dict[str, Any]:
     payload: dict[str, Any] = dict(row)
     payload["created_at"] = _parse_dt(payload.get("created_at"))
     payload["updated_at"] = _parse_dt(payload.get("updated_at"))
+    payload["enriched_at"] = _parse_dt(payload.get("enriched_at"))
     if payload.get("confidence") is not None:
         payload["confidence"] = float(payload["confidence"])
     return payload

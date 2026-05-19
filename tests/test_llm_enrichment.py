@@ -6,20 +6,28 @@ from pathlib import Path
 from unittest import mock
 
 from app.llm.enrichment import (
+    DOCUMENT_CARD_PROMPT_VERSION,
+    DocumentCardFacts,
     DocumentEnricher,
     EnrichmentResult,
     MockEnrichmentProvider,
     OpenAICompatibleEnrichmentProvider,
+    build_document_card_input,
     build_document_enricher,
+    compute_document_card_source_hash,
     get_display_enrichment,
     is_enrichment_eligible,
 )
+from app.llm.prompts import DOCUMENT_CARD_SYSTEM_PROMPT
 from app.models import AnalysisResult, RawDocument
+from app.pipeline.enrich import run_enrich_docs
 from app.pipeline import analyze as analyze_pipeline
 from app.storage import (
     count_document_enrichments,
     get_document_enrichment,
     init_db,
+    list_documents,
+    save_document,
     save_document_enrichment,
 )
 
@@ -55,6 +63,32 @@ def _raw_document() -> RawDocument:
     )
 
 
+def _analyzed_raw_document(*, doc_id: int = 1, url: str = "https://example.test/doc") -> RawDocument:
+    analysis = _analysis_result("requires_attention")
+    document = _raw_document().model_copy(
+        update={
+            "id": doc_id,
+            "url": url,
+            "title": "О проведении отбора на предоставление субсидии",
+            "raw_text": (
+                "Открыт прием заявок на предоставление субсидии "
+                "сельхозтоваропроизводителям. Срок подачи заявок до 1 июня 2026 года."
+            ),
+            "is_relevant": analysis.is_relevant,
+            "relevance_reason": analysis.relevance_reason,
+            "importance": analysis.importance,
+            "action_level": analysis.action_level,
+            "page_type": analysis.page_type,
+            "summary": analysis.summary,
+            "impact": analysis.impact,
+            "application_status": analysis.application_status,
+            "deadline_text": analysis.deadline_text,
+            "status": "analyzed",
+        }
+    )
+    return document
+
+
 class _SpyProvider(MockEnrichmentProvider):
     def __init__(self) -> None:
         self.calls = 0
@@ -67,6 +101,15 @@ class _SpyProvider(MockEnrichmentProvider):
 class _FailingProvider(MockEnrichmentProvider):
     def enrich_document(self, **kwargs) -> EnrichmentResult:
         raise RuntimeError("provider timeout")
+
+
+class _CountingProvider(MockEnrichmentProvider):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def enrich_document(self, **kwargs) -> EnrichmentResult:
+        self.calls += 1
+        return super().enrich_document(**kwargs)
 
 
 class LLMEnrichmentTest(unittest.TestCase):
@@ -169,6 +212,23 @@ class LLMEnrichmentTest(unittest.TestCase):
 
         self.assertIsNone(result)
 
+    def test_mock_provider_requires_no_real_api_key(self) -> None:
+        with mock.patch("app.config.LLM_DOCUMENT_ENRICHMENT_ENABLED", True):
+            with mock.patch("app.config.LLM_PROVIDER", "mock"):
+                with mock.patch("app.config.LLM_API_KEY", ""):
+                    enricher = build_document_enricher()
+
+        result = enricher.maybe_enrich_document(
+            title="Тест",
+            raw_text="Открыт прием заявок на субсидию.",
+            analysis=_analysis_result("requires_attention"),
+            source_name="Источник",
+        )
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertIsNone(result.error)
+
     def test_mock_enrichment_returns_structured_object(self) -> None:
         enricher = DocumentEnricher(enabled=True, provider=MockEnrichmentProvider())
 
@@ -195,6 +255,15 @@ class LLMEnrichmentTest(unittest.TestCase):
         )
         self.assertEqual(result.deadline_hint, "до 1 июня 2026 года")
         self.assertGreaterEqual(result.confidence or 0.0, 0.8)
+        facts = result.facts_payload()
+        self.assertIsInstance(facts, dict)
+        assert facts is not None
+        self.assertEqual(facts["document_type"], "отбор")
+        self.assertEqual(facts["status"], "прием открыт")
+        self.assertEqual(facts["deadline"], "2026-06-01")
+        self.assertIsNone(facts["support_type"])
+        self.assertEqual(facts["confidence"], "high")
+        self.assertTrue(facts["source_quotes"])
 
     def test_mock_enrichment_uses_safe_generic_regional_npa_summary(self) -> None:
         analysis = _analysis_result("requires_attention").model_copy(
@@ -511,6 +580,207 @@ class LLMEnrichmentTest(unittest.TestCase):
         self.assertIsNotNone(enrichment)
         assert enrichment is not None
         self.assertIn("provider timeout", enrichment["error"] or "")
+
+    def test_prompt_contains_no_hallucination_and_null_if_missing_rules(self) -> None:
+        prompt = DOCUMENT_CARD_SYSTEM_PROMPT.lower()
+
+        self.assertIn("не придумывай", prompt)
+        self.assertIn("null", prompt)
+        self.assertIn("неизвестно", prompt)
+        self.assertIn("только исходный текст", prompt)
+        self.assertIn("не меняй", prompt)
+        self.assertIn("action_level", prompt)
+
+    def test_source_quotes_are_preserved_in_facts_json(self) -> None:
+        db_path = self._db_path("llm_enrichment_source_quotes.db")
+        init_db(db_path)
+        facts = DocumentCardFacts(
+            document_type="отбор",
+            status="прием открыт",
+            short_summary="Открыт прием заявок на субсидию.",
+            why_matters="Нужно проверить применимость для GR.",
+            what_to_check="Проверить условия участия.",
+            confidence="high",
+            source_quotes=["Открыт прием заявок", "сельхозтоваропроизводителям"],
+        )
+        save_document_enrichment(
+            document_id=1,
+            document_url="https://example.test/doc-quotes",
+            provider="mock",
+            model="mock-enrichment",
+            enrichment=EnrichmentResult.from_facts(facts),
+            db_path=db_path,
+        )
+
+        enrichment = get_document_enrichment(
+            "https://example.test/doc-quotes",
+            provider="mock",
+            model="mock-enrichment",
+            db_path=db_path,
+        )
+
+        self.assertIsNotNone(enrichment)
+        assert enrichment is not None
+        self.assertIn('"source_quotes"', enrichment["facts_json"])
+        self.assertIn("Открыт прием заявок", enrichment["facts_json"])
+
+    def test_enrichment_command_skips_cached_docs(self) -> None:
+        db_path = self._db_path("llm_enrichment_command_cached.db")
+        init_db(db_path)
+        document = _analyzed_raw_document(url="https://example.test/cached")
+        document_id = save_document(document, db_path=db_path)
+        stored_document = list_documents(db_path=db_path)[0]
+        prepared = build_document_card_input(
+            title=stored_document.title,
+            raw_text=stored_document.raw_text,
+            analysis=stored_document,
+            source_name=stored_document.source_name,
+            url=stored_document.url,
+            level=stored_document.level,
+            region=stored_document.region,
+            published_at=stored_document.published_at,
+            document_type=stored_document.document_type,
+        )
+        source_hash = compute_document_card_source_hash(prepared)
+        save_document_enrichment(
+            document_id=document_id,
+            document_url=stored_document.url,
+            provider="mock",
+            model="mock-enrichment",
+            enrichment=EnrichmentResult.from_facts(
+                DocumentCardFacts(
+                    short_summary="Cached summary.",
+                    why_matters="Cached impact.",
+                    what_to_check="Cached action.",
+                    confidence="high",
+                    source_quotes=["Cached quote"],
+                ),
+                source_hash=source_hash,
+            ),
+            prompt_version=DOCUMENT_CARD_PROMPT_VERSION,
+            source_hash=source_hash,
+            db_path=db_path,
+        )
+        provider = _CountingProvider()
+        enricher = DocumentEnricher(
+            enabled=True,
+            provider=provider,
+            provider_name="mock",
+            model_name="mock-enrichment",
+        )
+
+        with mock.patch("app.pipeline.enrich.get_document_enricher", return_value=enricher):
+            result = run_enrich_docs(days=7, limit=5, db_path=db_path)
+
+        self.assertEqual(result.selected, 1)
+        self.assertEqual(result.skipped_cached, 1)
+        self.assertEqual(result.enriched, 0)
+        self.assertEqual(provider.calls, 0)
+
+    def test_force_recomputes_cached_docs(self) -> None:
+        db_path = self._db_path("llm_enrichment_command_force.db")
+        init_db(db_path)
+        document = _analyzed_raw_document(url="https://example.test/force")
+        document_id = save_document(document, db_path=db_path)
+        stored_document = list_documents(db_path=db_path)[0]
+        prepared = build_document_card_input(
+            title=stored_document.title,
+            raw_text=stored_document.raw_text,
+            analysis=stored_document,
+            source_name=stored_document.source_name,
+            url=stored_document.url,
+            level=stored_document.level,
+            region=stored_document.region,
+            published_at=stored_document.published_at,
+            document_type=stored_document.document_type,
+        )
+        source_hash = compute_document_card_source_hash(prepared)
+        save_document_enrichment(
+            document_id=document_id,
+            document_url=stored_document.url,
+            provider="mock",
+            model="mock-enrichment",
+            enrichment=EnrichmentResult.from_facts(
+                DocumentCardFacts(
+                    short_summary="Cached summary.",
+                    why_matters="Cached impact.",
+                    what_to_check="Cached action.",
+                    confidence="high",
+                    source_quotes=["Cached quote"],
+                ),
+                source_hash=source_hash,
+            ),
+            prompt_version=DOCUMENT_CARD_PROMPT_VERSION,
+            source_hash=source_hash,
+            db_path=db_path,
+        )
+        provider = _CountingProvider()
+        enricher = DocumentEnricher(
+            enabled=True,
+            provider=provider,
+            provider_name="mock",
+            model_name="mock-enrichment",
+        )
+
+        with mock.patch("app.pipeline.enrich.get_document_enricher", return_value=enricher):
+            result = run_enrich_docs(days=7, limit=5, force=True, db_path=db_path)
+
+        self.assertEqual(result.selected, 1)
+        self.assertEqual(result.skipped_cached, 0)
+        self.assertEqual(result.enriched, 1)
+        self.assertEqual(provider.calls, 1)
+        self.assertEqual(count_document_enrichments(db_path=db_path), 1)
+
+    def test_action_level_is_not_changed_by_enrichment_command(self) -> None:
+        db_path = self._db_path("llm_enrichment_action_level_unchanged.db")
+        init_db(db_path)
+        save_document(_analyzed_raw_document(url="https://example.test/action-level"), db_path=db_path)
+        provider = _CountingProvider()
+        enricher = DocumentEnricher(
+            enabled=True,
+            provider=provider,
+            provider_name="mock",
+            model_name="mock-enrichment",
+        )
+
+        with mock.patch("app.pipeline.enrich.get_document_enricher", return_value=enricher):
+            result = run_enrich_docs(days=7, limit=5, db_path=db_path)
+
+        documents = list_documents(db_path=db_path)
+        self.assertEqual(result.enriched, 1)
+        self.assertEqual(documents[0].action_level, "requires_attention")
+
+    def test_enrichment_is_limited_to_selected_visible_docs(self) -> None:
+        db_path = self._db_path("llm_enrichment_limited_visible.db")
+        init_db(db_path)
+        save_document(_analyzed_raw_document(doc_id=1, url="https://example.test/visible-1"), db_path=db_path)
+        save_document(_analyzed_raw_document(doc_id=2, url="https://example.test/visible-2"), db_path=db_path)
+        hidden = _analyzed_raw_document(doc_id=3, url="https://admkrai.krasnodar.ru/content/1270/").model_copy(
+            update={
+                "source_name": "Нормативные акты Краснодарского края",
+                "region": "krasnodar",
+                "title": "Формы документов, связанных с противодействием коррупции",
+                "page_type": "reference_page",
+                "action_level": "watchlist",
+                "importance": "medium",
+                "summary": "Формы документов по противодействию коррупции.",
+            }
+        )
+        save_document(hidden, db_path=db_path)
+        provider = _CountingProvider()
+        enricher = DocumentEnricher(
+            enabled=True,
+            provider=provider,
+            provider_name="mock",
+            model_name="mock-enrichment",
+        )
+
+        with mock.patch("app.pipeline.enrich.get_document_enricher", return_value=enricher):
+            result = run_enrich_docs(days=7, limit=1, db_path=db_path)
+
+        self.assertEqual(result.selected, 1)
+        self.assertEqual(result.enriched, 1)
+        self.assertEqual(provider.calls, 1)
 
 
 if __name__ == "__main__":

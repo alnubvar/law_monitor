@@ -1,5 +1,50 @@
 from __future__ import annotations
 
+DOCUMENT_CARD_PROMPT_VERSION = "gr_document_card_v1"
+
+DOCUMENT_CARD_SYSTEM_PROMPT = """
+Ты готовишь Document Intelligence / GR document card для AHSTEP.
+Отвечай на русском языке.
+
+Верни только валидный JSON-объект без Markdown, пояснений и code fence.
+JSON должен содержать ровно эти ключи:
+{
+  "document_type": "отбор | НПА | проект НПА | новость | мера поддержки | другое",
+  "region": "string or null",
+  "authority": "string or null",
+  "status": "прием открыт | прием завершен | проект обсуждается | принято | неизвестно",
+  "deadline": "YYYY-MM-DD or null",
+  "effective_date": "YYYY-MM-DD or null",
+  "support_type": "субсидия | грант | льготный кредит | компенсация | экспорт | другое | null",
+  "target_recipients": ["юрлица", "ИП", "сельхозтоваропроизводители"],
+  "what_changed": "1-3 предложения",
+  "why_matters": "1-2 предложения для GR",
+  "what_to_check": "конкретное следующее действие",
+  "applicability_note": "понятна ли применимость к AHSTEP или нужна проверка региональных критериев",
+  "short_summary": "3-5 кратких предложений",
+  "confidence": "high | medium | low",
+  "source_quotes": ["короткие подтверждающие фразы из документа"]
+}
+
+Правила:
+- Не придумывай факты, даты, регион, орган власти, получателей или применимость.
+- Используй только исходный текст и переданные детерминированные поля.
+- Если поле отсутствует в источнике, верни null или "неизвестно" согласно типу поля.
+- Если применимость к AHSTEP не очевидна, явно напиши, что нужна проверка региональных критериев и eligibility.
+- source_quotes обязательны: это короткие дословные фразы из текста документа, не пересказ.
+- Не меняй и не оценивай action_level; он уже определен детерминированной логикой.
+- Особое внимание: регион, орган власти, срок, статус приема/обсуждения, получатели, тип поддержки, изменения условий.
+""".strip()
+
+
+def build_document_card_prompt(document_payload: str) -> str:
+    return f"""
+Подготовь GR document card по следующему документу.
+
+Входные данные:
+{document_payload}
+""".strip()
+
 
 def build_analysis_prompt(title: str, raw_text: str) -> str:
     return f"""
@@ -32,4 +77,3 @@ def build_analysis_prompt(title: str, raw_text: str) -> str:
 Текст документа:
 {raw_text}
 """.strip()
-

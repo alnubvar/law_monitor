@@ -7,6 +7,7 @@ from contextlib import contextmanager, redirect_stdout
 from unittest.mock import patch
 
 import main as cli_main
+from app.pipeline.enrich import EnrichDocsResult
 from app.pipeline.ocr_runtime import OCRBackfillResult, OCRRunResult
 from app.run_lock import WriterLockHeldError
 from app.pipeline.donland_backfill import DonlandBackfillResult
@@ -119,6 +120,41 @@ class MainCliOcrQueueTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         self.assertIn("Another write operation is already running", buffer.getvalue())
+
+    def test_enrich_docs_cli_prints_summary_without_collect(self) -> None:
+        result = EnrichDocsResult(selected=2, enriched=1, skipped_cached=1, failed=0)
+        with patch("main.setup_logging"):
+            with patch("main.run_enrich_docs", return_value=result) as run_enrich:
+                with patch.object(
+                    sys,
+                    "argv",
+                    [
+                        "main.py",
+                        "enrich-docs",
+                        "--days",
+                        "7",
+                        "--action-level",
+                        "requires_attention",
+                        "--limit",
+                        "10",
+                    ],
+                ):
+                    buffer = io.StringIO()
+                    with redirect_stdout(buffer):
+                        exit_code = cli_main.main()
+
+        self.assertEqual(exit_code, 0)
+        run_enrich.assert_called_once_with(
+            days=7,
+            action_levels=["requires_attention"],
+            limit=10,
+            force=False,
+        )
+        output = buffer.getvalue()
+        self.assertIn("selected=2", output)
+        self.assertIn("enriched=1", output)
+        self.assertIn("skipped_cached=1", output)
+        self.assertIn("failed=0", output)
 
     def test_read_only_ocr_queue_is_unaffected_by_writer_lock(self) -> None:
         with patch("main.setup_logging"):

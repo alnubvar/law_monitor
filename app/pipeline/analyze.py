@@ -7,10 +7,18 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from app.config import DB_PATH, load_keyword_groups, load_keywords
-from app.llm.enrichment import DocumentEnricher, get_document_enricher
+from app.llm.enrichment import (
+    DOCUMENT_CARD_PROMPT_VERSION,
+    DocumentEnricher,
+    build_document_card_input,
+    compute_document_card_source_hash,
+    get_document_enricher,
+    is_enrichment_eligible,
+)
 from app.llm.mock_client import MockLLMClient
 from app.storage import (
     count_documents_by_action_level,
+    get_document_enrichment,
     get_runtime_event,
     get_document_by_url,
     init_db,
@@ -157,6 +165,30 @@ def _run_optional_enrichment(
     enricher: DocumentEnricher,
     db_path,
 ) -> None:
+    if not enricher.enabled or not is_enrichment_eligible(analysis.action_level):
+        return
+    prepared = build_document_card_input(
+        title=document.title,
+        raw_text=document.raw_text,
+        analysis=analysis,
+        source_name=document.source_name,
+        url=document.url,
+        level=document.level,
+        region=document.region,
+        published_at=document.published_at,
+        document_type=document.document_type,
+    )
+    source_hash = compute_document_card_source_hash(prepared)
+    cached = get_document_enrichment(
+        document.url,
+        provider=enricher.provider_name,
+        model=enricher.model_name,
+        prompt_version=DOCUMENT_CARD_PROMPT_VERSION,
+        source_hash=source_hash,
+        db_path=db_path,
+    )
+    if cached is not None:
+        return
     enrichment = enricher.maybe_enrich_document(
         title=document.title,
         raw_text=document.raw_text,
@@ -165,9 +197,13 @@ def _run_optional_enrichment(
         url=document.url,
         level=document.level,
         region=document.region,
+        published_at=document.published_at,
+        document_type=document.document_type,
     )
     if enrichment is None:
         return
+    if not enrichment.source_hash:
+        enrichment.source_hash = source_hash
     try:
         save_document_enrichment(
             document_id=document.id,
@@ -175,6 +211,8 @@ def _run_optional_enrichment(
             provider=enricher.provider_name,
             model=enricher.model_name,
             enrichment=enrichment,
+            prompt_version=enrichment.prompt_version,
+            source_hash=enrichment.source_hash,
             db_path=db_path,
         )
     except Exception as exc:

@@ -1113,6 +1113,8 @@ def _build_human_importance_text(
     *,
     enrichment: dict[str, str] | None = None,
 ) -> str:
+    if enrichment and enrichment.get("_document_card") and enrichment.get("business_impact"):
+        return _shorten_summary(enrichment["business_impact"])
     return _shorten_summary(
         build_executive_reason(
             item,
@@ -1129,6 +1131,8 @@ def _build_human_action_text(
     *,
     enrichment: dict[str, str] | None = None,
 ) -> str:
+    if enrichment and enrichment.get("_document_card") and enrichment.get("recommended_action"):
+        return _shorten_summary(enrichment["recommended_action"])
     action_text = build_executive_action(
         item,
         enrichment_text=enrichment.get("recommended_action") if enrichment else None,

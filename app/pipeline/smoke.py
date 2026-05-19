@@ -197,7 +197,11 @@ def run_smoke_check(
         result.add_fail("regression fixtures found", str(exc))
 
     try:
-        enabled_label = "enabled" if config.LLM_ENRICHMENT_ENABLED else "disabled"
+        enabled = bool(
+            getattr(config, "LLM_DOCUMENT_ENRICHMENT_ENABLED", False)
+            or getattr(config, "LLM_ENRICHMENT_ENABLED", False)
+        )
+        enabled_label = "enabled" if enabled else "disabled"
         stored_count = count_document_enrichments(db_path=resolved_db_path)
         result.add_ok("LLM enrichment", f"{enabled_label}; stored rows: {stored_count}")
     except Exception as exc:

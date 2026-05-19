@@ -14,6 +14,7 @@ from app.pipeline.collect import run_collect_with_options
 from app.pipeline.donland_backfill import run_donland_backfill
 from app.pipeline.diagnostics import run_diagnostics
 from app.pipeline.digest import run_demo_report, run_digest
+from app.pipeline.enrich import run_enrich_docs
 from app.pipeline.ocr_runtime import backfill_ocr_queue_from_audit, run_ocr_queue
 from app.pipeline.tracking import run_check_tracked
 from app.pipeline.run import run_pipeline
@@ -86,6 +87,35 @@ def build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="Переанализировать документы, даже если анализ уже был сохранен.",
+    )
+
+    enrich_parser = subparsers.add_parser(
+        "enrich-docs",
+        help="Обогатить уже проанализированные документы LLM document card без collect.",
+    )
+    enrich_parser.add_argument(
+        "--days",
+        type=int,
+        default=7,
+        help="Период выбора уже проанализированных документов в днях.",
+    )
+    enrich_parser.add_argument(
+        "--action-level",
+        nargs="+",
+        default=None,
+        choices=["requires_attention", "watchlist"],
+        help="Ограничить enrichment одним или несколькими action_level.",
+    )
+    enrich_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Максимум видимых документов для enrichment.",
+    )
+    enrich_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Пересчитать enrichment даже при совпадающем cache key.",
     )
 
     report_parser = subparsers.add_parser("report", help="Сформировать markdown-отчет.")
@@ -445,6 +475,12 @@ def main() -> int:
             lambda: _cli_analyze(args),
         )
 
+    if args.command == "enrich-docs":
+        return _run_writer_command(
+            "enrich-docs",
+            lambda: _cli_enrich_docs(args),
+        )
+
     if args.command == "report":
         return _run_writer_command(
             "report",
@@ -604,6 +640,23 @@ def _cli_audit_extraction(args: argparse.Namespace) -> int:
 def _cli_analyze(args: argparse.Namespace) -> int:
     count = run_analyze(limit=args.limit, reanalyze=args.force)
     print(f"Analyzed {count} documents.")
+    return 0
+
+
+def _cli_enrich_docs(args: argparse.Namespace) -> int:
+    result = run_enrich_docs(
+        days=args.days,
+        action_levels=args.action_level,
+        limit=args.limit,
+        force=args.force,
+    )
+    print(
+        "LLM document enrichment finished. "
+        f"selected={result.selected}; "
+        f"enriched={result.enriched}; "
+        f"skipped_cached={result.skipped_cached}; "
+        f"failed={result.failed}"
+    )
     return 0
 
 

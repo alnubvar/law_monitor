@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import unittest
+import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from unittest.mock import patch
 
@@ -11,7 +13,7 @@ from app.reports.markdown_report import (
     generate_markdown_report,
 )
 from app.storage import init_db, save_document_enrichment
-from app.llm.enrichment import EnrichmentResult
+from app.llm.enrichment import DocumentCardFacts, EnrichmentResult
 
 
 class ReportGenerationSmokeTest(unittest.TestCase):
@@ -221,6 +223,58 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         # Truth-aware renderer reformats raw deadline text to executive wording.
         self.assertIn("Срок: до 30.06.2026", markdown)
 
+    def test_report_uses_document_card_facts_when_available(self) -> None:
+        db_path = self._db_path("report_document_card_facts.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=507,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Отбор на субсидию АПК",
+            url="https://gisp.gov.ru/nmp/measure/card-facts",
+            action_level="requires_attention",
+            page_type="selection_announcement",
+            summary="Базовая summary.",
+        )
+        save_document_enrichment(
+            document_id=document.id,
+            document_url=document.url,
+            provider="mock",
+            model="mock-enrichment",
+            enrichment=EnrichmentResult.from_facts(
+                DocumentCardFacts(
+                    document_type="отбор",
+                    region="РФ",
+                    authority="Минсельхоз России",
+                    status="прием открыт",
+                    deadline="2026-06-30",
+                    support_type="субсидия",
+                    target_recipients=["сельхозтоваропроизводители"],
+                    what_changed="Открыт отбор на предоставление субсидии.",
+                    why_matters="GR нужно проверить, подходит ли мера под контур AHSTEP.",
+                    what_to_check="Проверить критерии получателя и срок подачи заявки.",
+                    applicability_note="Применимость требует проверки eligibility.",
+                    short_summary="Открыт отбор на субсидию для АПК. Нужно проверить условия участия.",
+                    confidence="high",
+                    source_quotes=["Открыт отбор", "сельхозтоваропроизводители"],
+                )
+            ),
+            db_path=db_path,
+        )
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-19",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+            db_path=db_path,
+        )
+
+        self.assertIn("Открыт отбор на субсидию для АПК.", markdown)
+        self.assertIn("GR нужно проверить, подходит ли мера под контур AHSTEP.", markdown)
+        self.assertIn("Проверить критерии получателя и срок подачи заявки.", markdown)
+        self.assertIn("Срок: до 30.06.2026", markdown)
+
     def test_report_strips_legacy_ai_prefixes_from_enrichment(self) -> None:
         db_path = self._db_path("report_enrichment_legacy_prefix.db")
         init_db(db_path)
@@ -409,6 +463,46 @@ class ReportGenerationSmokeTest(unittest.TestCase):
 
         self.assertNotIn("Не использовать", markdown)
         self.assertIn("Почему важно: impact", markdown)
+
+    def test_invalid_document_card_json_does_not_break_report(self) -> None:
+        db_path = self._db_path("report_invalid_facts_json.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=508,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Льготное кредитование АПК",
+            url="https://gisp.gov.ru/nmp/measure/invalid-json",
+            action_level="requires_attention",
+            page_type="measure_card",
+            summary="Базовая summary.",
+        )
+        with closing(sqlite3.connect(str(db_path))) as connection:
+            connection.execute(
+                """
+                INSERT INTO document_enrichments(
+                    document_id, document_url, provider, model, prompt_version, status,
+                    facts_json, executive_summary, business_impact, recommended_action,
+                    confidence, created_at, updated_at
+                ) VALUES (?, ?, 'mock', 'mock-enrichment', 'gr_document_card_v1', 'success',
+                          '{not-json', 'Legacy summary', 'Legacy impact', 'Legacy action',
+                          0.9, '2026-05-19T00:00:00+00:00', '2026-05-19T00:00:00+00:00')
+                """,
+                (document.id, document.url),
+            )
+            connection.commit()
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-19",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+            db_path=db_path,
+        )
+
+        self.assertIn("Legacy summary", markdown)
+        self.assertIn("Legacy impact", markdown)
+        self.assertIn("Проверить применимость меры, сроки и ответственного.", markdown)
 
     def test_report_clips_long_enrichment_safely(self) -> None:
         db_path = self._db_path("report_enrichment_clip.db")

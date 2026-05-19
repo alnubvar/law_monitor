@@ -164,6 +164,34 @@ class ConfigSmokeTest(unittest.TestCase):
             self.assertEqual(reloaded.SCHEDULER_DAILY_REPORT_HOUR, 8)
         importlib.reload(config_module)
 
+    def test_llm_document_enrichment_defaults_are_safe(self) -> None:
+        import app.config as config_module
+
+        with patch.dict(
+            os.environ,
+            {
+                "LLM_DOCUMENT_ENRICHMENT_ENABLED": "",
+                "LLM_ENRICHMENT_ENABLED": "",
+                "LLM_PROVIDER": "",
+                "LLM_BASE_URL": "",
+                "LLM_API_KEY": "",
+                "LLM_MODEL": "",
+                "LLM_TIMEOUT_SECONDS": "",
+                "LLM_MAX_DOCUMENT_CHARS": "",
+                "LLM_ENRICHMENT_LIMIT": "",
+            },
+            clear=False,
+        ):
+            reloaded = importlib.reload(config_module)
+            self.assertFalse(reloaded.LLM_DOCUMENT_ENRICHMENT_ENABLED)
+            self.assertFalse(reloaded.LLM_ENRICHMENT_ENABLED)
+            self.assertEqual(reloaded.LLM_PROVIDER, "mock")
+            self.assertEqual(reloaded.LLM_API_KEY, "")
+            self.assertEqual(reloaded.LLM_TIMEOUT_SECONDS, 60)
+            self.assertEqual(reloaded.LLM_MAX_DOCUMENT_CHARS, 12000)
+            self.assertEqual(reloaded.LLM_ENRICHMENT_LIMIT, 20)
+        importlib.reload(config_module)
+
 
 if __name__ == "__main__":
     unittest.main()

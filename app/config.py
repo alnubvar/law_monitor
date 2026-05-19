@@ -148,11 +148,27 @@ OCR_LANGUAGE = _get_env_str("LAW_MONITOR_OCR_LANGUAGE", "rus+eng")
 OCR_MAX_PAGES = max(1, _get_env_int("LAW_MONITOR_OCR_MAX_PAGES", 5, min_value=1))
 OCR_TIMEOUT_SECONDS = max(1, _get_env_int("LAW_MONITOR_OCR_TIMEOUT", 120, min_value=1))
 OCR_TESSDATA_PATH = _get_env_str("LAW_MONITOR_OCR_TESSDATA_PATH", "")
-LLM_ENRICHMENT_ENABLED = _get_env_bool("LLM_ENRICHMENT_ENABLED", False)
+LLM_DOCUMENT_ENRICHMENT_ENABLED = _get_env_bool("LLM_DOCUMENT_ENRICHMENT_ENABLED", False)
+LLM_ENRICHMENT_ENABLED = _get_env_bool(
+    "LLM_ENRICHMENT_ENABLED",
+    LLM_DOCUMENT_ENRICHMENT_ENABLED,
+)
 LLM_PROVIDER = _get_env_str("LLM_PROVIDER", "mock")
 LLM_BASE_URL = _get_env_str("LLM_BASE_URL", "")
 LLM_API_KEY = _get_env_str("LLM_API_KEY", "")
 LLM_MODEL = _get_env_str("LLM_MODEL", "")
+LLM_TIMEOUT_SECONDS = _get_env_int("LLM_TIMEOUT_SECONDS", 60, min_value=1)
+LLM_MAX_DOCUMENT_CHARS = _get_env_int(
+    "LLM_MAX_DOCUMENT_CHARS",
+    12000,
+    min_value=1000,
+)
+LLM_ENRICHMENT_LIMIT = _get_env_int(
+    "LLM_ENRICHMENT_LIMIT",
+    20,
+    min_value=1,
+    max_value=200,
+)
 SCHEDULER_TIMEZONE_NAME = _get_env_str("LAW_MONITOR_TIMEZONE", "Europe/Moscow")
 SCHEDULER_TIMEZONE = _get_timezone(SCHEDULER_TIMEZONE_NAME)
 SCHEDULER_DAILY_REPORT_HOUR = _get_env_int(
