@@ -10,7 +10,7 @@ from typing import Any, Mapping
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from app import config
 from app.config import get_source_role
@@ -24,6 +24,7 @@ from app.llm.prompts import (
 from app.rules.deadline_truth import (
     format_iso_date,
     is_deadline_expired,
+    is_deadline_today,
     parse_deadline_date,
 )
 
@@ -36,10 +37,45 @@ TARGET_REGIONS = {
     "krasnodar": "Краснодарский край",
     "stavropol": "Ставропольский край",
 }
+GENERIC_FALLBACK_TEXT_MARKERS = (
+    "документ оставлен на наблюдении",
+    "сигнал может повлиять",
+    "оценить срочность сигнала",
+    "изменения могут повлиять на",
+    "оставить в наблюдении до следующего подтверждающего обновления",
+)
+RAW_SYNTHETIC_TEXT_MARKERS = (
+    "title:",
+    "shortname:",
+    "enddate:",
+    "acceptingapplicationsinfo:",
+)
+PARSER_RESIDUE_TEXT_MARKERS = (
+    "статус:",
+    "процедура:",
+    "начало обсуждения:",
+    "конец обсуждения:",
+    "id:",
+    "код:",
+)
+WEAK_GR_REASON_VALUES = {
+    "открыт прием заявок",
+    "прием заявок завершён",
+    "проект нпа на публичном обсуждении",
+    "обновлены правила поддержки",
+    "изменены условия поддержки",
+    "изменены условия субсидирования",
+}
+EFFECTIVE_DATE_MARKERS = (
+    "вступает в силу",
+    "вступление в силу",
+    "вступают в силу",
+    "планируемое вступление в силу",
+)
 
 
 class DocumentCardFacts(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
     document_type: str = "другое"
     region: str | None = None
@@ -48,7 +84,10 @@ class DocumentCardFacts(BaseModel):
     deadline: str | None = None
     effective_date: str | None = None
     support_type: str | None = None
-    target_recipients: list[str] = Field(default_factory=list)
+    target_recipients: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("target_recipients", "recipients"),
+    )
     what_changed: str = ""
     why_matters: str = ""
     what_to_check: str = ""
@@ -168,9 +207,27 @@ class EnrichmentResult(BaseModel):
             executive_summary=facts.short_summary,
             business_impact=facts.why_matters,
             recommended_action=facts.what_to_check,
-            deadline_hint=facts.deadline,
+            deadline_hint=_build_deadline_hint_from_facts(facts),
             confidence=CONFIDENCE_TO_SCORE.get(facts.confidence, 0.45),
         )
+
+    @classmethod
+    def fallback_from_facts(
+        cls,
+        facts: DocumentCardFacts,
+        *,
+        error: str,
+        prompt_version: str = DOCUMENT_CARD_PROMPT_VERSION,
+        source_hash: str | None = None,
+    ) -> "EnrichmentResult":
+        result = cls.from_facts(
+            facts,
+            prompt_version=prompt_version,
+            source_hash=source_hash,
+        )
+        result.status = "fallback"
+        result.error = error
+        return result
 
     @classmethod
     def failed(
@@ -350,12 +407,12 @@ class MockEnrichmentProvider(BaseEnrichmentProvider):
         formatted_region = self._format_region(region)
         if formatted_region and formatted_region != "РФ":
             return (
-                f"Применимость к AHSTEP не следует автоматически; требуется проверить "
-                f"региональные критерии и наличие активов/получателей в регионе: {formatted_region}."
+                f"Автоматически считать меру применимой к AHSTEP нельзя; нужно отдельно "
+                f"проверить критерии получателя и наличие операционного контура в регионе: {formatted_region}."
             )
         return (
-            "Применимость к AHSTEP требует отдельной проверки eligibility, отраслевых "
-            "критериев и условий участия."
+            "Применимость к AHSTEP требует отдельной проверки критериев получателя, "
+            "отраслевых условий и формата участия."
         )
 
     def _build_legacy_enrichment(
@@ -397,15 +454,19 @@ class MockEnrichmentProvider(BaseEnrichmentProvider):
         *,
         source_role: str,
     ) -> str:
+        if _is_regulation_discussion_context(analysis, url=None):
+            return "Проект НПА вынесен на публичное обсуждение."
         if source_role == "regional_npa" and analysis.action_level == "requires_attention":
-            return "Документ содержит изменения в порядке предоставления поддержки; требуется проверка условий и сроков."
+            return "Документ меняет действующий порядок поддержки; нужно проверить, что именно изменилось для получателей и сроков."
         if source_role in {"active_support_measures", "support_documents"} or analysis.page_type in {
             "measure_card",
             "selection_announcement",
             "deadline_update",
         }:
-            return "Мера поддержки требует проверки применимости, условий участия и возможных сроков."
-        return "Документ оставлен на наблюдении как возможный стратегический сигнал."
+            if analysis.application_status == "closed":
+                return "Приём по мере завершён; документ полезен как ориентир по условиям и циклу отбора."
+            return "Нужно проверить применимость меры, условия участия и рабочие сроки."
+        return "Документ оставлен на наблюдении как сигнал для GR-мониторинга."
 
     def _build_business_impact(
         self,
@@ -415,15 +476,26 @@ class MockEnrichmentProvider(BaseEnrichmentProvider):
         region: str | None,
         source_name: str | None,
     ) -> str:
-        if source_role == "regional_npa":
-            base = "Изменения могут повлиять на порядок предоставления поддержки, круг получателей или сроки применения."
+        if _is_regulation_discussion_context(analysis, url=None):
+            base = (
+                "По проекту можно заранее оценить изменение регулирования и при необходимости "
+                "подготовить GR-позицию до завершения обсуждения."
+            )
+        elif source_role == "regional_npa":
+            base = (
+                "Документ может изменить правила доступа к региональной поддержке, состав "
+                "получателей или обязательные условия участия."
+            )
         elif source_role in {"active_support_measures", "support_documents"} or analysis.application_status in {
             "open",
             "regular",
         }:
-            base = "Изменения могут повлиять на применимость меры, условия участия и организацию подачи."
+            base = (
+                "Документ помогает понять, применима ли мера к контуру AHSTEP, какие есть "
+                "критерии участия и не требуется ли срочный организационный шаг."
+            )
         else:
-            base = "Сигнал может повлиять на контекст господдержки и требует наблюдения со стороны GR."
+            base = "Сигнал важен для GR-мониторинга условий господдержки и смежного регулирования."
 
         details: list[str] = []
         region_hint = self._format_region(region)
@@ -435,15 +507,23 @@ class MockEnrichmentProvider(BaseEnrichmentProvider):
         return f"{base}{suffix}".strip()
 
     def _build_recommended_action(self, analysis: AnalysisResult, *, source_role: str) -> str:
+        if _is_regulation_discussion_context(analysis, url=None):
+            parsed_deadline = parse_deadline_date(analysis.deadline_text)
+            if parsed_deadline is not None:
+                return (
+                    "Проверить, затрагивает ли проект порядок поддержки AHSTEP, и при необходимости "
+                    f"подготовить позицию до {format_iso_date(parsed_deadline)}."
+                )
+            return "Проверить влияние проекта на порядок поддержки и решить, нужна ли GR-позиция."
         if source_role == "regional_npa":
-            return "Проверить изменения условий, сроки вступления в силу и затронутые организации."
+            return "Проверить, какие условия поддержки изменены, когда они вступают в силу и кого затрагивают."
         if analysis.action_level == "requires_attention":
             if analysis.application_status == "open" or analysis.deadline_text:
-                return "Проверить применимость меры, сроки подачи и ответственного."
-            return "Оценить срочность сигнала и определить следующий GR-шаг."
+                return "Проверить применимость меры, рабочий срок и ответственного за следующий шаг."
+            return "Проверить влияние документа на текущие GR-процессы и назначить следующий шаг."
         if analysis.page_type in {"selection_announcement", "deadline_update"}:
-            return "Проверить условия участия и окно подачи."
-        return "Оставить в наблюдении до следующего подтверждающего обновления."
+            return "Проверить условия участия и актуальность окна подачи."
+        return "Оставить документ в наблюдении и вернуться при следующем подтверждающем обновлении."
 
     def _build_deadline_hint(self, analysis: AnalysisResult) -> str | None:
         deadline_text = getattr(analysis, "deadline_text", None)
@@ -527,13 +607,13 @@ class OpenAICompatibleEnrichmentProvider(BaseEnrichmentProvider):
         response_payload = self._post_json(payload)
         content = self._extract_content(response_payload)
         try:
-            parsed = json.loads(content)
+            parsed = self._parse_json_content(content)
         except json.JSONDecodeError as exc:
             repair_payload = self._build_repair_payload(invalid_content=content)
             response_payload = self._post_json(repair_payload)
             content = self._extract_content(response_payload)
             try:
-                parsed = json.loads(content)
+                parsed = self._parse_json_content(content)
             except json.JSONDecodeError as repair_exc:
                 raise ValueError(
                     f"invalid JSON from LLM provider: {repair_exc.msg}"
@@ -579,12 +659,30 @@ class OpenAICompatibleEnrichmentProvider(BaseEnrichmentProvider):
                     "role": "user",
                     "content": (
                         "Исправь предыдущий ответ в валидный JSON-объект строго по схеме. "
-                        "Не добавляй Markdown и не придумывай недостающие факты.\n\n"
+                        "Не добавляй Markdown, комментарии и не придумывай недостающие факты.\n\n"
                         f"Предыдущий ответ:\n{invalid_content}"
                     ),
                 },
             ],
         }
+
+    def _parse_json_content(self, content: str) -> dict[str, Any]:
+        normalized = content.strip()
+        candidates = [normalized]
+        stripped_fence = _strip_markdown_fence(normalized)
+        if stripped_fence != normalized:
+            candidates.append(stripped_fence)
+        extracted = _extract_json_object_text(normalized)
+        if extracted and extracted not in candidates:
+            candidates.append(extracted)
+        for candidate in candidates:
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+        raise json.JSONDecodeError("JSON object expected", normalized, 0)
 
     def _post_json(self, payload: dict[str, object]) -> dict[str, Any]:
         if not self.base_url:
@@ -654,11 +752,34 @@ class DocumentEnricher:
         if not is_enrichment_eligible(analysis.action_level):
             return None
         if self.provider is None:
-            return EnrichmentResult.failed(
-                self.provider_error or "LLM enrichment provider is unavailable",
+            return self._build_fallback_result(
+                error_text=self.provider_error or "LLM enrichment provider is unavailable",
+                title=title,
+                raw_text=raw_text,
+                analysis=analysis,
+                source_name=source_name,
+                url=url,
+                level=level,
+                region=region,
+                published_at=published_at,
+                document_type=document_type,
+                max_document_chars=max_document_chars,
             )
         try:
-            return self.provider.enrich_document(
+            result = self.provider.enrich_document(
+                title=title,
+                raw_text=raw_text,
+                analysis=analysis,
+                source_name=source_name,
+                url=url,
+                level=level,
+                region=region,
+                published_at=published_at,
+                document_type=document_type,
+                max_document_chars=max_document_chars,
+            )
+            return self._finalize_result(
+                result=result,
                 title=title,
                 raw_text=raw_text,
                 analysis=analysis,
@@ -671,6 +792,139 @@ class DocumentEnricher:
                 max_document_chars=max_document_chars,
             )
         except Exception as exc:
+            return self._build_fallback_result(
+                error_text=f"{type(exc).__name__}: {exc}",
+                title=title,
+                raw_text=raw_text,
+                analysis=analysis,
+                source_name=source_name,
+                url=url,
+                level=level,
+                region=region,
+                published_at=published_at,
+                document_type=document_type,
+                max_document_chars=max_document_chars,
+            )
+
+    def _finalize_result(
+        self,
+        *,
+        result: EnrichmentResult,
+        title: str,
+        raw_text: str,
+        analysis: AnalysisResult,
+        source_name: str | None,
+        url: str | None,
+        level: str | None,
+        region: str | None,
+        published_at: datetime | None,
+        document_type: str | None,
+        max_document_chars: int | None,
+    ) -> EnrichmentResult:
+        prepared = build_document_card_input(
+            title=title,
+            raw_text=raw_text,
+            analysis=analysis,
+            source_name=source_name,
+            url=url,
+            level=level,
+            region=region,
+            published_at=published_at,
+            document_type=document_type,
+            max_document_chars=max_document_chars or config.LLM_MAX_DOCUMENT_CHARS,
+        )
+        source_hash = compute_document_card_source_hash(prepared)
+        facts_payload = result.facts_payload()
+        if not facts_payload:
+            return self._build_fallback_result(
+                error_text="LLM enrichment returned empty facts payload",
+                title=title,
+                raw_text=raw_text,
+                analysis=analysis,
+                source_name=source_name,
+                url=url,
+                level=level,
+                region=region,
+                published_at=published_at,
+                document_type=document_type,
+                max_document_chars=max_document_chars,
+            )
+        facts = _harden_facts(
+            DocumentCardFacts.model_validate(facts_payload),
+            analysis=analysis,
+            raw_text=raw_text,
+            source_name=source_name,
+            region=region,
+            url=url,
+        )
+        weak_reason = _detect_weak_facts_reason(facts, analysis=analysis, url=url)
+        if weak_reason:
+            return self._build_fallback_result(
+                error_text=f"LLM enrichment fallback: {weak_reason}",
+                title=title,
+                raw_text=raw_text,
+                analysis=analysis,
+                source_name=source_name,
+                url=url,
+                level=level,
+                region=region,
+                published_at=published_at,
+                document_type=document_type,
+                max_document_chars=max_document_chars,
+            )
+        finalized = EnrichmentResult.from_facts(
+            facts,
+            prompt_version=result.prompt_version,
+            source_hash=result.source_hash or source_hash,
+        )
+        if result.status == "fallback":
+            finalized.status = "fallback"
+            finalized.error = result.error
+        return finalized
+
+    def _build_fallback_result(
+        self,
+        *,
+        error_text: str,
+        title: str,
+        raw_text: str,
+        analysis: AnalysisResult,
+        source_name: str | None,
+        url: str | None,
+        level: str | None,
+        region: str | None,
+        published_at: datetime | None,
+        document_type: str | None,
+        max_document_chars: int | None,
+    ) -> EnrichmentResult:
+        try:
+            fallback = MockEnrichmentProvider().enrich_document(
+                title=title,
+                raw_text=raw_text,
+                analysis=analysis,
+                source_name=source_name,
+                url=url,
+                level=level,
+                region=region,
+                published_at=published_at,
+                document_type=document_type,
+                max_document_chars=max_document_chars,
+            )
+            fallback_facts = _harden_facts(
+                fallback.facts or DocumentCardFacts(),
+                analysis=analysis,
+                raw_text=raw_text,
+                source_name=source_name,
+                region=region,
+                url=url,
+            )
+            return EnrichmentResult.fallback_from_facts(
+                fallback_facts,
+                error=error_text,
+                prompt_version=fallback.prompt_version,
+                source_hash=fallback.source_hash,
+            )
+        except Exception:
             prepared = build_document_card_input(
                 title=title,
                 raw_text=raw_text,
@@ -684,7 +938,7 @@ class DocumentEnricher:
                 max_document_chars=max_document_chars or config.LLM_MAX_DOCUMENT_CHARS,
             )
             return EnrichmentResult.failed(
-                f"{type(exc).__name__}: {exc}",
+                error_text,
                 source_hash=compute_document_card_source_hash(prepared),
             )
 
@@ -741,10 +995,10 @@ def get_display_enrichment(
     if not enrichment_row:
         return None
     status = str(enrichment_row.get("status") or "success").strip().lower()
-    if status and status != "success":
+    if status and status not in {"success", "fallback"}:
         return None
     error = str(enrichment_row.get("error") or "").strip()
-    if error:
+    if error and status != "fallback":
         return None
     facts = _parse_facts_from_row(enrichment_row)
     confidence = enrichment_row.get("confidence")
@@ -768,7 +1022,7 @@ def get_display_enrichment(
             facts.get("what_to_check") if facts else enrichment_row.get("recommended_action")
         ),
         "deadline_hint": _sanitize_enrichment_text(
-            facts.get("deadline") if facts else enrichment_row.get("deadline_hint")
+            _display_deadline_hint_from_facts(facts) if facts else enrichment_row.get("deadline_hint")
         ),
     }
     if facts:
@@ -780,6 +1034,30 @@ def get_display_enrichment(
     if not any(fields.values()):
         return None
     return fields
+
+
+def _build_deadline_hint_from_facts(facts: DocumentCardFacts) -> str | None:
+    if not facts.deadline:
+        return None
+    parsed = parse_deadline_date(facts.deadline)
+    if parsed is None:
+        return None
+    formatted = format_iso_date(parsed)
+    if facts.status == "проект обсуждается" or facts.document_type == "проект НПА":
+        return f"Конец обсуждения: {formatted}"
+    if is_deadline_expired(facts.deadline):
+        return f"Срок истёк: {formatted}"
+    if is_deadline_today(facts.deadline):
+        return f"Срок: сегодня ({formatted})"
+    return f"Срок: до {formatted}"
+
+
+def _display_deadline_hint_from_facts(facts: Mapping[str, Any]) -> str | None:
+    try:
+        validated = DocumentCardFacts.model_validate(dict(facts))
+    except Exception:
+        return str(facts.get("deadline") or "").strip() or None
+    return _build_deadline_hint_from_facts(validated)
 
 
 def _parse_facts_from_row(enrichment_row: Mapping[str, Any]) -> dict[str, Any]:
@@ -811,21 +1089,133 @@ def _sanitize_user_facing_enrichment_text(value: Any) -> str:
     return text
 
 
+def _strip_markdown_fence(value: str) -> str:
+    normalized = value.strip()
+    if not normalized.startswith("```"):
+        return normalized
+    normalized = re.sub(r"^```(?:json)?\s*", "", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\s*```$", "", normalized)
+    return normalized.strip()
+
+
+def _extract_json_object_text(value: str) -> str:
+    start = value.find("{")
+    end = value.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return ""
+    return value[start : end + 1].strip()
+
+
 def is_generic_enrichment_text(value: str | None) -> bool:
     normalized = " ".join(str(value or "").lower().split()).strip()
     if not normalized:
         return False
-    generic_markers = (
-        "документ оставлен на наблюдении",
-        "сигнал может повлиять",
-        "оценить срочность сигнала",
-        "изменения могут повлиять на",
-        "title:",
-        "shortname:",
-        "enddate:",
-        "acceptingapplicationsinfo:",
-    )
+    generic_markers = GENERIC_FALLBACK_TEXT_MARKERS + RAW_SYNTHETIC_TEXT_MARKERS
     return any(marker in normalized for marker in generic_markers)
+
+
+def _looks_like_parser_residue(value: str | None) -> bool:
+    normalized = " ".join(str(value or "").lower().split()).strip()
+    if not normalized:
+        return False
+    return any(marker in normalized for marker in PARSER_RESIDUE_TEXT_MARKERS)
+
+
+def _looks_like_weak_user_text(value: str | None) -> bool:
+    normalized = " ".join(str(value or "").lower().split()).strip()
+    if not normalized:
+        return True
+    if is_generic_enrichment_text(normalized) or _looks_like_parser_residue(normalized):
+        return True
+    return False
+
+
+def _is_regulation_discussion_context(
+    analysis: AnalysisResult,
+    *,
+    url: str | None,
+    raw_text: str = "",
+) -> bool:
+    combined = " ".join(
+        part
+        for part in (
+            url or "",
+            analysis.page_type or "",
+            analysis.summary or "",
+            analysis.business_signal or "",
+            analysis.deadline_text or "",
+            raw_text[:1200],
+        )
+        if part
+    ).lower()
+    return "regulation.gov" in combined and (
+        "обсуждени" in combined or "публичн" in combined
+    )
+
+
+def _needs_effective_date_reset(*, facts: DocumentCardFacts, raw_text: str) -> bool:
+    if not facts.effective_date or not facts.deadline:
+        return False
+    if facts.effective_date != facts.deadline:
+        return False
+    lowered = raw_text.lower()
+    return not any(marker in lowered for marker in EFFECTIVE_DATE_MARKERS)
+
+
+def _harden_facts(
+    facts: DocumentCardFacts,
+    *,
+    analysis: AnalysisResult,
+    raw_text: str,
+    source_name: str | None,
+    region: str | None,
+    url: str | None,
+) -> DocumentCardFacts:
+    payload = facts.model_dump(mode="json")
+    hardened = DocumentCardFacts.model_validate(payload)
+    if _is_regulation_discussion_context(analysis, url=url, raw_text=raw_text):
+        hardened.document_type = "проект НПА"
+        hardened.status = "проект обсуждается"
+        if not hardened.deadline:
+            parsed_deadline = parse_deadline_date(analysis.deadline_text)
+            hardened.deadline = parsed_deadline.isoformat() if parsed_deadline else None
+        if _needs_effective_date_reset(facts=hardened, raw_text=raw_text):
+            hardened.effective_date = None
+    if not hardened.region and region:
+        hardened.region = TARGET_REGIONS.get(region.lower(), region)
+    if not hardened.authority and source_name:
+        hardened.authority = source_name
+    if not hardened.applicability_note:
+        hardened.applicability_note = MockEnrichmentProvider()._build_applicability_note(
+            region=region
+        )
+    return hardened
+
+
+def _detect_weak_facts_reason(
+    facts: DocumentCardFacts,
+    *,
+    analysis: AnalysisResult,
+    url: str | None,
+) -> str | None:
+    if _looks_like_weak_user_text(facts.short_summary):
+        return "weak short_summary"
+    if _looks_like_weak_user_text(facts.why_matters):
+        return "weak why_matters"
+    if _looks_like_weak_user_text(facts.what_to_check):
+        return "weak what_to_check"
+    normalized_reason = " ".join(facts.why_matters.lower().split()).strip()
+    if normalized_reason in WEAK_GR_REASON_VALUES:
+        return "generic why_matters"
+    normalized_action = " ".join(facts.what_to_check.lower().split()).strip()
+    if analysis.action_level == "requires_attention" and "наблюдени" in normalized_action:
+        return "passive what_to_check for requires_attention"
+    if _is_regulation_discussion_context(analysis, url=url):
+        if facts.status != "проект обсуждается":
+            return "incorrect regulation discussion status"
+        if not facts.deadline and parse_deadline_date(analysis.deadline_text):
+            return "missing regulation discussion deadline"
+    return None
 
 
 def _normalized_source_role(source_name: str | None) -> str:

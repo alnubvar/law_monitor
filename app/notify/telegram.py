@@ -678,7 +678,7 @@ def _build_short_report_text(
             if summary_text:
                 lines.append(f"  Кратко: {summary_text}")
             if enrichment and enrichment.get("deadline_hint"):
-                lines.append(f"  Срок: {enrichment['deadline_hint'][:90]}")
+                lines.append(f"  {_format_deadline_line(enrichment['deadline_hint'])}")
             hint = _build_report_summary_action_hint(document, section=section, enrichment=enrichment)
             if hint:
                 lines.append(f"  Что проверить: {hint}")
@@ -990,7 +990,7 @@ def _format_document_lines(
         if include_summary and summary_text:
             lines.append(f"  Кратко: {summary_text}")
         if enrichment and enrichment.get("deadline_hint"):
-            lines.append(f"  Срок: {enrichment['deadline_hint'][:90]}")
+            lines.append(f"  {_format_deadline_line(enrichment['deadline_hint'])}")
         lines.append(f"  {document.url}")
     hidden_count = len(documents) - min(len(documents), max_items)
     if include_hidden_hint and hidden_count > 0:
@@ -1018,6 +1018,14 @@ def _fmt_dt(value: datetime | None) -> str | None:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.astimezone().strftime("%Y-%m-%d")
+
+
+def _format_deadline_line(text: str) -> str:
+    normalized = text[:90]
+    lowered = normalized.lower()
+    if lowered.startswith("срок:") or lowered.startswith("срок истёк:") or lowered.startswith("конец обсуждения:"):
+        return normalized
+    return f"Срок: {normalized}"
 
 
 def _is_unavailable_source_audit(audit_row: dict[str, object]) -> bool:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import unittest
 from pathlib import Path
@@ -251,9 +252,9 @@ class LLMEnrichmentTest(unittest.TestCase):
         self.assertNotIn("AI-", result.recommended_action)
         self.assertEqual(
             result.executive_summary,
-            "Мера поддержки требует проверки применимости, условий участия и возможных сроков.",
+            "Нужно проверить применимость меры, условия участия и рабочие сроки.",
         )
-        self.assertEqual(result.deadline_hint, "до 1 июня 2026 года")
+        self.assertEqual(result.deadline_hint, "Срок: до 01.06.2026")
         self.assertGreaterEqual(result.confidence or 0.0, 0.8)
         facts = result.facts_payload()
         self.assertIsInstance(facts, dict)
@@ -306,7 +307,7 @@ class LLMEnrichmentTest(unittest.TestCase):
 
         self.assertEqual(
             result.executive_summary,
-            "Документ содержит изменения в порядке предоставления поддержки; требуется проверка условий и сроков.",
+            "Документ меняет действующий порядок поддержки; нужно проверить, что именно изменилось для получателей и сроков.",
         )
         self.assertNotIn("МИНИСТЕРСТВО ФИЗИЧЕСКОЙ КУЛЬТУРЫ", result.executive_summary)
 
@@ -358,7 +359,7 @@ class LLMEnrichmentTest(unittest.TestCase):
         self.assertFalse(is_enrichment_eligible("background"))
         self.assertFalse(is_enrichment_eligible("irrelevant"))
 
-    def test_provider_failure_returns_structured_error(self) -> None:
+    def test_provider_failure_returns_fallback_facts(self) -> None:
         enricher = DocumentEnricher(enabled=True, provider=_FailingProvider())
 
         result = enricher.maybe_enrich_document(
@@ -370,7 +371,9 @@ class LLMEnrichmentTest(unittest.TestCase):
         self.assertIsNotNone(result)
         assert result is not None
         self.assertIn("provider timeout", result.error or "")
-        self.assertEqual(result.confidence, 0.0)
+        self.assertEqual(result.status, "fallback")
+        self.assertGreater(result.confidence or 0.0, 0.0)
+        self.assertTrue(result.executive_summary)
 
     def test_display_enrichment_ignores_error_rows(self) -> None:
         display = get_display_enrichment(
@@ -409,6 +412,29 @@ class LLMEnrichmentTest(unittest.TestCase):
         assert display is not None
         self.assertEqual(display["business_impact"], "Влияние")
 
+    def test_display_enrichment_accepts_fallback_rows_with_facts(self) -> None:
+        display = get_display_enrichment(
+            {
+                "status": "fallback",
+                "error": "RuntimeError: timeout",
+                "facts_json": {
+                    "document_type": "проект НПА",
+                    "status": "проект обсуждается",
+                    "deadline": "2026-06-30",
+                    "short_summary": "Проект НПА вынесен на публичное обсуждение.",
+                    "why_matters": "Нужно заранее оценить влияние на порядок поддержки.",
+                    "what_to_check": "Проверить проект и при необходимости подготовить позицию.",
+                    "confidence": "high",
+                    "source_quotes": ["публичное обсуждение"],
+                },
+                "confidence": 0.8,
+            }
+        )
+
+        self.assertIsNotNone(display)
+        assert display is not None
+        self.assertEqual(display["deadline_hint"], "Конец обсуждения: 30.06.2026")
+
     def test_display_enrichment_filters_raw_synthetic_fields(self) -> None:
         display = get_display_enrichment(
             {
@@ -434,7 +460,7 @@ class LLMEnrichmentTest(unittest.TestCase):
         )
         self.assertIsNone(display)
 
-    def test_invalid_json_from_openai_compatible_provider_becomes_error(self) -> None:
+    def test_invalid_json_from_openai_compatible_provider_becomes_fallback(self) -> None:
         provider = OpenAICompatibleEnrichmentProvider(
             base_url="http://127.0.0.1:1234/v1",
             api_key="",
@@ -457,6 +483,79 @@ class LLMEnrichmentTest(unittest.TestCase):
         self.assertIsNotNone(result)
         assert result is not None
         self.assertIn("invalid JSON", result.error or "")
+        self.assertEqual(result.status, "fallback")
+        self.assertTrue(result.executive_summary)
+
+    def test_openai_compatible_provider_extracts_json_from_code_fence(self) -> None:
+        provider = OpenAICompatibleEnrichmentProvider(
+            base_url="http://127.0.0.1:1234/v1",
+            api_key="",
+            model="test-model",
+            timeout_seconds=5,
+        )
+        payload = """```json
+{"document_type":"проект НПА","region":"РФ","authority":"Минсельхоз России","status":"проект обсуждается","deadline":"2026-06-30","effective_date":null,"support_type":"субсидия","target_recipients":["сельхозтоваропроизводители"],"what_changed":"Проект уточняет порядок предоставления субсидии.","why_matters":"Нужно заранее оценить влияние проекта на порядок поддержки.","what_to_check":"Проверить текст проекта и подготовить позицию при необходимости.","applicability_note":"Нужна отдельная проверка применимости к AHSTEP.","short_summary":"Проект НПА вынесен на публичное обсуждение.","confidence":"high","source_quotes":["Конец обсуждения","порядок предоставления субсидии"]}
+```"""
+
+        with mock.patch.object(
+            provider,
+            "_post_json",
+            return_value={"choices": [{"message": {"content": payload}}]},
+        ):
+            result = provider.enrich_document(
+                title="Тест",
+                raw_text="Текст",
+                analysis=_analysis_result("requires_attention"),
+                source_name="Источник",
+                url="https://regulation.gov.ru/projects/1",
+            )
+
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.deadline_hint, "Конец обсуждения: 30.06.2026")
+
+    def test_weak_llm_json_uses_deterministic_fallback(self) -> None:
+        provider = OpenAICompatibleEnrichmentProvider(
+            base_url="http://127.0.0.1:1234/v1",
+            api_key="",
+            model="test-model",
+            timeout_seconds=5,
+        )
+        enricher = DocumentEnricher(enabled=True, provider=provider)
+        weak_payload = {
+            "document_type": "отбор",
+            "region": "РФ",
+            "authority": "Минсельхоз России",
+            "status": "прием открыт",
+            "deadline": "2026-06-01",
+            "effective_date": None,
+            "support_type": "субсидия",
+            "target_recipients": ["сельхозтоваропроизводители"],
+            "what_changed": "Открыт прием заявок.",
+            "why_matters": "Открыт прием заявок",
+            "what_to_check": "Оставить в наблюдении до следующего подтверждающего обновления.",
+            "applicability_note": "Проверить применимость.",
+            "short_summary": "Открыт прием заявок на субсидию.",
+            "confidence": "high",
+            "source_quotes": ["Открыт прием заявок"],
+        }
+
+        with mock.patch.object(
+            provider,
+            "_post_json",
+            return_value={"choices": [{"message": {"content": json.dumps(weak_payload, ensure_ascii=False)}}]},
+        ):
+            result = enricher.maybe_enrich_document(
+                title="О проведении отбора на предоставление субсидии",
+                raw_text="Открыт прием заявок на предоставление субсидии сельхозтоваропроизводителям.",
+                analysis=_analysis_result("requires_attention"),
+                source_name="Минсельхоз России",
+            )
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.status, "fallback")
+        self.assertIn("LLM enrichment fallback:", result.error or "")
+        self.assertNotIn("Оставить в наблюдении", result.recommended_action or "")
 
     def test_analyze_pipeline_continues_when_enrichment_fails(self) -> None:
         db_path = self._db_path("llm_enrichment_failure_persist.db")
@@ -614,6 +713,7 @@ class LLMEnrichmentTest(unittest.TestCase):
         self.assertIsNotNone(enrichment)
         assert enrichment is not None
         self.assertIn("provider timeout", enrichment["error"] or "")
+        self.assertEqual(enrichment["status"], "fallback")
 
     def test_prompt_contains_no_hallucination_and_null_if_missing_rules(self) -> None:
         prompt = DOCUMENT_CARD_SYSTEM_PROMPT.lower()
@@ -624,6 +724,8 @@ class LLMEnrichmentTest(unittest.TestCase):
         self.assertIn("только исходный текст", prompt)
         self.assertIn("не меняй", prompt)
         self.assertIn("action_level", prompt)
+        self.assertIn("regulation.gov.ru", prompt)
+        self.assertIn("effective_date", prompt)
 
     def test_source_quotes_are_preserved_in_facts_json(self) -> None:
         db_path = self._db_path("llm_enrichment_source_quotes.db")

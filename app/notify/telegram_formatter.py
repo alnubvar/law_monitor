@@ -261,7 +261,7 @@ def _format_digest_item(
         else document.deadline_text
     )
     if deadline_text and not _is_inactive_or_closed(document):
-        lines.append(f"  Срок: {_truncate_text(deadline_text, DETAIL_MAX_CHARS)}")
+        lines.append(f"  {_format_deadline_line(deadline_text)}")
     signal_text = (
         build_executive_reason(
             document,
@@ -315,3 +315,11 @@ def _build_digest_action_hint(
     if document.application_status == "open" and document.deadline_text:
         return _truncate_text(document.deadline_text, DETAIL_MAX_CHARS)
     return ""
+
+
+def _format_deadline_line(text: str) -> str:
+    normalized = _truncate_text(text, DETAIL_MAX_CHARS)
+    lowered = normalized.lower()
+    if lowered.startswith("срок:") or lowered.startswith("срок истёк:") or lowered.startswith("конец обсуждения:"):
+        return normalized
+    return f"Срок: {normalized}"
