@@ -554,6 +554,61 @@ class LLMEnrichmentTest(unittest.TestCase):
         self.assertIn("LLM enrichment fallback:", result.error or "")
         self.assertNotIn("Оставить в наблюдении", result.recommended_action or "")
 
+    def test_noisy_llm_json_fields_are_replaced_with_deterministic_fallbacks(self) -> None:
+        provider = OpenAICompatibleEnrichmentProvider(
+            base_url="http://127.0.0.1:1234/v1",
+            api_key="",
+            model="test-model",
+            timeout_seconds=5,
+        )
+        enricher = DocumentEnricher(enabled=True, provider=provider)
+        noisy_payload = {
+            "document_type": "отбор",
+            "region": "Республика Карелия",
+            "authority": "Минсельхоз Республики Карелия",
+            "status": "прием открыт",
+            "deadline": "2026-05-20",
+            "effective_date": None,
+            "support_type": "грант",
+            "target_recipients": ["юрлица", "ИП"],
+            "what_changed": (
+                "АА МИНИСТЕРСТВО СЕЛЬСКОГО ХОЗЯЙСТВА И ПЕРЕРАБАТЫВАЮЩЕЙ "
+                "ПРОМЫШЛЕННОСТИ КРАЯ ПРИКАЗ o_O 08, (AG nw G4"
+            ),
+            "why_matters": "Нужно проверить условия участия клиентов в отборе.",
+            "what_to_check": "Проверить критерии отбора, документы и сроки подачи.",
+            "applicability_note": "Регион: Республика Карелия. Требуется проверка применимости к AHSTEP.",
+            "short_summary": "Поделиться ссылкой VK ID: 167975 Код: 01/02/05-26/00167975",
+            "confidence": "high",
+            "source_quotes": ["прием заявок открыт"],
+        }
+
+        with mock.patch.object(
+            provider,
+            "_post_json",
+            return_value={"choices": [{"message": {"content": json.dumps(noisy_payload, ensure_ascii=False)}}]},
+        ):
+            result = enricher.maybe_enrich_document(
+                title="Открыт прием заявок по молочному животноводству",
+                raw_text=(
+                    "Открыт прием заявок на реализацию мероприятий по развитию геномной "
+                    "селекции в области племенного животноводства. Срок подачи заявок до "
+                    "20 мая 2026 года. Максимальная сумма поддержки составляет 9 000 000 рублей."
+                ),
+                analysis=_analysis_result("requires_attention"),
+                source_name="Минсельхоз Республики Карелия",
+                region="federal",
+            )
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.status, "success")
+        self.assertNotIn("Поделиться ссылкой", result.executive_summary or "")
+        self.assertNotIn("ID:", result.executive_summary or "")
+        self.assertNotIn("o_O", result.facts.what_changed if result.facts else "")
+        self.assertIn("По документу видно окно поддержки или отбора.", result.executive_summary or "")
+        self.assertEqual(result.facts.why_matters, "Нужно проверить условия участия клиентов в отборе.")
+
     def test_analyze_pipeline_continues_when_enrichment_fails(self) -> None:
         db_path = self._db_path("llm_enrichment_failure_persist.db")
         init_db(db_path)
@@ -726,6 +781,64 @@ class LLMEnrichmentTest(unittest.TestCase):
         self.assertIn("2-4 предложения", prompt)
         self.assertIn("нужно сделать до конца обсуждения", prompt)
         self.assertIn("требует проверки", prompt)
+        self.assertIn("business-relevant", prompt)
+        self.assertIn("ocr", prompt)
+        self.assertIn("raw portal metadata", prompt)
+        self.assertIn("валидный json", prompt)
+        self.assertNotIn("gemma", prompt)
+        self.assertNotIn("nebius", prompt)
+
+    def test_build_document_card_input_sanitizes_regulation_portal_metadata(self) -> None:
+        prepared = build_document_card_input(
+            title="Решение о порядке предоставления субсидии",
+            raw_text=(
+                "Проект НПА: Решение о порядке предоставления субсидии\n"
+                "ID: 167975\n"
+                "Код: 01/02/05-26/00167975\n"
+                "Этап портала: Текст проекта\n"
+                "Ответственный: Иванов Иван Иванович\n"
+                "Файлы этапа: draft.docx; note.pdf\n"
+                "Публичное обсуждение: 19.05.2026 - 03.06.2026\n"
+                "Проект уточняет порядок предоставления субсидии на переработку продукции."
+            ),
+            analysis=_analysis_result("watchlist"),
+            source_name="Regulation.gov.ru - проекты НПА",
+            url="https://regulation.gov.ru/projects/167975",
+            region="federal",
+        )
+
+        excerpt = prepared["raw_text_excerpt"]
+        self.assertIn("Публичное обсуждение: 19.05.2026 - 03.06.2026", excerpt)
+        self.assertIn("Проект уточняет порядок предоставления субсидии", excerpt)
+        self.assertNotIn("ID:", excerpt)
+        self.assertNotIn("Код:", excerpt)
+        self.assertNotIn("Этап портала:", excerpt)
+        self.assertNotIn("Файлы этапа:", excerpt)
+        self.assertNotIn("Ответственный:", excerpt)
+
+    def test_build_document_card_input_sanitizes_mcx_share_residue(self) -> None:
+        prepared = build_document_card_input(
+            title="На ЦИПР-2026 обсудили проекты цифровой трансформации АПК",
+            raw_text=(
+                "Минсельхоз России. Новость АПК: На ЦИПР-2026 обсудили проекты цифровой "
+                "трансформации АПК Дата: 19.05.2026 Источник: https://mcx.gov.ru/press-service/news/test/ "
+                "Поделиться ссылкой VK Telegram На сессии обсудили цифровые сервисы для АПК и "
+                "пилотные проекты отраслевой автоматизации."
+            ),
+            analysis=_analysis_result("watchlist"),
+            source_name="Минсельхоз России - новости",
+            url="https://mcx.gov.ru/press-service/news/test/",
+            region="federal",
+        )
+
+        excerpt = prepared["raw_text_excerpt"]
+        self.assertIn("На сессии обсудили цифровые сервисы для АПК", excerpt)
+        self.assertNotIn("Поделиться ссылкой", excerpt)
+        self.assertNotIn(" VK ", f" {excerpt} ")
+        self.assertNotIn("Telegram", excerpt)
+        self.assertNotIn("Источник:", excerpt)
+        self.assertNotIn("Дата:", excerpt)
+        self.assertNotIn("https://mcx.gov.ru", excerpt)
 
     def test_display_enrichment_exposes_extended_document_card_fields(self) -> None:
         display = get_display_enrichment(
@@ -762,6 +875,36 @@ class LLMEnrichmentTest(unittest.TestCase):
         self.assertEqual(
             display["applicability_note"],
             "Применимость к AHSTEP требует проверки критериев получателя.",
+        )
+
+    def test_display_enrichment_suppresses_noisy_user_facing_fields(self) -> None:
+        display = get_display_enrichment(
+            {
+                "status": "success",
+                "facts_json": {
+                    "document_type": "проект НПА",
+                    "status": "проект обсуждается",
+                    "deadline": "2026-06-03",
+                    "what_changed": (
+                        "АА МИНИСТЕРСТВО СЕЛЬСКОГО ХОЗЯЙСТВА ПРИКАЗ o_O "
+                        "ID: 167975 Код: 01/02/05-26/00167975"
+                    ),
+                    "why_matters": "Нужно проверить влияние проекта на порядок поддержки.",
+                    "what_to_check": "Проверить проект и при необходимости подготовить позицию.",
+                    "short_summary": "Поделиться ссылкой VK ID: 167975 Код: 01/02/05-26/00167975",
+                    "confidence": "high",
+                },
+                "confidence": 0.8,
+            }
+        )
+
+        self.assertIsNotNone(display)
+        assert display is not None
+        self.assertEqual(display["factual_summary"], "")
+        self.assertEqual(display["executive_summary"], "")
+        self.assertEqual(
+            display["business_impact"],
+            "Нужно проверить влияние проекта на порядок поддержки.",
         )
 
     def test_source_quotes_are_preserved_in_facts_json(self) -> None:
@@ -954,6 +1097,178 @@ class LLMEnrichmentTest(unittest.TestCase):
         self.assertEqual(result.selected, 1)
         self.assertEqual(result.enriched, 1)
         self.assertEqual(provider.calls, 1)
+
+
+class UserFacingNoiseCleanupTest(unittest.TestCase):
+    """Targeted tests for post-LLM sanitization of user-facing text."""
+
+    def test_strip_leading_ocr_garbage_with_bureaucratic_keyword(self) -> None:
+        from app.llm.enrichment import _clean_user_facing_text
+
+        noisy = (
+            "АА МИНИСТЕРСТВО СЕЛЬСКОГО ХОЗЯЙСТВА И ПЕРЕРАБАТЫВАЮЩЕЙ "
+            "ПРОМЫШЛЕННОСТИ КРАСНОДАРСКОГО КРАЯ ‚ ПРИКАЗ 08, (AG nw G4 "
+            "г. Краснодар Об образовании региональной комиссии по отбору "
+            "проектов для предоставления грантов."
+        )
+        cleaned = _clean_user_facing_text(noisy)
+        self.assertNotIn("АА МИНИСТЕРСТВО", cleaned)
+        self.assertNotIn("(AG nw G4", cleaned)
+        self.assertNotIn("ПРИКАЗ", cleaned)
+        self.assertIn("Об образовании региональной комиссии", cleaned)
+
+    def test_strip_leading_latin_ocr_prefix(self) -> None:
+        from app.llm.enrichment import _clean_user_facing_text
+
+        noisy = (
+            "от KOS AOKE 2-78 г. Ростов-на-Дону утверждении форм документов "
+            "для проведения отбора на предоставление субсидии."
+        )
+        cleaned = _clean_user_facing_text(noisy)
+        self.assertNotIn("KOS AOKE", cleaned)
+        self.assertNotIn("2-78", cleaned)
+        # The "г. " marker is dropped during sentence dedupe because "г." is
+        # treated as a one-letter sentence — but the city name itself stays.
+        self.assertIn("Ростов-на-Дону", cleaned)
+        self.assertIn("утверждении форм документов", cleaned)
+
+    def test_strip_bracketed_ocr_prefix(self) -> None:
+        from app.llm.enrichment import _clean_user_facing_text
+
+        noisy = (
+            "ot (4ОТО №ZB г. Ростов-на-Дону 06 утверждении Требований "
+            "к документам для проведения отбора."
+        )
+        cleaned = _clean_user_facing_text(noisy)
+        self.assertNotIn("(4ОТО", cleaned)
+        self.assertNotIn("№ZB", cleaned)
+        self.assertIn("Ростов-на-Дону", cleaned)
+        self.assertIn("утверждении Требований", cleaned)
+
+    def test_collapse_spaced_uppercase_letters(self) -> None:
+        from app.llm.enrichment import _clean_user_facing_text
+
+        noisy = (
+            "МИНИСТЕРСТВО СЕЛЬСКОГО ХОЗЯЙСТВА И ПРОДОВОЛЬСТВИЯ "
+            "РОСТОВСКОЙ ОБЛАСТИ П О С Т А Н О В Л Е Н И Е "
+            "от 14.05.2026 № 16 г. Ростов-на-Дону Об утверждении "
+            "Требований к документам для проведения отбора."
+        )
+        cleaned = _clean_user_facing_text(noisy)
+        # Spaced caps must collapse before bureaucratic-header strip kicks in.
+        self.assertNotIn("П О С Т А Н О В Л Е Н И Е", cleaned)
+        self.assertNotIn("МИНИСТЕРСТВО СЕЛЬСКОГО", cleaned)
+        self.assertIn("Об утверждении Требований", cleaned)
+
+    def test_strip_mcx_portal_announcement_prefix_unconditionally(self) -> None:
+        from app.llm.enrichment import _clean_user_facing_text
+
+        noisy = (
+            "Минсельхоз России. Новость АПК: На ЦИПР-2026 обсудили проекты "
+            "цифровой трансформации АПК. На отраслевой сессии."
+        )
+        cleaned = _clean_user_facing_text(noisy)
+        self.assertNotIn("Новость АПК", cleaned)
+        self.assertIn("На ЦИПР-2026 обсудили проекты", cleaned)
+
+    def test_strip_inline_social_token(self) -> None:
+        from app.llm.enrichment import _clean_user_facing_text
+
+        noisy = "Документ принят 19 мая 2026 : VK На отраслевой сессии обсудили цифровизацию."
+        cleaned = _clean_user_facing_text(noisy)
+        self.assertNotIn(" VK ", f" {cleaned} ")
+        self.assertIn("На отраслевой сессии обсудили цифровизацию", cleaned)
+
+    def test_strip_truncated_share_phrase(self) -> None:
+        from app.llm.enrichment import _clean_user_facing_text
+
+        noisy = "Новость про цифровизацию АПК. Поделиться сс... На сессии обсудили проекты."
+        cleaned = _clean_user_facing_text(noisy)
+        self.assertNotIn("Поделиться сс", cleaned)
+        self.assertIn("Новость про цифровизацию", cleaned)
+        self.assertIn("На сессии обсудили проекты", cleaned)
+
+    def test_replace_english_eligibility_with_russian(self) -> None:
+        from app.llm.enrichment import _clean_user_facing_text
+
+        text = "Применимость к AHSTEP требует отдельной проверки eligibility и отраслевых условий."
+        cleaned = _clean_user_facing_text(text)
+        self.assertNotIn("eligibility", cleaned.lower())
+        self.assertIn("соответствия критериям", cleaned)
+
+    def test_replace_english_eligibility_keeps_grammar(self) -> None:
+        from app.llm.enrichment import _clean_user_facing_text
+
+        text = "Необходима проверка eligibility получателей."
+        cleaned = _clean_user_facing_text(text)
+        self.assertNotIn("eligibility", cleaned.lower())
+        # The verb-aware form converts "проверк[аеиу] eligibility" → "проверк… соответствия критериям".
+        self.assertIn("проверка соответствия критериям", cleaned)
+
+    def test_replace_english_compliance_and_deadline(self) -> None:
+        from app.llm.enrichment import _clean_user_facing_text
+
+        text = "Проверить compliance и deadline по программе."
+        cleaned = _clean_user_facing_text(text)
+        self.assertNotIn("compliance", cleaned.lower())
+        self.assertNotIn("deadline", cleaned.lower())
+        self.assertIn("соблюдение требований", cleaned)
+        self.assertIn("сроки", cleaned)
+
+    def test_keep_lowercase_russian_sentence_untouched(self) -> None:
+        from app.llm.enrichment import _clean_user_facing_text
+
+        text = "Документ меняет порядок предоставления субсидии в Краснодарском крае."
+        cleaned = _clean_user_facing_text(text)
+        self.assertEqual(text, cleaned)
+
+    def test_keep_short_acronym_event_name(self) -> None:
+        from app.llm.enrichment import _clean_user_facing_text
+
+        text = "На ЦИПР-2026 обсудили цифровизацию АПК."
+        cleaned = _clean_user_facing_text(text)
+        # The "На ЦИПР-2026" prefix is a real event name, not OCR garbage —
+        # it must survive the leading-noise heuristic.
+        self.assertIn("ЦИПР-2026", cleaned)
+        self.assertIn("цифровизацию АПК", cleaned)
+
+    def test_harden_facts_sanitizes_analysis_summary_fallback(self) -> None:
+        from app.llm.enrichment import (
+            DocumentCardFacts,
+            _harden_facts,
+        )
+
+        analysis = _analysis_result("requires_attention").model_copy(
+            update={
+                "summary": (
+                    "МИНИСТЕРСТВО СЕЛЬСКОГО ХОЗЯЙСТВА И ПРОДОВОЛЬСТВИЯ "
+                    "РОСТОВСКОЙ ОБЛАСТИ П О С Т А Н О В Л Е Н И Е "
+                    "от 14.05.2026 № 16 г. Ростов-на-Дону Об утверждении "
+                    "Требований к документам для проведения отбора."
+                ),
+            }
+        )
+        empty_facts = DocumentCardFacts(
+            document_type="отбор",
+            status="прием открыт",
+            what_changed="",
+            why_matters="",
+            what_to_check="",
+            short_summary="",
+            confidence="high",
+        )
+        hardened = _harden_facts(
+            empty_facts,
+            analysis=analysis,
+            raw_text="",
+            source_name="Минсельхоз Ростовской области",
+            region="rostov",
+            url=None,
+        )
+        # The bureaucratic-header prefix in analysis.summary must be stripped
+        # before it can leak into the fallback what_changed field.
+        self.assertNotIn("П О С Т А Н О В Л Е Н И Е", hardened.what_changed)
+        self.assertNotIn("МИНИСТЕРСТВО СЕЛЬСКОГО", hardened.what_changed)
 
 
 if __name__ == "__main__":

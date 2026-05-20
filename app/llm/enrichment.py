@@ -72,6 +72,108 @@ EFFECTIVE_DATE_MARKERS = (
     "вступают в силу",
     "планируемое вступление в силу",
 )
+WHITESPACE_RE = re.compile(r"\s+")
+URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+SHARE_PHRASE_RE = re.compile(
+    r"\b(?:поделиться\s+ссылкой|поделиться\s+в\s+социальных\s+сетях)\b",
+    re.IGNORECASE,
+)
+SOCIAL_TOKEN_ONLY_RE = re.compile(r"^(?:vk|ok|telegram|whatsapp|viber)$", re.IGNORECASE)
+INLINE_SOURCE_DATE_RE = re.compile(
+    r"\b(?:дата|источник)\s*:\s*(?:https?://\S+|"
+    r"\d{1,2}[./]\d{1,2}[./]\d{2,4}|"
+    r"\d{1,2}\s+[а-яё]+\s+\d{4})",
+    re.IGNORECASE,
+)
+PORTAL_METADATA_INLINE_PATTERNS = (
+    re.compile(r"\bID\s*:\s*[A-Za-z0-9/_\-]+\b", re.IGNORECASE),
+    re.compile(r"\bКод\s*:\s*[A-Za-z0-9/_\-]+\b", re.IGNORECASE),
+    re.compile(r"\bЭтап\s+портала\s*:\s*[^.]+", re.IGNORECASE),
+    re.compile(r"\bФайлы\s+этапа\s*:\s*[^.]+", re.IGNORECASE),
+    re.compile(r"\bОтветственн(?:ый|ая)\s*:\s*[^.]+", re.IGNORECASE),
+    re.compile(r"\bПроцедура\s*:\s*[^.]+", re.IGNORECASE),
+)
+LLM_NOISE_LINE_PREFIXES = (
+    "id:",
+    "код:",
+    "этап портала:",
+    "файлы этапа:",
+    "ответственный:",
+    "поделиться ссылкой",
+    "поделиться в социальных сетях",
+    "код для вставки в блог",
+    "выделить фрагмент",
+)
+MCX_SITE_PREFIX_RE = re.compile(
+    r"^(?:минсельхоз\s+россии\.?\s*)?(?:новость\s+апк\s*:?\s*)",
+    re.IGNORECASE,
+)
+NOISY_OCR_TOKEN_RE = re.compile(
+    r"(?:\bo_O\b|\bLOLGE\b|©Об|№\{|�|\ufffd|cid:|[□■])",
+    re.IGNORECASE,
+)
+UPPERCASE_LETTER_RE = re.compile(r"[A-ZА-ЯЁ]")
+LOWERCASE_LETTER_RE = re.compile(r"[a-zа-яё]")
+DATE_ONLY_LINE_RE = re.compile(
+    r"^\d{1,2}[./]\d{1,2}[./]\d{2,4}$|^\d{1,2}\s+[а-яё]+\s+\d{4}$",
+    re.IGNORECASE,
+)
+# "П О С Т А Н О В Л Е Н И Е" — single uppercase Cyrillic letters separated by
+# spaces, a common PDF-text-extraction artifact (letter-spacing → real spaces).
+SPACED_CAPS_RE = re.compile(r"\b[А-ЯЁ](?:\s+[А-ЯЁ]){3,}\b")
+# Inline social-network tokens left over from share buttons ("...19 мая 2026 : VK На...").
+INLINE_SOCIAL_TOKEN_RE = re.compile(
+    r"(?:^|(?<=\s))(?:VK|OK|Telegram|WhatsApp|Viber)(?=\s|$)",
+    re.IGNORECASE,
+)
+# Truncated share phrase ("Поделиться сс...") after upstream summary clipping.
+TRUNCATED_SHARE_PHRASE_RE = re.compile(
+    r"\bподелиться\s+(?:сс|в)\w*\s*\.{2,}",
+    re.IGNORECASE,
+)
+# Anchor that signals where meaningful Russian content begins. Used to decide
+# how much OCR-garbage prefix to strip from the head of a noisy fragment.
+# We intentionally do NOT use "г. CityName" as an anchor: the sentence
+# splitter downstream treats "г." as a sentence terminator and would drop the
+# resulting one-letter "sentence", so anchoring on the city name itself keeps
+# the text dedupe-safe.
+MEANINGFUL_RUSSIAN_PHRASE_RE = re.compile(
+    r"(?:[А-ЯЁ][а-яё]{3,})"
+    r"|(?:\b[а-яё]{4,})"
+    r"|(?:\b(?:Об|О)\s+[а-яё])"
+)
+# Bureaucratic-act header keywords. Their presence in the dropped prefix
+# confirms the prefix is a noise header (Министерство ... Приказ ...).
+_BUREAUCRATIC_HEADER_KEYWORDS = (
+    "министерств",
+    "правительств",
+    "администрац",
+    "постановлен",
+    "приказ",
+    "распоряжен",
+    "решен",
+    "указ",
+)
+# English GR-jargon that corporate LLMs sometimes inject into Russian output.
+# The verb-aware pattern keeps "проверки/проверке eligibility" grammatical
+# after substitution.
+_ELIGIBILITY_VERB_RE = re.compile(
+    r"\b(проверк[аеиу])\s+eligibility\b",
+    re.IGNORECASE,
+)
+_ENGLISH_GR_TERM_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\beligibility\b", re.IGNORECASE), "соответствие критериям"),
+    (re.compile(r"\bcompliance\b", re.IGNORECASE), "соблюдение требований"),
+    (re.compile(r"\bdeadline(?:s)?\b", re.IGNORECASE), "сроки"),
+)
+# Portal/announcement prefix used by news.mcx.gov.ru ("Минсельхоз России. Новость АПК: ...").
+# Applied unconditionally on user-facing text so the LLM-copied prefix never
+# reaches the GR report.
+PORTAL_ANNOUNCEMENT_PREFIX_RE = re.compile(
+    r"(?:^|(?<=[\s.;]))(?:минсельхоз\s+россии\.?\s*)?новость\s+апк\s*:?\s*",
+    re.IGNORECASE,
+)
 
 
 class DocumentCardFacts(BaseModel):
@@ -507,7 +609,8 @@ class MockEnrichmentProvider(BaseEnrichmentProvider):
         }:
             base = (
                 "Документ помогает понять, применима ли мера к контуру AHSTEP, какие есть критерии участия, "
-                "и нужен ли срочный организационный шаг по подаче, проверке eligibility или сбору документов."
+                "и нужен ли срочный организационный шаг по подаче, проверке соответствия критериям "
+                "или сбору документов."
             )
         else:
             base = (
@@ -1134,10 +1237,7 @@ def _sanitize_enrichment_text(value: Any) -> str:
 
 
 def _sanitize_user_facing_enrichment_text(value: Any) -> str:
-    text = _sanitize_enrichment_text(value)
-    if not text or is_generic_enrichment_text(text):
-        return ""
-    return text
+    return _clean_user_facing_text(value)
 
 
 def _strip_markdown_fence(value: str) -> str:
@@ -1177,6 +1277,284 @@ def _looks_like_weak_user_text(value: str | None) -> bool:
     if not normalized:
         return True
     if is_generic_enrichment_text(normalized) or _looks_like_parser_residue(normalized):
+        return True
+    return False
+
+
+def _normalize_text(value: Any) -> str:
+    return WHITESPACE_RE.sub(" ", str(value or "").replace("\xa0", " ")).strip()
+
+
+def _sanitize_text_for_llm_input(
+    *,
+    title: str,
+    raw_text: str,
+    source_name: str | None,
+    url: str | None,
+) -> str:
+    source_key = f"{source_name or ''} {url or ''}".lower()
+    raw_lines = str(raw_text or "").replace("\r", "\n").splitlines()
+    kept_lines: list[str] = []
+    seen_lines: set[str] = set()
+    for raw_line in raw_lines:
+        line = _normalize_text(raw_line)
+        if not line:
+            continue
+        if _is_noise_line_for_llm(line, source_key=source_key):
+            continue
+        key = line.lower()
+        if key in seen_lines:
+            continue
+        seen_lines.add(key)
+        kept_lines.append(line)
+    candidate = "\n".join(kept_lines) if kept_lines else _normalize_text(raw_text)
+    candidate = _strip_inline_noise_fragments(candidate, source_key=source_key)
+    candidate = _drop_repeated_title_prefix(candidate, title=title)
+    candidate = _dedupe_sentences(candidate)
+    return _normalize_text(candidate)
+
+
+def _is_noise_line_for_llm(line: str, *, source_key: str) -> bool:
+    lowered = line.lower()
+    if not lowered:
+        return True
+    if URL_RE.fullmatch(line):
+        return True
+    if DATE_ONLY_LINE_RE.fullmatch(line):
+        return True
+    if SHARE_PHRASE_RE.fullmatch(lowered) or SOCIAL_TOKEN_ONLY_RE.fullmatch(lowered):
+        return True
+    if any(lowered.startswith(prefix) for prefix in LLM_NOISE_LINE_PREFIXES):
+        return True
+    if lowered.startswith("источник:") and "http" in lowered:
+        return True
+    if lowered.startswith("дата:") and len(lowered) < 40:
+        return True
+    if "regulation.gov" in source_key and (
+        lowered.startswith("id:")
+        or " код:" in lowered
+        or lowered.startswith("этап портала:")
+        or lowered.startswith("файлы этапа:")
+        or lowered.startswith("ответственный:")
+        or lowered.startswith("процедура:")
+    ):
+        return True
+    return _looks_like_ocr_noise_text(line)
+
+
+def _strip_inline_noise_fragments(text: str, *, source_key: str = "") -> str:
+    cleaned = str(text or "")
+    if not cleaned:
+        return ""
+    for pattern in PORTAL_METADATA_INLINE_PATTERNS:
+        cleaned = pattern.sub(" ", cleaned)
+    cleaned = re.sub(
+        r"(?:поделиться\s+ссылкой|поделиться\s+в\s+социальных\s+сетях)(?:\s+(?:vk|ok|telegram|whatsapp|viber))*",
+        " ",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = TRUNCATED_SHARE_PHRASE_RE.sub(" ", cleaned)
+    cleaned = INLINE_SOURCE_DATE_RE.sub(" ", cleaned)
+    cleaned = URL_RE.sub(" ", cleaned)
+    cleaned = NOISY_OCR_TOKEN_RE.sub(" ", cleaned)
+    cleaned = INLINE_SOCIAL_TOKEN_RE.sub(" ", cleaned)
+    # MCX/portal announcement prefix is stripped unconditionally — an LLM that
+    # copies it into user-facing facts must not leak it into the GR report.
+    cleaned = PORTAL_ANNOUNCEMENT_PREFIX_RE.sub("", cleaned)
+    if "mcx.gov.ru" in source_key or "минсельхоз россии" in source_key:
+        cleaned = MCX_SITE_PREFIX_RE.sub("", cleaned)
+    cleaned = _collapse_spaced_caps(cleaned)
+    cleaned = _strip_leading_ocr_noise(cleaned)
+    cleaned = _replace_english_gr_terms(cleaned)
+    return _normalize_text(cleaned)
+
+
+def _collapse_spaced_caps(text: str) -> str:
+    """Collapse "П О С Т А Н О В Л Е Н И Е" → "ПОСТАНОВЛЕНИЕ"."""
+    return SPACED_CAPS_RE.sub(lambda match: match.group(0).replace(" ", ""), text)
+
+
+def _strip_leading_ocr_noise(text: str) -> str:
+    """Remove OCR/bureaucratic-header garbage from the head of a fragment.
+
+    Finds the first occurrence of a "real" Russian phrase anchor in the text
+    (see ``MEANINGFUL_RUSSIAN_PHRASE_RE``). If the prefix before that anchor
+    looks like OCR noise — uppercase-dominant, Latin-mixed, or a known
+    bureaucratic-act header (Министерство ... Приказ от … № … г. …) — the
+    prefix is dropped. Otherwise the text is returned unchanged so genuine
+    Russian sentences are never truncated.
+    """
+    if not text:
+        return text
+    match = MEANINGFUL_RUSSIAN_PHRASE_RE.search(text)
+    if match is None or match.start() == 0:
+        return text
+    prefix = text[: match.start()]
+    if not _looks_like_ocr_prefix(prefix):
+        return text
+    return text[match.start():].lstrip(" ,.;:‚–-")
+
+
+def _looks_like_ocr_prefix(prefix: str) -> bool:
+    """Heuristic: does ``prefix`` look like OCR/bureaucratic garbage worth dropping?
+
+    Conservative on purpose — returns False when the prefix is a short
+    acronym/event name or a normal lowercase Russian fragment, so we never
+    truncate a real sentence. Returns True when the prefix has any of the
+    obvious noise signatures: bureaucratic-act keywords, Latin-character mix,
+    short bracketed OCR fragments, or a long uppercase block.
+    """
+    normalized = prefix.strip()
+    if not normalized:
+        return False
+    if len(normalized) > 600:
+        return False
+    lowered = normalized.lower()
+    if any(keyword in lowered for keyword in _BUREAUCRATIC_HEADER_KEYWORDS):
+        return True
+    cyrillic_lower = len(re.findall(r"[а-яё]", normalized))
+    cyrillic_upper = len(re.findall(r"[А-ЯЁ]", normalized))
+    latin_chars = len(re.findall(r"[A-Za-z]", normalized))
+    if cyrillic_lower >= 20 and latin_chars < cyrillic_lower * 0.2 and cyrillic_lower > cyrillic_upper:
+        # Mostly real lowercase Russian — not OCR noise.
+        return False
+    # Latin admixture in a Russian fragment is a strong OCR signature.
+    if latin_chars >= 4 and latin_chars >= cyrillic_lower:
+        return True
+    # Bracketed short fragments characteristic of OCR debris.
+    if re.search(r"\([^)]{2,15}\)", normalized) and len(normalized) <= 200:
+        return True
+    # Numeric + Latin token mix ("4ОТО ZB", "G4 2-78").
+    if re.search(r"\d{1,3}[-/.]\d", normalized) and latin_chars > 0:
+        return True
+    # All-uppercase block of substantial length — likely a stamped header
+    # rather than a real sentence start. The thresholds intentionally leave
+    # short acronyms (e.g. "ЦИПР-2026", "АПК") untouched.
+    if cyrillic_upper >= 18 and cyrillic_upper >= cyrillic_lower * 3:
+        return True
+    return False
+
+
+def _replace_english_gr_terms(text: str) -> str:
+    """Replace English GR-jargon (eligibility/compliance/deadline) with Russian."""
+    if not text:
+        return text
+    result = _ELIGIBILITY_VERB_RE.sub(r"\1 соответствия критериям", text)
+    for pattern, replacement in _ENGLISH_GR_TERM_REPLACEMENTS:
+        result = pattern.sub(replacement, result)
+    return result
+
+
+def _drop_repeated_title_prefix(text: str, *, title: str) -> str:
+    cleaned = _normalize_text(text)
+    normalized_title = _normalize_text(title)
+    if not cleaned or not normalized_title:
+        return cleaned
+    lowered_title = normalized_title.lower()
+    while cleaned.lower().startswith(lowered_title):
+        cleaned = cleaned[len(normalized_title) :].strip(" .,-:;")
+    if normalized_title.lower() not in cleaned.lower():
+        cleaned = f"{normalized_title}. {cleaned}".strip()
+    return cleaned
+
+
+def _dedupe_sentences(text: str) -> str:
+    normalized = _normalize_text(text)
+    if not normalized:
+        return ""
+    unique_sentences: list[str] = []
+    seen: set[str] = set()
+    for sentence in SENTENCE_SPLIT_RE.split(normalized):
+        candidate = sentence.strip(" ;,")
+        if not candidate:
+            continue
+        key = re.sub(r"[\W_]+", " ", candidate.lower()).strip()
+        if len(key) < 5 or key in seen:
+            continue
+        seen.add(key)
+        unique_sentences.append(candidate)
+    return _normalize_text(" ".join(unique_sentences))
+
+
+def _looks_like_ocr_noise_text(text: str) -> bool:
+    normalized = _normalize_text(text)
+    if not normalized:
+        return False
+    if NOISY_OCR_TOKEN_RE.search(normalized):
+        return True
+    letters = re.findall(r"[A-Za-zА-Яа-яЁё]", normalized)
+    if len(letters) < 18:
+        return False
+    uppercase_count = len(UPPERCASE_LETTER_RE.findall(normalized))
+    lowercase_count = len(LOWERCASE_LETTER_RE.findall(normalized))
+    if uppercase_count < 12 or uppercase_count <= lowercase_count * 2:
+        return False
+    if not re.search(r"министерств|правительств|постановлен|приказ", normalized, re.IGNORECASE):
+        return False
+    weird_symbol_count = len(re.findall(r"[©{}|~_]", normalized))
+    return weird_symbol_count > 0
+
+
+def _looks_like_bureaucratic_header_text(text: str) -> bool:
+    normalized = _normalize_text(text)
+    if not normalized:
+        return False
+    letters = re.findall(r"[A-Za-zА-Яа-яЁё]", normalized)
+    if len(letters) < 24:
+        return False
+    uppercase_count = len(UPPERCASE_LETTER_RE.findall(normalized))
+    lowercase_count = len(LOWERCASE_LETTER_RE.findall(normalized))
+    if uppercase_count < 12 or uppercase_count <= max(lowercase_count * 3, 12):
+        return False
+    return bool(
+        re.search(
+            r"министерств|правительств|администрац|постановлен|приказ",
+            normalized,
+            re.IGNORECASE,
+        )
+    )
+
+
+def _clean_user_facing_text(value: Any) -> str:
+    text = _sanitize_enrichment_text(value)
+    if not text:
+        return ""
+    # Hard reject any text that still carries synthetic-API field markers like
+    # "title:", "shortName:", "endDate:", "acceptingApplicationsInfo:". Those
+    # markers prove the LLM copied a raw portal payload structure, not Russian
+    # business content — stripping the prefix and keeping the tail would only
+    # conceal the leak.
+    lowered_raw = text.lower()
+    if any(marker in lowered_raw for marker in RAW_SYNTHETIC_TEXT_MARKERS):
+        return ""
+    text = _strip_inline_noise_fragments(text)
+    text = _dedupe_sentences(text)
+    if _looks_like_noisy_user_facing_text(text):
+        return ""
+    return _normalize_text(text)
+
+
+def _looks_like_noisy_user_facing_text(value: str | None) -> bool:
+    normalized = _normalize_text(value)
+    lowered = normalized.lower()
+    if not normalized:
+        return True
+    if is_generic_enrichment_text(lowered) or _looks_like_parser_residue(lowered):
+        return True
+    if SHARE_PHRASE_RE.search(lowered):
+        return True
+    if URL_RE.search(normalized):
+        return True
+    if _looks_like_ocr_noise_text(normalized):
+        return True
+    if _looks_like_bureaucratic_header_text(normalized):
+        return True
+    if "этап портала" in lowered or "файлы этапа" in lowered:
+        return True
+    if re.search(r"\bid\s*:\s*\S+", normalized, re.IGNORECASE):
+        return True
+    if re.search(r"\bкод\s*:\s*\S+", normalized, re.IGNORECASE):
         return True
     return False
 
@@ -1224,6 +1602,8 @@ def _harden_facts(
 ) -> DocumentCardFacts:
     payload = facts.model_dump(mode="json")
     hardened = DocumentCardFacts.model_validate(payload)
+    fallback_provider = MockEnrichmentProvider()
+    source_role = _normalized_source_role(source_name)
     if _is_regulation_discussion_context(analysis, url=url, raw_text=raw_text):
         hardened.document_type = "проект НПА"
         hardened.status = "проект обсуждается"
@@ -1237,9 +1617,38 @@ def _harden_facts(
     if not hardened.authority and source_name:
         hardened.authority = source_name
     if not hardened.applicability_note:
-        hardened.applicability_note = MockEnrichmentProvider()._build_applicability_note(
+        hardened.applicability_note = fallback_provider._build_applicability_note(
             region=region
         )
+    hardened.what_changed = (
+        _clean_user_facing_text(hardened.what_changed)
+        or _clean_user_facing_text(analysis.summary)
+    )
+    hardened.short_summary = _clean_user_facing_text(hardened.short_summary) or _clean_user_facing_text(
+        fallback_provider._build_executive_summary(
+            analysis,
+            source_role=source_role,
+        )
+    )
+    hardened.why_matters = _clean_user_facing_text(hardened.why_matters) or _clean_user_facing_text(
+        fallback_provider._build_business_impact(
+            analysis,
+            source_role=source_role,
+            region=region,
+            source_name=source_name,
+        )
+    )
+    hardened.what_to_check = _clean_user_facing_text(hardened.what_to_check) or _clean_user_facing_text(
+        fallback_provider._build_recommended_action(
+            analysis,
+            source_role=source_role,
+        )
+    )
+    hardened.applicability_note = _clean_user_facing_text(
+        hardened.applicability_note
+    ) or _clean_user_facing_text(
+        fallback_provider._build_applicability_note(region=region)
+    )
     return hardened
 
 
@@ -1287,11 +1696,17 @@ def build_document_card_input(
     max_document_chars: int | None = None,
 ) -> dict[str, Any]:
     safe_max_chars = max(1000, int(max_document_chars or config.LLM_MAX_DOCUMENT_CHARS))
+    sanitized_raw_text = _sanitize_text_for_llm_input(
+        title=title,
+        raw_text=raw_text or "",
+        source_name=source_name,
+        url=url,
+    )
     extracted = clean_text_for_analysis(
         source_name=source_name,
         url=url,
         title=title,
-        raw_text=raw_text or "",
+        raw_text=sanitized_raw_text,
     )
     topic_family = _extract_topic_family(getattr(analysis, "source_facts", []))
     return {
@@ -1313,7 +1728,7 @@ def build_document_card_input(
         "application_status": analysis.application_status,
         "deadline_text": analysis.deadline_text,
         "support_status": analysis.support_status,
-        "raw_text_excerpt": (extracted.text or raw_text or "")[:safe_max_chars],
+        "raw_text_excerpt": (extracted.text or sanitized_raw_text or raw_text or "")[:safe_max_chars],
     }
 
 

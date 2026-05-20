@@ -198,7 +198,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             provider="mock",
             model="mock-enrichment",
             enrichment=EnrichmentResult(
-                executive_summary="Executive summary для руководителя.",
+                executive_summary="Краткая сводка для руководителя.",
                 business_impact="Новая редакция меры меняет условия участия для заемщиков АПК.",
                 recommended_action="Проверить применимость обновленных условий и ответственного.",
                 deadline_hint="До 30 июня 2026 года.",
@@ -215,7 +215,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             db_path=db_path,
         )
 
-        self.assertIn("Executive summary для руководителя.", markdown)
+        self.assertIn("Краткая сводка для руководителя.", markdown)
         self.assertIn(
             "Новая редакция меры меняет условия участия для заемщиков АПК.", markdown
         )
@@ -256,7 +256,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
                     what_changed="Открыт отбор на предоставление субсидии.",
                     why_matters="GR нужно проверить, подходит ли мера под контур AHSTEP.",
                     what_to_check="Проверить критерии получателя и срок подачи заявки.",
-                    applicability_note="Применимость требует проверки eligibility.",
+                    applicability_note="Применимость требует проверки критериев получателя.",
                     short_summary="Открыт отбор на субсидию для АПК. Нужно проверить условия участия.",
                     confidence="high",
                     source_quotes=["Открыт отбор", "сельхозтоваропроизводители"],
@@ -303,7 +303,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             provider="mock",
             model="mock-enrichment",
             enrichment=EnrichmentResult(
-                executive_summary="AI-сводка: Executive summary для руководителя.",
+                executive_summary="AI-сводка: Краткая сводка для руководителя.",
                 business_impact="AI-оценка влияния: Новая редакция меры меняет условия участия для заемщиков АПК.",
                 recommended_action="AI-рекомендация: Проверить применимость обновленных условий и ответственного.",
                 deadline_hint="До 30 июня 2026 года.",
@@ -320,7 +320,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             db_path=db_path,
         )
 
-        self.assertIn("Executive summary для руководителя.", markdown)
+        self.assertIn("Краткая сводка для руководителя.", markdown)
         self.assertNotIn("AI-сводка:", markdown)
         self.assertNotIn("AI-оценка влияния:", markdown)
         self.assertNotIn("AI-рекомендация:", markdown)
