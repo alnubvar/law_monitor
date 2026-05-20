@@ -250,10 +250,8 @@ class LLMEnrichmentTest(unittest.TestCase):
         self.assertNotIn("AI-", result.executive_summary)
         self.assertNotIn("AI-", result.business_impact)
         self.assertNotIn("AI-", result.recommended_action)
-        self.assertEqual(
-            result.executive_summary,
-            "Нужно проверить применимость меры, условия участия и рабочие сроки.",
-        )
+        self.assertIn("По документу видно окно поддержки или отбора.", result.executive_summary)
+        self.assertIn("условия участия, круг получателей и рабочие сроки", result.executive_summary)
         self.assertEqual(result.deadline_hint, "Срок: до 01.06.2026")
         self.assertGreaterEqual(result.confidence or 0.0, 0.8)
         facts = result.facts_payload()
@@ -305,10 +303,8 @@ class LLMEnrichmentTest(unittest.TestCase):
             region="stavropol",
         )
 
-        self.assertEqual(
-            result.executive_summary,
-            "Документ меняет действующий порядок поддержки; нужно проверить, что именно изменилось для получателей и сроков.",
-        )
+        self.assertIn("Документ меняет действующий порядок поддержки в регионе.", result.executive_summary)
+        self.assertIn("какие условия, получатели и сроки изменены", result.executive_summary)
         self.assertNotIn("МИНИСТЕРСТВО ФИЗИЧЕСКОЙ КУЛЬТУРЫ", result.executive_summary)
 
     def test_display_enrichment_strips_legacy_ai_prefixes(self) -> None:
@@ -434,6 +430,7 @@ class LLMEnrichmentTest(unittest.TestCase):
         self.assertIsNotNone(display)
         assert display is not None
         self.assertEqual(display["deadline_hint"], "Конец обсуждения: 30.06.2026")
+        self.assertEqual(display["document_type"], "проект НПА")
 
     def test_display_enrichment_filters_raw_synthetic_fields(self) -> None:
         display = get_display_enrichment(
@@ -726,6 +723,46 @@ class LLMEnrichmentTest(unittest.TestCase):
         self.assertIn("action_level", prompt)
         self.assertIn("regulation.gov.ru", prompt)
         self.assertIn("effective_date", prompt)
+        self.assertIn("2-4 предложения", prompt)
+        self.assertIn("нужно сделать до конца обсуждения", prompt)
+        self.assertIn("требует проверки", prompt)
+
+    def test_display_enrichment_exposes_extended_document_card_fields(self) -> None:
+        display = get_display_enrichment(
+            {
+                "status": "success",
+                "facts_json": {
+                    "document_type": "отбор",
+                    "region": "Краснодарский край",
+                    "authority": "Минсельхоз края",
+                    "status": "прием открыт",
+                    "deadline": "2026-06-30",
+                    "effective_date": None,
+                    "support_type": "субсидия",
+                    "target_recipients": ["юрлица", "ИП"],
+                    "what_changed": "Открыт отбор на субсидию с региональным финансированием.",
+                    "why_matters": "Нужно проверить, подходит ли мера под контур AHSTEP.",
+                    "what_to_check": "Проверить критерии получателя и срок подачи заявки.",
+                    "applicability_note": "Применимость к AHSTEP требует проверки критериев получателя.",
+                    "short_summary": "Открыт отбор на субсидию для АПК. Нужно проверить условия участия.",
+                    "confidence": "high",
+                    "source_quotes": ["Открыт отбор"],
+                },
+                "confidence": 0.8,
+            }
+        )
+
+        self.assertIsNotNone(display)
+        assert display is not None
+        self.assertEqual(
+            display["factual_summary"],
+            "Открыт отбор на субсидию с региональным финансированием.",
+        )
+        self.assertEqual(display["target_recipients"], "юрлица, ИП")
+        self.assertEqual(
+            display["applicability_note"],
+            "Применимость к AHSTEP требует проверки критериев получателя.",
+        )
 
     def test_source_quotes_are_preserved_in_facts_json(self) -> None:
         db_path = self._db_path("llm_enrichment_source_quotes.db")

@@ -46,6 +46,10 @@ from app.visibility import (
 )
 
 SHORT_SUMMARY_MAX_CHARS = 140
+DETAIL_SUMMARY_MAX_CHARS = 520
+DETAIL_TEXT_MAX_CHARS = 420
+DETAIL_APPLICABILITY_MAX_CHARS = 360
+DETAIL_DATES_MAX_CHARS = 220
 REPORT_TITLE_MAX_CHARS = 90
 REPORT_REACTION_TITLE_MAX_CHARS = 70
 # UI/query parameters that are part of the source-side viewer UX and have no
@@ -1142,6 +1146,8 @@ def _format_human_item(
     require_action: bool,
     enrichment: dict[str, str] | None = None,
 ) -> list[str]:
+    if enrichment and enrichment.get("_document_card"):
+        return _format_document_card_item(item, enrichment=enrichment)
     clean_summary = _clean_iso_timestamps(item.summary) if item.summary else None
     summary_text = select_executive_summary(
         item,
@@ -1176,6 +1182,218 @@ def _format_human_item(
         ]
     )
     return lines
+
+
+def _format_document_card_item(
+    item: DigestItem,
+    *,
+    enrichment: dict[str, str],
+) -> list[str]:
+    lines = [f"### {item.title}"]
+    summary_text = _build_document_card_summary_text(item, enrichment=enrichment)
+    if summary_text:
+        lines.append(f"- Суть документа: {summary_text}")
+    importance_text = _build_document_card_importance_text(item, enrichment=enrichment)
+    if importance_text:
+        lines.append(f"- Почему важно: {importance_text}")
+    applicability_text = _build_document_card_applicability_text(
+        item,
+        enrichment=enrichment,
+    )
+    if applicability_text:
+        lines.append(f"- Кому может быть применимо: {applicability_text}")
+    action_text = _build_document_card_action_text(item, enrichment=enrichment)
+    if action_text:
+        lines.append(f"- Что проверить: {action_text}")
+    discussion_action = _build_document_card_discussion_action(enrichment=enrichment)
+    if discussion_action:
+        lines.append(f"- Что сделать до конца обсуждения: {discussion_action}")
+    dates_text = _build_document_card_dates_text(item, enrichment=enrichment)
+    if dates_text:
+        lines.append(f"- Сроки / даты: {dates_text}")
+    lines.extend(
+        [
+            f"- Источник: {_clean_display_url(item.url)}",
+            "",
+        ]
+    )
+    return lines
+
+
+def _build_document_card_summary_text(
+    item: DigestItem,
+    *,
+    enrichment: dict[str, str],
+) -> str:
+    combined = _merge_detail_texts(
+        enrichment.get("factual_summary"),
+        enrichment.get("executive_summary"),
+    )
+    if combined:
+        return _clip_detail_text(combined, max_chars=DETAIL_SUMMARY_MAX_CHARS)
+    clean_summary = _clean_iso_timestamps(item.summary) if item.summary else None
+    return _clip_detail_text(
+        select_executive_summary(
+            item,
+            fallback_text=clean_summary,
+            max_chars=DETAIL_SUMMARY_MAX_CHARS,
+        ),
+        max_chars=DETAIL_SUMMARY_MAX_CHARS,
+    )
+
+
+def _build_document_card_importance_text(
+    item: DigestItem,
+    *,
+    enrichment: dict[str, str],
+) -> str:
+    impact = enrichment.get("business_impact")
+    if impact and _is_useful_visible_importance(impact):
+        return _clip_detail_text(impact, max_chars=DETAIL_TEXT_MAX_CHARS)
+    return _clip_detail_text(
+        build_executive_reason(
+            item,
+            fallback_text=item.business_signal or item.impact or item.summary,
+            max_chars=DETAIL_TEXT_MAX_CHARS,
+        ),
+        max_chars=DETAIL_TEXT_MAX_CHARS,
+    )
+
+
+def _build_document_card_applicability_text(
+    item: DigestItem,
+    *,
+    enrichment: dict[str, str],
+) -> str:
+    parts: list[str] = []
+    region = enrichment.get("region") or (item.region if item.region and item.region != "federal" else "")
+    if region:
+        parts.append(f"Регион: {region}")
+    recipients = enrichment.get("target_recipients")
+    if recipients:
+        parts.append(f"Получатели: {recipients}")
+    support_type = enrichment.get("support_type")
+    if support_type:
+        label = "Тип поддержки" if support_type != "другое" else "Тип меры"
+        parts.append(f"{label}: {support_type}")
+    applicability_note = enrichment.get("applicability_note")
+    if applicability_note:
+        parts.append(applicability_note)
+    if not parts:
+        return ""
+    return _clip_detail_text("; ".join(parts), max_chars=DETAIL_APPLICABILITY_MAX_CHARS)
+
+
+def _build_document_card_action_text(
+    item: DigestItem,
+    *,
+    enrichment: dict[str, str],
+) -> str:
+    action = enrichment.get("recommended_action")
+    if action and _is_useful_visible_action(action):
+        return _clip_detail_text(action, max_chars=DETAIL_TEXT_MAX_CHARS)
+    fallback = _build_human_action_text(item, enrichment=enrichment)
+    return _clip_detail_text(fallback, max_chars=DETAIL_TEXT_MAX_CHARS)
+
+
+def _build_document_card_discussion_action(
+    *,
+    enrichment: dict[str, str],
+) -> str:
+    status = (enrichment.get("status") or "").strip().lower()
+    document_type = (enrichment.get("document_type") or "").strip().lower()
+    if status != "проект обсуждается" and document_type != "проект нпа":
+        return ""
+    discussion_deadline = _format_fact_date(enrichment.get("deadline"))
+    if discussion_deadline:
+        return (
+            "Сверить проект с интересующими мерами и процедурами AHSTEP, определить, есть ли замечания, "
+            f"и при необходимости подготовить позицию до {discussion_deadline}."
+        )
+    return (
+        "Сверить проект с интересующими мерами и процедурами AHSTEP и при необходимости подготовить позицию "
+        "до завершения публичного обсуждения."
+    )
+
+
+def _build_document_card_dates_text(
+    item: DigestItem,
+    *,
+    enrichment: dict[str, str],
+) -> str:
+    parts: list[str] = []
+    status = enrichment.get("status")
+    if status:
+        parts.append(f"Статус: {status}")
+    deadline_value = enrichment.get("deadline")
+    document_type = (enrichment.get("document_type") or "").strip().lower()
+    status_normalized = (status or "").strip().lower()
+    formatted_deadline = _format_fact_date(deadline_value)
+    if formatted_deadline:
+        if status_normalized == "проект обсуждается" or document_type == "проект нпа":
+            parts.append(f"Публичное обсуждение: до {formatted_deadline}")
+        elif status_normalized == "прием завершен" or (
+            deadline_value and is_deadline_expired(deadline_value)
+        ):
+            parts.append(f"Срок подачи заявок: истек {formatted_deadline}")
+        elif deadline_value and is_deadline_today(deadline_value):
+            parts.append(f"Срок подачи заявок: сегодня ({formatted_deadline})")
+        elif document_type in {"отбор", "мера поддержки"} or item.page_type == "selection_announcement":
+            parts.append(f"Срок подачи заявок: до {formatted_deadline}")
+        else:
+            parts.append(f"Ключевой срок: {formatted_deadline}")
+    else:
+        deadline_hint = _format_deadline_hint(enrichment.get("deadline_hint"))
+        if deadline_hint:
+            parts.append(deadline_hint)
+    effective_date = _format_fact_date(enrichment.get("effective_date"))
+    if effective_date:
+        parts.append(f"Вступление в силу: {effective_date}")
+    if not parts:
+        return ""
+    return _clip_detail_text("; ".join(parts), max_chars=DETAIL_DATES_MAX_CHARS)
+
+
+def _merge_detail_texts(primary: str | None, secondary: str | None) -> str:
+    first = _normalize_detail_text(primary)
+    second = _normalize_detail_text(secondary)
+    if not first:
+        return second
+    if not second:
+        return first
+    first_lower = first.lower()
+    second_lower = second.lower()
+    if first_lower == second_lower:
+        return first
+    if first_lower in second_lower:
+        return second
+    if second_lower in first_lower:
+        return first
+    if SequenceMatcher(None, first_lower, second_lower).ratio() >= 0.82:
+        return first if len(first) >= len(second) else second
+    return f"{first} {second}"
+
+
+def _normalize_detail_text(text: str | None) -> str:
+    if not text:
+        return ""
+    return re.sub(r"\s+", " ", _clean_iso_timestamps(text)).strip()
+
+
+def _clip_detail_text(text: str | None, *, max_chars: int) -> str:
+    normalized = _normalize_detail_text(text)
+    if not normalized:
+        return ""
+    if len(normalized) <= max_chars:
+        return normalized
+    return _word_boundary_clip(normalized, max_chars)
+
+
+def _format_fact_date(value: str | None) -> str:
+    parsed = parse_deadline_date(value)
+    if parsed is not None:
+        return format_iso_date(parsed)
+    return _normalize_detail_text(value)
 
 
 def _clean_display_url(url: str | None) -> str:

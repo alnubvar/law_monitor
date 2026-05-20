@@ -455,18 +455,33 @@ class MockEnrichmentProvider(BaseEnrichmentProvider):
         source_role: str,
     ) -> str:
         if _is_regulation_discussion_context(analysis, url=None):
-            return "Проект НПА вынесен на публичное обсуждение."
+            return (
+                "Проект НПА вынесен на публичное обсуждение. "
+                "Нужно понять, меняет ли он порядок поддержки, требования к получателям или связанные процедуры."
+            )
         if source_role == "regional_npa" and analysis.action_level == "requires_attention":
-            return "Документ меняет действующий порядок поддержки; нужно проверить, что именно изменилось для получателей и сроков."
+            return (
+                "Документ меняет действующий порядок поддержки в регионе. "
+                "По полному тексту или приложению нужно уточнить, какие условия, получатели и сроки изменены."
+            )
         if source_role in {"active_support_measures", "support_documents"} or analysis.page_type in {
             "measure_card",
             "selection_announcement",
             "deadline_update",
         }:
             if analysis.application_status == "closed":
-                return "Приём по мере завершён; документ полезен как ориентир по условиям и циклу отбора."
-            return "Нужно проверить применимость меры, условия участия и рабочие сроки."
-        return "Документ оставлен на наблюдении как сигнал для GR-мониторинга."
+                return (
+                    "Приём по мере завершён, но документ полезен как ориентир по условиям отбора. "
+                    "По нему стоит проверить цикл меры, требования к участникам и вероятность повторного окна."
+                )
+            return (
+                "По документу видно окно поддержки или отбора. "
+                "Нужно уточнить условия участия, круг получателей и рабочие сроки, чтобы оценить применимость к AHSTEP."
+            )
+        return (
+            "Документ содержит отраслевой или регуляторный сигнал для GR-мониторинга. "
+            "Нужно уточнить, есть ли у него практические последствия для AHSTEP."
+        )
 
     def _build_business_impact(
         self,
@@ -478,24 +493,27 @@ class MockEnrichmentProvider(BaseEnrichmentProvider):
     ) -> str:
         if _is_regulation_discussion_context(analysis, url=None):
             base = (
-                "По проекту можно заранее оценить изменение регулирования и при необходимости "
-                "подготовить GR-позицию до завершения обсуждения."
+                "По проекту можно заранее оценить изменение регулирования, которое еще не вступило в силу. "
+                "Это дает время проверить влияние на действующие меры поддержки и при необходимости подготовить GR-позицию до завершения обсуждения."
             )
         elif source_role == "regional_npa":
             base = (
-                "Документ может изменить правила доступа к региональной поддержке, состав "
-                "получателей или обязательные условия участия."
+                "Документ может изменить правила доступа к региональной поддержке, состав получателей, "
+                "условия участия или набор обязательных документов. Для AHSTEP важно понять, меняется ли практический порядок работы по мере."
             )
         elif source_role in {"active_support_measures", "support_documents"} or analysis.application_status in {
             "open",
             "regular",
         }:
             base = (
-                "Документ помогает понять, применима ли мера к контуру AHSTEP, какие есть "
-                "критерии участия и не требуется ли срочный организационный шаг."
+                "Документ помогает понять, применима ли мера к контуру AHSTEP, какие есть критерии участия, "
+                "и нужен ли срочный организационный шаг по подаче, проверке eligibility или сбору документов."
             )
         else:
-            base = "Сигнал важен для GR-мониторинга условий господдержки и смежного регулирования."
+            base = (
+                "Сигнал важен для GR-мониторинга условий господдержки и смежного регулирования. "
+                "Он может быть контекстом для планирования позиции, даже если немедленного действия пока нет."
+            )
 
         details: list[str] = []
         region_hint = self._format_region(region)
@@ -511,18 +529,31 @@ class MockEnrichmentProvider(BaseEnrichmentProvider):
             parsed_deadline = parse_deadline_date(analysis.deadline_text)
             if parsed_deadline is not None:
                 return (
-                    "Проверить, затрагивает ли проект порядок поддержки AHSTEP, и при необходимости "
-                    f"подготовить позицию до {format_iso_date(parsed_deadline)}."
+                    "Сверить предмет проекта с действующими мерами и процедурами AHSTEP; "
+                    "проверить, какие нормы меняются; при наличии замечаний подготовить позицию "
+                    f"до {format_iso_date(parsed_deadline)}."
                 )
-            return "Проверить влияние проекта на порядок поддержки и решить, нужна ли GR-позиция."
+            return (
+                "Сверить предмет проекта с действующими мерами и процедурами AHSTEP; "
+                "проверить, какие нормы меняются; решить, нужна ли GR-позиция."
+            )
         if source_role == "regional_npa":
-            return "Проверить, какие условия поддержки изменены, когда они вступают в силу и кого затрагивают."
+            return (
+                "Проверить, какие пункты порядка изменены; уточнить, есть ли новые критерии получателей, "
+                "документы, сроки или приложения; определить внутреннего владельца проверки."
+            )
         if analysis.action_level == "requires_attention":
             if analysis.application_status == "open" or analysis.deadline_text:
-                return "Проверить применимость меры, рабочий срок и ответственного за следующий шаг."
-            return "Проверить влияние документа на текущие GR-процессы и назначить следующий шаг."
+                return (
+                    "Проверить критерии получателя; окно подачи или текущий статус отбора; "
+                    "перечень документов; бюджетные условия; ответственного за следующий шаг внутри AHSTEP."
+                )
+            return (
+                "Проверить влияние документа на текущие GR-процессы, определить затронутые подразделения "
+                "и назначить следующий шаг."
+            )
         if analysis.page_type in {"selection_announcement", "deadline_update"}:
-            return "Проверить условия участия и актуальность окна подачи."
+            return "Проверить условия участия, актуальность окна подачи и перечень требуемых документов."
         return "Оставить документ в наблюдении и вернуться при следующем подтверждающем обновлении."
 
     def _build_deadline_hint(self, analysis: AnalysisResult) -> str | None:
@@ -1011,9 +1042,24 @@ def get_display_enrichment(
         confidence_score = float(confidence)
     if confidence_score is not None and confidence_score < min_confidence:
         return None
+    recipients = ""
+    if facts:
+        raw_recipients = facts.get("target_recipients", [])
+        if isinstance(raw_recipients, str):
+            recipient_values = [raw_recipients]
+        elif isinstance(raw_recipients, (list, tuple, set)):
+            recipient_values = list(raw_recipients)
+        else:
+            recipient_values = []
+        recipients = ", ".join(
+            _sanitize_enrichment_text(value) for value in recipient_values if value
+        ).strip(" ,")
     fields = {
         "executive_summary": _sanitize_user_facing_enrichment_text(
             facts.get("short_summary") if facts else enrichment_row.get("executive_summary")
+        ),
+        "factual_summary": _sanitize_user_facing_enrichment_text(
+            facts.get("what_changed") if facts else None
         ),
         "business_impact": _sanitize_user_facing_enrichment_text(
             facts.get("why_matters") if facts else enrichment_row.get("business_impact")
@@ -1026,10 +1072,15 @@ def get_display_enrichment(
         ),
     }
     if facts:
+        fields["document_type"] = _sanitize_enrichment_text(facts.get("document_type"))
         fields["region"] = _sanitize_enrichment_text(facts.get("region"))
         fields["authority"] = _sanitize_enrichment_text(facts.get("authority"))
         fields["status"] = _sanitize_enrichment_text(facts.get("status"))
+        fields["deadline"] = _sanitize_enrichment_text(facts.get("deadline"))
+        fields["effective_date"] = _sanitize_enrichment_text(facts.get("effective_date"))
         fields["support_type"] = _sanitize_enrichment_text(facts.get("support_type"))
+        fields["target_recipients"] = recipients
+        fields["applicability_note"] = _sanitize_enrichment_text(facts.get("applicability_note"))
         fields["_document_card"] = "1"
     if not any(fields.values()):
         return None

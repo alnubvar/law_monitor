@@ -273,10 +273,16 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             db_path=db_path,
         )
 
-        self.assertIn("Открыт отбор на субсидию для АПК.", markdown)
-        self.assertIn("GR нужно проверить, подходит ли мера под контур AHSTEP.", markdown)
-        self.assertIn("Проверить критерии получателя и срок подачи заявки.", markdown)
-        self.assertIn("Срок: до 30.06.2026", markdown)
+        self.assertIn("Суть документа:", markdown)
+        self.assertIn("Открыт отбор на предоставление субсидии.", markdown)
+        self.assertIn("Открыт отбор на субсидию для АПК. Нужно проверить условия участия.", markdown)
+        self.assertIn("Почему важно: GR нужно проверить, подходит ли мера под контур AHSTEP.", markdown)
+        self.assertIn("Кому может быть применимо:", markdown)
+        self.assertIn("Регион: РФ", markdown)
+        self.assertIn("Получатели: сельхозтоваропроизводители", markdown)
+        self.assertIn("Тип поддержки: субсидия", markdown)
+        self.assertIn("Что проверить: Проверить критерии получателя и срок подачи заявки.", markdown)
+        self.assertIn("Сроки / даты: Статус: прием открыт; Срок подачи заявок: до 30.06.2026", markdown)
 
     def test_report_strips_legacy_ai_prefixes_from_enrichment(self) -> None:
         db_path = self._db_path("report_enrichment_legacy_prefix.db")
@@ -2187,6 +2193,8 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertNotIn("Гарантия ВЭБ.РФ", markdown)
 
     def test_regulation_public_discussion_uses_correct_report_wording(self) -> None:
+        db_path = self._db_path("report_regulation_public_discussion.db")
+        init_db(db_path)
         document = self._doc(
             doc_id=30,
             source_name="Regulation.gov.ru",
@@ -2211,18 +2219,62 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             "Проект касается требований к видам племенных хозяйств и "
             "сельскохозяйственных товаропроизводителей."
         )
+        save_document_enrichment(
+            document_id=document.id,
+            document_url=document.url,
+            provider="mock",
+            model="mock-enrichment",
+            enrichment=EnrichmentResult.from_facts(
+                DocumentCardFacts(
+                    document_type="проект НПА",
+                    region="РФ",
+                    authority="Regulation.gov.ru",
+                    status="проект обсуждается",
+                    deadline="2026-05-26",
+                    effective_date=None,
+                    support_type="субсидия",
+                    target_recipients=["сельхозтоваропроизводители"],
+                    what_changed=(
+                        "Проект касается требований к видам племенных хозяйств и "
+                        "сельскохозяйственных товаропроизводителей."
+                    ),
+                    why_matters=(
+                        "Проект НПА на публичном обсуждении. "
+                        "Нужно проверить влияние на порядок поддержки и необходимость GR-позиции."
+                    ),
+                    what_to_check=(
+                        "Проверить предмет проекта, затронутые требования к получателям и "
+                        "необходимость подготовки позиции."
+                    ),
+                    applicability_note=(
+                        "Регион: РФ. Применимость к AHSTEP требует проверки затронутых правил и статуса получателя."
+                    ),
+                    short_summary=(
+                        "Проект НПА вынесен на публичное обсуждение. "
+                        "До окончания обсуждения нужно понять, меняет ли он требования к профильным получателям."
+                    ),
+                    confidence="high",
+                    source_quotes=["Конец обсуждения", "племенных хозяйств"],
+                )
+            ),
+            db_path=db_path,
+        )
 
         markdown = generate_markdown_report(
             [document],
             report_date="2026-05-13",
             relevant_only=True,
             action_levels=["requires_attention", "watchlist"],
+            db_path=db_path,
         )
 
         self.assertIn("Проект НПА на публичном обсуждении", markdown)
         self.assertIn("Проект НПА вынесен на публичное обсуждение.", markdown)
+        self.assertIn("Что сделать до конца обсуждения:", markdown)
+        self.assertIn("подготовить позицию до 26.05.2026", markdown)
         self.assertIn(
-            "Проверить влияние проекта и подготовить позицию до 26.05.2026.", markdown
+            "Сроки / даты: Статус: проект обсуждается; Публичное обсуждение: до 26.05.2026",
+            markdown,
         )
         self.assertNotIn("Открыт прием заявок", markdown)
         self.assertNotIn("Проверить сроки подачи", markdown)
