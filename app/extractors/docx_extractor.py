@@ -19,6 +19,27 @@ from app.models import ExtractionResult
 
 logger = logging.getLogger(__name__)
 
+MAX_DOCX_DOWNLOAD_BYTES = 50 * 1024 * 1024
+
+
+def _read_limited_bytes(
+    response: requests.Response,
+    *,
+    max_bytes: int = MAX_DOCX_DOWNLOAD_BYTES,
+) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    for chunk in response.iter_content(chunk_size=65536):
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > max_bytes:
+            raise ValueError(
+                f"DOCX download exceeded safety limit of {max_bytes} bytes"
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
 
 def _safe_filename(url: str) -> Path:
     parsed = urlparse(url)
@@ -43,11 +64,16 @@ def extract_text_from_docx(
         headers=dict(headers or DEFAULT_REQUEST_HEADERS),
         timeout=timeout or REQUEST_TIMEOUT,
         verify=verify_ssl,
+        stream=True,
     )
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+        content = _read_limited_bytes(response)
+    finally:
+        response.close()
 
     file_path = _safe_filename(url)
-    file_path.write_bytes(response.content)
+    file_path.write_bytes(content)
 
     document = Document(str(file_path))
     text = "\n".join(

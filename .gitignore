@@ -27,5 +27,8 @@ node_modules/
 
 reports/*.md
 !reports/.gitkeep
+reports/review_exports/
 docs/demo_report.md
 diagnostics_after_*.txt
+
+tmp_*

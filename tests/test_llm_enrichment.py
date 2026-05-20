@@ -201,7 +201,11 @@ class LLMEnrichmentTest(unittest.TestCase):
         self.assertEqual(enrichment["confidence"], 0.7)
 
     def test_disabled_path_does_nothing(self) -> None:
-        with mock.patch("app.config.LLM_ENRICHMENT_ENABLED", False):
+        # Both flags must be False; build_document_enricher OR-combines them,
+        # so an operator .env with LLM_DOCUMENT_ENRICHMENT_ENABLED=true would
+        # otherwise flip the "disabled" assertion.
+        with mock.patch("app.config.LLM_ENRICHMENT_ENABLED", False), \
+             mock.patch("app.config.LLM_DOCUMENT_ENRICHMENT_ENABLED", False):
             enricher = build_document_enricher()
 
         result = enricher.maybe_enrich_document(

@@ -27,6 +27,27 @@ from app.models import ExtractionResult
 
 logger = logging.getLogger(__name__)
 
+MAX_PDF_DOWNLOAD_BYTES = 50 * 1024 * 1024
+
+
+def _read_limited_bytes(
+    response: requests.Response,
+    *,
+    max_bytes: int = MAX_PDF_DOWNLOAD_BYTES,
+) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    for chunk in response.iter_content(chunk_size=65536):
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > max_bytes:
+            raise ValueError(
+                f"PDF download exceeded safety limit of {max_bytes} bytes"
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
 
 def _safe_filename(url: str, suffix: str = ".pdf") -> Path:
     parsed = urlparse(url)
@@ -46,30 +67,29 @@ def extract_text_from_pdf(
     verify_ssl: bool = True,
 ) -> ExtractionResult:
     ensure_directories()
+    request_kwargs: dict[str, object] = dict(
+        headers=dict(headers or DEFAULT_REQUEST_HEADERS),
+        timeout=timeout or REQUEST_TIMEOUT,
+        stream=True,
+    )
     if verify_ssl:
-        response = requests.get(
-            url,
-            headers=dict(headers or DEFAULT_REQUEST_HEADERS),
-            timeout=timeout or REQUEST_TIMEOUT,
-            verify=True,
-        )
+        response = requests.get(url, verify=True, **request_kwargs)
     else:
         # Suppress only the known urllib3 SSL warning for explicitly non-verified sources.
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", InsecureRequestWarning)
-            response = requests.get(
-                url,
-                headers=dict(headers or DEFAULT_REQUEST_HEADERS),
-                timeout=timeout or REQUEST_TIMEOUT,
-                verify=False,
-            )
-    response.raise_for_status()
+            response = requests.get(url, verify=False, **request_kwargs)
+    try:
+        response.raise_for_status()
+        content = _read_limited_bytes(response)
+    finally:
+        response.close()
 
     file_path = _safe_filename(url)
-    file_path.write_bytes(response.content)
+    file_path.write_bytes(content)
 
     text_parts: list[str] = []
-    with fitz.open(stream=response.content, filetype="pdf") as pdf:
+    with fitz.open(stream=content, filetype="pdf") as pdf:
         page_count = len(pdf)
         for page in pdf:
             text_parts.append(page.get_text("text"))

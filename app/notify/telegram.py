@@ -1098,7 +1098,7 @@ def _build_freshness_lines(db_path: Path | str) -> list[str]:
 
 
 def _find_latest_report_file() -> str | None:
-    reports_dir = Path("reports")
+    reports_dir = Path(config.REPORTS_DIR)
     if not reports_dir.exists():
         return None
     report_files = sorted(
