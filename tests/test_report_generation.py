@@ -387,6 +387,157 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             markdown,
         )
 
+    def test_report_without_enrichment_suppresses_raw_synthetic_summary(self) -> None:
+        document = self._doc(
+            doc_id=509,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Мера поддержки АПК",
+            url="https://gisp.gov.ru/nmp/measure/raw-summary",
+            action_level="requires_attention",
+            page_type="measure_card",
+            summary=(
+                "title: Мера поддержки АПК shortName: Поддержка "
+                "endDate: 2026-06-30 acceptingApplicationsInfo: прием идет"
+            ),
+        )
+
+        with patch(
+            "app.reports.markdown_report.list_document_enrichments", return_value={}
+        ):
+            markdown = generate_markdown_report(
+                [document],
+                report_date="2026-05-19",
+                relevant_only=True,
+                action_levels=["requires_attention", "watchlist"],
+            )
+
+        self.assertIn(
+            "Кратко: Мера поддержки требует проверки применимости, условий участия и возможных сроков.",
+            markdown,
+        )
+        self.assertNotIn("title:", markdown)
+        self.assertNotIn("shortName:", markdown)
+        self.assertNotIn("endDate:", markdown)
+        self.assertNotIn("acceptingApplicationsInfo:", markdown)
+
+    def test_failed_enrichment_row_does_not_leak_raw_fallback_summary(self) -> None:
+        db_path = self._db_path("report_failed_enrichment_raw_fallback.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=510,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Мера поддержки АПК",
+            url="https://gisp.gov.ru/nmp/measure/failed-raw",
+            action_level="requires_attention",
+            page_type="measure_card",
+            summary=(
+                "title: Мера поддержки АПК shortName: Поддержка "
+                "endDate: 2026-06-30 acceptingApplicationsInfo: прием идет"
+            ),
+        )
+        save_document_enrichment(
+            document_id=document.id,
+            document_url=document.url,
+            provider="mock",
+            model="mock-enrichment",
+            enrichment=EnrichmentResult.failed("invalid JSON"),
+            db_path=db_path,
+        )
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-19",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+            db_path=db_path,
+        )
+
+        self.assertIn(
+            "Кратко: Мера поддержки требует проверки применимости, условий участия и возможных сроков.",
+            markdown,
+        )
+        self.assertNotIn("invalid JSON", markdown)
+        self.assertNotIn("title:", markdown)
+        self.assertNotIn("shortName:", markdown)
+
+    def test_deleted_enrichment_rows_restore_clean_deterministic_fallback(self) -> None:
+        db_path = self._db_path("report_deleted_enrichment_clean_fallback.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=511,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Мера поддержки АПК",
+            url="https://gisp.gov.ru/nmp/measure/deleted-raw",
+            action_level="requires_attention",
+            page_type="measure_card",
+            summary=(
+                "title: Мера поддержки АПК shortName: Поддержка "
+                "endDate: 2026-06-30 acceptingApplicationsInfo: прием идет"
+            ),
+        )
+        save_document_enrichment(
+            document_id=document.id,
+            document_url=document.url,
+            provider="mock",
+            model="mock-enrichment",
+            enrichment=EnrichmentResult.from_facts(
+                DocumentCardFacts(
+                    short_summary="Полезное краткое пояснение по мере поддержки.",
+                    why_matters="GR нужно проверить возможность участия.",
+                    what_to_check="Проверить критерии получателя.",
+                    confidence="high",
+                    source_quotes=["Мера поддержки"],
+                )
+            ),
+            db_path=db_path,
+        )
+        with closing(sqlite3.connect(str(db_path))) as connection:
+            connection.execute("DELETE FROM document_enrichments")
+            connection.commit()
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-19",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+            db_path=db_path,
+        )
+
+        self.assertNotIn("Полезное краткое пояснение", markdown)
+        self.assertIn(
+            "Кратко: Мера поддержки требует проверки применимости, условий участия и возможных сроков.",
+            markdown,
+        )
+        self.assertNotIn("title:", markdown)
+        self.assertNotIn("shortName:", markdown)
+
+    def test_llm_disabled_report_remains_clean_without_enrichment(self) -> None:
+        document = self._doc(
+            doc_id=512,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Мера поддержки АПК",
+            url="https://gisp.gov.ru/nmp/measure/disabled-raw",
+            action_level="requires_attention",
+            page_type="measure_card",
+            summary="title: Мера поддержки shortName: Поддержка",
+        )
+
+        with patch("app.config.LLM_DOCUMENT_ENRICHMENT_ENABLED", False):
+            markdown = generate_markdown_report(
+                [document],
+                report_date="2026-05-19",
+                relevant_only=True,
+                action_levels=["requires_attention", "watchlist"],
+            )
+
+        self.assertIn("Кратко: Мера поддержки требует проверки", markdown)
+        self.assertNotIn("title:", markdown)
+        self.assertNotIn("shortName:", markdown)
+
     def test_report_ignores_errored_or_low_confidence_enrichment(self) -> None:
         db_path = self._db_path("report_enrichment_low_conf.db")
         init_db(db_path)

@@ -446,19 +446,21 @@ class MockEnrichmentProvider(BaseEnrichmentProvider):
         return "Оставить в наблюдении до следующего подтверждающего обновления."
 
     def _build_deadline_hint(self, analysis: AnalysisResult) -> str | None:
-        if analysis.deadline_text:
-            text = analysis.deadline_text.strip()
+        deadline_text = getattr(analysis, "deadline_text", None)
+        if deadline_text:
+            text = str(deadline_text).strip()
             parsed = parse_deadline_date(text)
             # Truth-format expired hints so non-truth-aware surfaces (Telegram
             # digest, search) never render an elapsed deadline as if it were
             # still alive.
             if parsed is not None and is_deadline_expired(text):
                 return f"Срок истёк: {format_iso_date(parsed)}"
-            if analysis.application_status == "closed":
+            if getattr(analysis, "application_status", None) == "closed":
                 return None
             return text
-        if analysis.key_dates:
-            first_date = str(analysis.key_dates[0]).strip()
+        key_dates = getattr(analysis, "key_dates", []) or []
+        if key_dates:
+            first_date = str(key_dates[0]).strip()
             if first_date:
                 return first_date
         return None
@@ -756,13 +758,13 @@ def get_display_enrichment(
     if confidence_score is not None and confidence_score < min_confidence:
         return None
     fields = {
-        "executive_summary": _sanitize_enrichment_text(
+        "executive_summary": _sanitize_user_facing_enrichment_text(
             facts.get("short_summary") if facts else enrichment_row.get("executive_summary")
         ),
-        "business_impact": _sanitize_enrichment_text(
+        "business_impact": _sanitize_user_facing_enrichment_text(
             facts.get("why_matters") if facts else enrichment_row.get("business_impact")
         ),
-        "recommended_action": _sanitize_enrichment_text(
+        "recommended_action": _sanitize_user_facing_enrichment_text(
             facts.get("what_to_check") if facts else enrichment_row.get("recommended_action")
         ),
         "deadline_hint": _sanitize_enrichment_text(
@@ -802,6 +804,13 @@ def _sanitize_enrichment_text(value: Any) -> str:
     return " ".join(text.split()).strip()
 
 
+def _sanitize_user_facing_enrichment_text(value: Any) -> str:
+    text = _sanitize_enrichment_text(value)
+    if not text or is_generic_enrichment_text(text):
+        return ""
+    return text
+
+
 def is_generic_enrichment_text(value: str | None) -> bool:
     normalized = " ".join(str(value or "").lower().split()).strip()
     if not normalized:
@@ -811,6 +820,10 @@ def is_generic_enrichment_text(value: str | None) -> bool:
         "сигнал может повлиять",
         "оценить срочность сигнала",
         "изменения могут повлиять на",
+        "title:",
+        "shortname:",
+        "enddate:",
+        "acceptingapplicationsinfo:",
     )
     return any(marker in normalized for marker in generic_markers)
 

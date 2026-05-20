@@ -265,6 +265,28 @@ class LLMEnrichmentTest(unittest.TestCase):
         self.assertEqual(facts["confidence"], "high")
         self.assertTrue(facts["source_quotes"])
 
+    def test_mock_provider_handles_raw_document_without_key_dates(self) -> None:
+        provider = MockEnrichmentProvider()
+        document = _analyzed_raw_document().model_copy(
+            update={
+                "deadline_text": None,
+                "summary": "Открыт прием заявок на получение субсидии.",
+            }
+        )
+
+        result = provider.enrich_document(
+            title=document.title,
+            raw_text=document.raw_text,
+            analysis=document,
+            source_name=document.source_name,
+            url=document.url,
+            region=document.region,
+        )
+
+        self.assertIsNone(result.error)
+        self.assertIsNone(result.deadline_hint)
+        self.assertIsNotNone(result.facts_payload())
+
     def test_mock_enrichment_uses_safe_generic_regional_npa_summary(self) -> None:
         analysis = _analysis_result("requires_attention").model_copy(
             update={
@@ -386,6 +408,18 @@ class LLMEnrichmentTest(unittest.TestCase):
         self.assertIsNotNone(display)
         assert display is not None
         self.assertEqual(display["business_impact"], "Влияние")
+
+    def test_display_enrichment_filters_raw_synthetic_fields(self) -> None:
+        display = get_display_enrichment(
+            {
+                "executive_summary": "title: Мера shortName: Поддержка",
+                "business_impact": "endDate: 2026-06-30",
+                "recommended_action": "acceptingApplicationsInfo: прием идет",
+                "confidence": 0.9,
+                "error": None,
+            }
+        )
+        self.assertIsNone(display)
 
     def test_display_enrichment_ignores_empty_rows(self) -> None:
         display = get_display_enrichment(

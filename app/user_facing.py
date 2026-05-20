@@ -32,6 +32,12 @@ PARSER_RESIDUE_SUMMARY_MARKERS = (
     "id:",
     "код:",
 )
+RAW_SYNTHETIC_SUMMARY_MARKERS = (
+    "title:",
+    "shortname:",
+    "enddate:",
+    "acceptingapplicationsinfo:",
+)
 
 _NPA_IN_TITLE_RE = re.compile(r"[№#]\s*(\d[\d/.\-]*\d|\d{1,6})")
 _DATE_IN_TITLE_RE = re.compile(r"\b(\d{1,2})\.(\d{2})(?:\.\d{2,4})?\b")
@@ -336,7 +342,11 @@ def build_executive_reason(
     deterministic = _deterministic_reason(document, section=section)
     if deterministic:
         return _clip_text(deterministic, max_chars)
-    if enrichment_text and not is_generic_enrichment_text(enrichment_text):
+    if (
+        enrichment_text
+        and not is_generic_enrichment_text(enrichment_text)
+        and not _looks_like_parser_residue_summary(enrichment_text)
+    ):
         compressed = _compress_freeform_reason(enrichment_text, document=document)
         if compressed:
             return _clip_text(compressed, max_chars)
@@ -357,7 +367,11 @@ def build_executive_action(
     deterministic = _deterministic_action(document, section=section)
     if deterministic:
         return _clip_text(deterministic, max_chars)
-    if enrichment_text and not is_generic_enrichment_text(enrichment_text):
+    if (
+        enrichment_text
+        and not is_generic_enrichment_text(enrichment_text)
+        and not _looks_like_parser_residue_summary(enrichment_text)
+    ):
         compressed = _compress_freeform_action(enrichment_text, document=document)
         if compressed:
             return _clip_text(compressed, max_chars)
@@ -383,11 +397,15 @@ def select_executive_summary(
         if deterministic and _is_generic_executive_summary(normalized_enrichment):
             return _clip_text(deterministic, max_chars)
         return _clip_text(normalized_enrichment, max_chars)
-    if fallback_text and not _is_generic_executive_summary(fallback_text):
+    if (
+        fallback_text
+        and not _is_generic_executive_summary(fallback_text)
+        and not _looks_like_parser_residue_summary(fallback_text)
+    ):
         return _clip_text(_normalize_text(fallback_text), max_chars)
     if deterministic:
         return _clip_text(deterministic, max_chars)
-    if fallback_text:
+    if fallback_text and not _looks_like_parser_residue_summary(fallback_text):
         return _clip_text(_normalize_text(fallback_text), max_chars)
     return ""
 
@@ -419,6 +437,10 @@ def is_useful_executive_summary(text: str | None) -> bool:
     normalized = _normalize_text(text)
     if not normalized:
         return False
+    if _looks_like_parser_residue_summary(normalized) or is_generic_enrichment_text(
+        normalized
+    ):
+        return False
     lowered = normalized.lower()
     generic_markers = (
         "документ оставлен на наблюдении",
@@ -440,6 +462,8 @@ def _looks_like_parser_residue_summary(text: str | None) -> bool:
     normalized = _normalize_text(text).lower()
     if not normalized:
         return False
+    if any(marker in normalized for marker in RAW_SYNTHETIC_SUMMARY_MARKERS):
+        return True
     return (
         sum(1 for marker in PARSER_RESIDUE_SUMMARY_MARKERS if marker in normalized) >= 2
     )
@@ -700,6 +724,8 @@ def _deterministic_summary(document: PresentationDocument) -> str:
         return "Приём заявок по данной мере поддержки завершён."
     if intent == INTENT_SUPPORT_CHANGE:
         return "Изменены условия предоставления меры поддержки."
+    if intent in {INTENT_SUPPORT_MEASURE, INTENT_SUPPORT_ATTENTION}:
+        return "Мера поддержки требует проверки применимости, условий участия и возможных сроков."
     return ""
 
 
