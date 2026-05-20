@@ -398,7 +398,10 @@ class UserFacingIntentCoherenceTest(unittest.TestCase):
 
         # The user must never see "Открыт прием заявок" for a window that has
         # already closed, and must never be instructed to submit after expiry.
-        self.assertEqual(reason, "Прием заявок завершён")
+        self.assertEqual(
+            reason,
+            "Окно подачи уже закрыто; сохранить как справочный сигнал, если мера может повторяться.",
+        )
         self.assertEqual(action, "Срок истёк, документ — справочно.")
 
     def test_stale_open_status_with_expired_deadline_renders_as_closed(self) -> None:
@@ -414,7 +417,10 @@ class UserFacingIntentCoherenceTest(unittest.TestCase):
         reason = build_executive_reason(document)
         action = build_executive_action(document)
 
-        self.assertEqual(reason, "Прием заявок завершён")
+        self.assertEqual(
+            reason,
+            "Окно подачи уже закрыто; сохранить как справочный сигнал, если мера может повторяться.",
+        )
         self.assertEqual(action, "Срок истёк, документ — справочно.")
 
     def test_alive_selection_still_uses_open_wording(self) -> None:
@@ -427,7 +433,8 @@ class UserFacingIntentCoherenceTest(unittest.TestCase):
         reason = build_executive_reason(document)
         action = build_executive_action(document)
 
-        self.assertEqual(reason, "Открыт прием заявок")
+        self.assertIn("Открыто окно подачи заявок по мере поддержки", reason)
+        self.assertNotEqual(reason, "Открыт прием заявок")
         self.assertEqual(
             action,
             "Проверить сроки подачи документов и готовность заявки.",
@@ -571,6 +578,51 @@ class UserFacingIntentCoherenceTest(unittest.TestCase):
 
         self.assertNotIn("экспорт", reason.lower())
         self.assertNotIn("Ограничения экспорта", reason)
+
+    def test_mcx_digital_news_does_not_render_as_export_support(self) -> None:
+        document = self._doc(
+            doc_id=306,
+            source_name="Минсельхоз России - новости",
+            region="federal",
+            title="Минсельхоз обсудил цифровую платформу отбора для АПК",
+            url="https://mcx.gov.ru/press-service/news/digital-platform/",
+            action_level="watchlist",
+            page_type="news_background",
+            summary="Цифровая платформа поможет проводить отборы для сельхозпроизводителей.",
+            raw_text="Минсельхоз сообщил о цифровой платформе для АПК и сервисах для сельхозпроизводителей.",
+        )
+        document.topic = "Поддержка экспорта АПК"
+
+        reason = build_executive_reason(document)
+        action = build_executive_action(document)
+        summary = select_executive_summary(document, fallback_text=document.summary)
+
+        self.assertIn("цифровизации", reason.lower())
+        self.assertIn("цифровой проект", action.lower())
+        self.assertIn("цифров", summary.lower())
+        self.assertNotIn("экспорт", reason.lower())
+
+    def test_unreadable_ocr_title_and_summary_use_safe_fallbacks(self) -> None:
+        document = self._doc(
+            doc_id=307,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="� � 12 / / / ___ 88 ; ; cid:15",
+            url="https://admkrai.krasnodar.ru/upload/iblock/d69/noisy.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="� � 12 / / / ___ 88 ; ; cid:15",
+            raw_text="� � 12 / / / ___ 88 ; ; cid:15",
+        )
+
+        self.assertEqual(
+            user_facing_title(document),
+            "НПА Краснодарского края: документ после OCR",
+        )
+        self.assertEqual(
+            select_executive_summary(document, fallback_text=document.summary),
+            "Текст после OCR недостаточен для уверенного выделения условий документа.",
+        )
 
 
 if __name__ == "__main__":

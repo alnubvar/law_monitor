@@ -89,6 +89,7 @@ OCR_WEAK_TEXT_RE = re.compile(
     r"|requires\s+ocr\s+extraction|ocr\s+placeholder",
     re.IGNORECASE,
 )
+UNREADABLE_TEXT_MARKERS = ("�", "\ufffd", "cid:", "□", "■")
 INTENT_SELECTION_OPEN = "selection_open"
 INTENT_SELECTION_EXPIRED = "selection_expired"
 INTENT_SELECTION_CHANGE = "selection_change"
@@ -401,11 +402,16 @@ def select_executive_summary(
         fallback_text
         and not _is_generic_executive_summary(fallback_text)
         and not _looks_like_parser_residue_summary(fallback_text)
+        and not _looks_like_unreadable_text(fallback_text)
     ):
         return _clip_text(_normalize_text(fallback_text), max_chars)
     if deterministic:
         return _clip_text(deterministic, max_chars)
-    if fallback_text and not _looks_like_parser_residue_summary(fallback_text):
+    if (
+        fallback_text
+        and not _looks_like_parser_residue_summary(fallback_text)
+        and not _looks_like_unreadable_text(fallback_text)
+    ):
         return _clip_text(_normalize_text(fallback_text), max_chars)
     return ""
 
@@ -437,8 +443,10 @@ def is_useful_executive_summary(text: str | None) -> bool:
     normalized = _normalize_text(text)
     if not normalized:
         return False
-    if _looks_like_parser_residue_summary(normalized) or is_generic_enrichment_text(
-        normalized
+    if (
+        _looks_like_parser_residue_summary(normalized)
+        or _looks_like_unreadable_text(normalized)
+        or is_generic_enrichment_text(normalized)
     ):
         return False
     lowered = normalized.lower()
@@ -469,6 +477,33 @@ def _looks_like_parser_residue_summary(text: str | None) -> bool:
     )
 
 
+def _looks_like_unreadable_text(text: str | None) -> bool:
+    normalized = _normalize_text(text)
+    if not normalized:
+        return False
+    lowered = normalized.lower()
+    if any(marker in lowered for marker in UNREADABLE_TEXT_MARKERS):
+        return True
+    if lowered.startswith("министерство") and (
+        "п о с т а н о в л е н" in lowered or "п р и к а з" in lowered
+    ):
+        return True
+    if len(normalized) < 35:
+        return False
+    alpha_chars = re.findall(r"[a-zа-яё]", lowered, flags=re.IGNORECASE)
+    word_tokens = re.findall(r"[a-zа-яё]{3,}", lowered, flags=re.IGNORECASE)
+    noisy_chars = re.findall(r"[\d_.,;:|/\\()[\]{}<>+=*^~`\"'-]", lowered)
+    if len(word_tokens) < 3 and len(noisy_chars) > max(len(alpha_chars), 10):
+        return True
+    cyrillic_words = re.findall(r"[а-яё]{4,}", lowered, flags=re.IGNORECASE)
+    if len(normalized) >= 80 and len(cyrillic_words) < 2 and len(noisy_chars) > 20:
+        return True
+    latin_noise_tokens = re.findall(r"\b[A-Z]{3,}\b", normalized)
+    if len(cyrillic_words) >= 5 and latin_noise_tokens and "»" in normalized:
+        return True
+    return False
+
+
 def has_meaningful_extracted_ocr_text(document: PresentationDocument) -> bool:
     raw_text = _normalize_text(_get_value(document, "raw_text"))
     if not raw_text:
@@ -497,6 +532,7 @@ def is_weak_ocr_placeholder_document(document: PresentationDocument) -> bool:
         _is_technical_ocr_placeholder(title)
         or bool(OCR_FALLBACK_TITLE_RE.search(title))
         or bool(OCR_FALLBACK_TITLE_RE.search(visible_title))
+        or _looks_like_unreadable_text(title)
     )
     if not has_placeholder_title:
         return False
@@ -505,7 +541,7 @@ def is_weak_ocr_placeholder_document(document: PresentationDocument) -> bool:
 
 def _base_visible_title(document: PresentationDocument) -> str:
     title = _normalize_text(_get_value(document, "title"))
-    if _is_technical_ocr_placeholder(title):
+    if _is_technical_ocr_placeholder(title) or _looks_like_unreadable_text(title):
         return _ocr_fallback_title(document)
     return title
 
@@ -714,6 +750,8 @@ def _deterministic_summary(document: PresentationDocument) -> str:
         if region_label:
             return f"Изменён порядок предоставления субсидий в {region_label}."
         return "Изменён порядок предоставления субсидий."
+    if intent == INTENT_REGIONAL_RULE:
+        return "Региональный НПА требует проверки условий и даты вступления в силу."
     if intent == INTENT_CREDIT_SUPPORT:
         return "Обновляются условия льготного кредитования АПК."
     if intent == INTENT_SELECTION_OPEN:
@@ -754,6 +792,9 @@ def _compress_freeform_action(text: str, *, document: PresentationDocument) -> s
 
 
 def _topic_specific_reason(document: PresentationDocument) -> str:
+    mcx_reason = _mcx_industry_reason(document)
+    if mcx_reason:
+        return mcx_reason
     ontology_match = _document_gr_topic_match(document)
     if ontology_match is None:
         return ""
@@ -761,6 +802,9 @@ def _topic_specific_reason(document: PresentationDocument) -> str:
 
 
 def _topic_specific_action(document: PresentationDocument) -> str:
+    mcx_action = _mcx_industry_action(document)
+    if mcx_action:
+        return mcx_action
     ontology_match = _document_gr_topic_match(document)
     if ontology_match is None:
         return ""
@@ -768,6 +812,9 @@ def _topic_specific_action(document: PresentationDocument) -> str:
 
 
 def _topic_specific_summary(document: PresentationDocument) -> str:
+    mcx_summary = _mcx_industry_summary(document)
+    if mcx_summary:
+        return mcx_summary
     ontology_match = _document_gr_topic_match(document)
     if ontology_match is None:
         return ""
@@ -901,9 +948,15 @@ def _reason_for_intent(
     document: PresentationDocument | None = None,
 ) -> str:
     if intent == INTENT_SELECTION_OPEN:
-        return "Открыт прием заявок"
+        return (
+            "Открыто окно подачи заявок по мере поддержки; требуется проверить "
+            "регион, получателей и применимость для AHSTEP."
+        )
     if intent == INTENT_SELECTION_EXPIRED:
-        return "Прием заявок завершён"
+        return (
+            "Окно подачи уже закрыто; сохранить как справочный сигнал, "
+            "если мера может повторяться."
+        )
     if intent == INTENT_REGULATION_DISCUSSION:
         return "Проект НПА на публичном обсуждении"
     if intent == INTENT_MARKET_OBSERVATION:
@@ -913,7 +966,7 @@ def _reason_for_intent(
     if intent == INTENT_REGIONAL_SUBSIDY:
         return "Изменены условия субсидирования"
     if intent == INTENT_REGIONAL_RULE:
-        return "Обновлены правила поддержки"
+        return "Региональный НПА может изменить порядок применения поддержки."
     if intent == INTENT_CREDIT_SUPPORT:
         return "Обновлены условия льготного кредитования"
     if intent == INTENT_SUPPORT_CHANGE:
@@ -1000,7 +1053,10 @@ def _action_for_intent(
     if intent == INTENT_SELECTION_CHANGE:
         return "Проверить условия и сроки отбора."
     if intent == INTENT_SUPPORT_MEASURE:
-        return "Проверить применимость меры, сроки и ответственного."
+        return (
+            "Проверить применимость меры, окно подачи, критерии получателей "
+            "и ответственного."
+        )
     if intent == INTENT_SUPPORT_ATTENTION:
         return "Проверить условия поддержки."
     if intent == INTENT_OCR_PLACEHOLDER:
@@ -1030,16 +1086,23 @@ def _document_gr_topic_match(
     combined_text: str | None = None,
 ) -> GRTopicMatch | None:
     if combined_text is not None:
-        return detect_gr_topic(_get_value(document, "topic"), combined_text)
-    return detect_gr_topic(
-        _get_value(document, "topic"),
-        _get_value(document, "title"),
-        _get_value(document, "summary"),
-        _get_value(document, "impact"),
-        _get_value(document, "business_signal"),
-        _get_value(document, "deadline_text"),
-        _get_value(document, "terms_text"),
-    )
+        match = detect_gr_topic(_get_value(document, "topic"), combined_text)
+    else:
+        match = detect_gr_topic(
+            _get_value(document, "topic"),
+            _get_value(document, "title"),
+            _get_value(document, "summary"),
+            _get_value(document, "impact"),
+            _get_value(document, "business_signal"),
+            _get_value(document, "deadline_text"),
+            _get_value(document, "terms_text"),
+        )
+    if match and match.family == "export_support" and _is_mcx_non_export_industry_news(
+        document,
+        combined_text=combined_text,
+    ):
+        return None
+    return match
 
 
 def _is_official_mcx_news(document: PresentationDocument) -> bool:
@@ -1049,6 +1112,101 @@ def _is_official_mcx_news(document: PresentationDocument) -> bool:
         source_name == "Минсельхоз России - новости"
         or "mcx.gov.ru/press-service/news/" in url
     )
+
+
+def _is_mcx_non_export_industry_news(
+    document: PresentationDocument,
+    *,
+    combined_text: str | None = None,
+) -> bool:
+    if not _is_official_mcx_news(document):
+        return False
+    combined = combined_text or _source_visible_text(document)
+    if _has_explicit_export_or_logistics_context(combined):
+        return False
+    return bool(_mcx_industry_context_label(combined))
+
+
+def _source_visible_text(document: PresentationDocument) -> str:
+    return " ".join(
+        _normalize_text(part).lower()
+        for part in (
+            _get_value(document, "title"),
+            _get_value(document, "summary"),
+            _get_value(document, "deadline_text"),
+            _get_value(document, "terms_text"),
+        )
+        if _normalize_text(part)
+    )
+
+
+def _has_explicit_export_or_logistics_context(text: str) -> bool:
+    return bool(
+        re.search(
+            r"экспорт|экспортер|экспортёр|вывоз|тамож|логист|терминал|поставк",
+            text,
+            re.IGNORECASE,
+        )
+    )
+
+
+def _mcx_industry_context_label(text: str) -> str:
+    lowered = text.lower()
+    if re.search(r"цифров|платформ|информационн\w+\s+систем", lowered):
+        return "Цифровизация АПК"
+    if re.search(r"селекц|племен|геном|пород", lowered):
+        return "Селекция и племенная работа"
+    if re.search(r"наук|технолог|инновац|исследован", lowered):
+        return "Наука и технологии АПК"
+    return ""
+
+
+def _mcx_industry_reason(document: PresentationDocument) -> str:
+    if not _is_official_mcx_news(document):
+        return ""
+    combined = _source_visible_text(document)
+    if _has_explicit_export_or_logistics_context(combined):
+        return ""
+    label = _mcx_industry_context_label(combined)
+    if label == "Цифровизация АПК":
+        return "Официальный сигнал Минсельхоза по цифровизации АПК."
+    if label == "Селекция и племенная работа":
+        return "Официальный сигнал Минсельхоза по селекции и племенной работе."
+    if label == "Наука и технологии АПК":
+        return "Официальный сигнал Минсельхоза по науке и технологиям АПК."
+    return ""
+
+
+def _mcx_industry_action(document: PresentationDocument) -> str:
+    if not _is_official_mcx_news(document):
+        return ""
+    combined = _source_visible_text(document)
+    if _has_explicit_export_or_logistics_context(combined):
+        return ""
+    label = _mcx_industry_context_label(combined)
+    if label == "Цифровизация АПК":
+        return "Проверить, касается ли цифровой проект отчетности, отбора или сервисов для АПК."
+    if label == "Селекция и племенная работа":
+        return "Проверить применимость к селекции, племенному направлению и требованиям программ."
+    if label == "Наука и технологии АПК":
+        return "Оценить, есть ли новые требования или возможности для технологических проектов."
+    return ""
+
+
+def _mcx_industry_summary(document: PresentationDocument) -> str:
+    if not _is_official_mcx_news(document):
+        return ""
+    combined = _source_visible_text(document)
+    if _has_explicit_export_or_logistics_context(combined):
+        return ""
+    label = _mcx_industry_context_label(combined)
+    if label == "Цифровизация АПК":
+        return "Минсельхоз сообщил о цифровых решениях для АПК."
+    if label == "Селекция и племенная работа":
+        return "Минсельхоз сообщил о селекции или племенном направлении."
+    if label == "Наука и технологии АПК":
+        return "Минсельхоз сообщил о научно-технологическом направлении в АПК."
+    return ""
 
 
 def _looks_like_mcx_official_support_watchlist(
@@ -1083,6 +1241,8 @@ def _looks_like_mcx_official_legislative_watchlist(
 def _looks_like_selection_announcement(
     document: PresentationDocument, combined: str
 ) -> bool:
+    if _source_role(document) == "news_signals" and _page_type(document) == "news_background":
+        return False
     if _page_type(document) == "selection_announcement":
         return True
     title = _normalize_text(_get_value(document, "title")).lower()

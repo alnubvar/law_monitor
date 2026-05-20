@@ -177,6 +177,18 @@ DISPLAY_EMPTY_MESSAGES = {
 }
 BAD_TITLE_VALUES = {"просмотр", "скачать", "документ", "pdf"}
 TITLE_SIMILARITY_THRESHOLD = 0.92
+PROMOTE_GENERIC_SELECTION_DISPLAY_MAX = 1
+EXPIRED_SELECTION_DISPLAY_MAX = 1
+WEAK_VISIBLE_IMPORTANCE_VALUES = {
+    "открыт прием заявок",
+    "прием заявок завершён",
+    "обновлены правила поддержки",
+    "изменены условия поддержки",
+    "изменены условия субсидирования",
+}
+WEAK_VISIBLE_ACTION_VALUES = {
+    "проверить применимость меры, сроки подачи и ответственного",
+}
 
 
 @dataclass(slots=True)
@@ -676,17 +688,88 @@ def _build_display_sections(
         if section in sections:
             sections[section].append(document)
     sections = _collapse_cross_section_duplicates(sections)
+    sections = _collapse_promote_generic_selection_duplicates(sections)
     sections = _apply_requires_attention_cap(sections)
     measures = sections.get("measures_and_selections", [])
     measures.sort(
         key=_display_priority_key,
         reverse=True,
     )
+    measures = _limit_expired_selection_documents(measures)
     if len(measures) > MEASURES_SECTION_DISPLAY_MAX:
         sections["measures_and_selections"] = measures[:MEASURES_SECTION_DISPLAY_MAX]
     else:
         sections["measures_and_selections"] = measures
     return sections
+
+
+def _collapse_promote_generic_selection_duplicates(
+    sections: dict[str, list[RawDocument]],
+) -> dict[str, list[RawDocument]]:
+    collapsed: dict[str, list[RawDocument]] = {
+        section: [] for section in DISPLAY_SECTION_ORDER
+    }
+    grouped: dict[str, list[RawDocument]] = {}
+    group_section: dict[str, str] = {}
+    for section in DISPLAY_SECTION_ORDER:
+        for document in sections.get(section, []):
+            key = _promote_generic_selection_duplicate_key(document)
+            if not key:
+                collapsed[section].append(document)
+                continue
+            grouped.setdefault(key, []).append(document)
+            group_section.setdefault(key, section)
+
+    for key, documents in grouped.items():
+        section = group_section[key]
+        ranked = sorted(documents, key=_duplicate_group_sort_key, reverse=True)
+        collapsed[section].extend(ranked[:PROMOTE_GENERIC_SELECTION_DISPLAY_MAX])
+    return collapsed
+
+
+def _duplicate_group_sort_key(document: RawDocument) -> tuple[int, int, int, float, int]:
+    return (
+        _operational_priority_score(document),
+        _document_fact_score(document),
+        _document_text_quality_score(document),
+        _published_timestamp(document) or _published_timestamp_from_collected(document),
+        -(document.id or 0),
+    )
+
+
+def _promote_generic_selection_duplicate_key(document: RawDocument) -> str | None:
+    if not _is_promote_budget_selection(document):
+        return None
+    visible_title = user_facing_title(document)
+    normalized = _normalize_title_key(visible_title)
+    if not normalized.startswith("открыт прием заявок") and not normalized.startswith(
+        "прием заявок заверш"
+    ):
+        return None
+    return f"promote-selection::{normalized}"
+
+
+def _is_promote_budget_selection(document: RawDocument) -> bool:
+    return (
+        "promote.budget.gov.ru" in (document.url or "").lower()
+        and document.page_type == "selection_announcement"
+    )
+
+
+def _limit_expired_selection_documents(
+    documents: list[RawDocument],
+    *,
+    max_expired: int = EXPIRED_SELECTION_DISPLAY_MAX,
+) -> list[RawDocument]:
+    visible: list[RawDocument] = []
+    expired_seen = 0
+    for document in documents:
+        if _is_expired_selection_document(document):
+            expired_seen += 1
+            if expired_seen > max_expired:
+                continue
+        visible.append(document)
+    return visible
 
 
 def _apply_requires_attention_cap(
@@ -939,7 +1022,17 @@ def _display_priority_score(document: RawDocument) -> int:
     if _has_regulation_subsidy_watchlist_priority(document):
         score += 30
     score += _gr_topic_priority_boost(document)
+    if _is_expired_selection_document(document):
+        score -= 80
     return score
+
+
+def _is_expired_selection_document(document: RawDocument) -> bool:
+    if document.page_type != "selection_announcement":
+        return False
+    if document.application_status == "closed":
+        return True
+    return bool(document.deadline_text and is_deadline_expired(document.deadline_text))
 
 
 def _gr_topic_priority_boost(document: RawDocument) -> int:
@@ -1063,7 +1156,8 @@ def _format_human_item(
     if summary_text:
         lines.append(f"- Кратко: {_clean_iso_timestamps(summary_text)}")
     deadline_text = _format_deadline_hint(
-        enrichment.get("deadline_hint") if enrichment else None
+        (enrichment.get("deadline_hint") if enrichment else None)
+        or item.deadline_text
     )
     if deadline_text:
         # The helper returns a complete executive-friendly label
@@ -1113,12 +1207,21 @@ def _build_human_importance_text(
     *,
     enrichment: dict[str, str] | None = None,
 ) -> str:
-    if enrichment and enrichment.get("_document_card") and enrichment.get("business_impact"):
+    if (
+        enrichment
+        and enrichment.get("_document_card")
+        and _is_useful_visible_importance(enrichment.get("business_impact"))
+    ):
         return _shorten_summary(enrichment["business_impact"])
     return _shorten_summary(
         build_executive_reason(
             item,
-            enrichment_text=enrichment.get("business_impact") if enrichment else None,
+            enrichment_text=(
+                enrichment.get("business_impact")
+                if enrichment
+                and _is_useful_visible_importance(enrichment.get("business_impact"))
+                else None
+            ),
             fallback_text=item.business_signal or item.impact or item.summary,
             max_chars=SHORT_SUMMARY_MAX_CHARS,
         )
@@ -1131,7 +1234,11 @@ def _build_human_action_text(
     *,
     enrichment: dict[str, str] | None = None,
 ) -> str:
-    if enrichment and enrichment.get("_document_card") and enrichment.get("recommended_action"):
+    if (
+        enrichment
+        and enrichment.get("_document_card")
+        and _is_useful_visible_action(enrichment.get("recommended_action"))
+    ):
         return _shorten_summary(enrichment["recommended_action"])
     action_text = build_executive_action(
         item,
@@ -1149,6 +1256,20 @@ def _build_human_action_text(
     if item.deadline_text and is_deadline_expired(item.deadline_text):
         return "Срок истёк, документ — справочно."
     return "Оставить на наблюдении."
+
+
+def _is_useful_visible_importance(text: str | None) -> bool:
+    normalized = re.sub(r"\s+", " ", (text or "").lower()).strip(" .;:-")
+    if not normalized:
+        return False
+    return normalized not in WEAK_VISIBLE_IMPORTANCE_VALUES
+
+
+def _is_useful_visible_action(text: str | None) -> bool:
+    normalized = re.sub(r"\s+", " ", (text or "").lower()).strip(" .;:-")
+    if not normalized:
+        return False
+    return normalized not in WEAK_VISIBLE_ACTION_VALUES
 
 
 def _format_stats(

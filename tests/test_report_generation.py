@@ -219,7 +219,10 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertIn(
             "Новая редакция меры меняет условия участия для заемщиков АПК.", markdown
         )
-        self.assertIn("Проверить применимость меры, сроки и ответственного.", markdown)
+        self.assertIn(
+            "Проверить применимость меры, окно подачи, критерии получателей и ответственного.",
+            markdown,
+        )
         # Truth-aware renderer reformats raw deadline text to executive wording.
         self.assertIn("Срок: до 30.06.2026", markdown)
 
@@ -383,7 +386,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
 
         self.assertIn("Почему важно: impact", markdown)
         self.assertIn(
-            "Что проверить: Проверить применимость меры, сроки и ответственного.",
+            "Что проверить: Проверить применимость меры, окно подачи, критерии получателей и ответственного.",
             markdown,
         )
 
@@ -653,7 +656,10 @@ class ReportGenerationSmokeTest(unittest.TestCase):
 
         self.assertIn("Legacy summary", markdown)
         self.assertIn("Legacy impact", markdown)
-        self.assertIn("Проверить применимость меры, сроки и ответственного.", markdown)
+        self.assertIn(
+            "Проверить применимость меры, окно подачи, критерии получателей и ответственного.",
+            markdown,
+        )
 
     def test_report_clips_long_enrichment_safely(self) -> None:
         db_path = self._db_path("report_enrichment_clip.db")
@@ -1576,6 +1582,121 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             visible_documents[0].url, "https://msh.krasnodar.ru/documents/subsidy-full"
         )
 
+    def test_report_collapses_generic_promote_selection_duplicates(self) -> None:
+        first = self._doc(
+            doc_id=31,
+            source_name="promote.budget.gov.ru / Минфин - отборы и меры поддержки",
+            region="federal",
+            title="Компенсация понесенных затрат сельхозорганизациям",
+            url="https://promote.budget.gov.ru/public/minfin/selection/view/first",
+            action_level="requires_attention",
+            page_type="selection_announcement",
+            summary="Открыт прием заявок на возмещение затрат.",
+        )
+        second = self._doc(
+            doc_id=32,
+            source_name="promote.budget.gov.ru / Минфин - отборы и меры поддержки",
+            region="federal",
+            title="Возмещение части затрат для организаций АПК",
+            url="https://promote.budget.gov.ru/public/minfin/selection/view/second",
+            action_level="requires_attention",
+            page_type="selection_announcement",
+            summary="Открыт прием заявок на возмещение затрат.",
+        )
+        for document in (first, second):
+            document.application_status = "open"
+            document.deadline_text = "Прием заявок до 20.05.2099."
+
+        markdown = generate_markdown_report(
+            [first, second],
+            report_date="2026-05-20",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertEqual(markdown.count("### Открыт прием заявок на возмещение затрат"), 1)
+        visible_urls = [url for url in (first.url, second.url) if url in markdown]
+        self.assertEqual(len(visible_urls), 1)
+
+    def test_report_limits_expired_selection_noise_in_measures_section(self) -> None:
+        documents = [
+            self._doc(
+                doc_id=40 + index,
+                source_name="promote.budget.gov.ru / Минфин - отборы и меры поддержки",
+                region="federal",
+                title=f"Отбор заявок на субсидии АПК {index}",
+                url=f"https://promote.budget.gov.ru/public/minfin/selection/view/expired-{index}",
+                action_level="watchlist",
+                page_type="selection_announcement",
+                summary="Прием заявок завершён.",
+            )
+            for index in range(3)
+        ]
+        for document in documents:
+            document.application_status = "closed"
+            document.deadline_text = "Прием заявок до 01.01.2020."
+
+        markdown = generate_markdown_report(
+            documents,
+            report_date="2026-05-20",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertEqual(markdown.count("Срок истёк: 01.01.2020"), 1)
+        visible_urls = [document.url for document in documents if document.url in markdown]
+        self.assertEqual(len(visible_urls), 1)
+
+    def test_report_ignores_weak_cached_document_card_text(self) -> None:
+        db_path = self._db_path("report_weak_document_card_text.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=33,
+            source_name="promote.budget.gov.ru / Минфин - отборы и меры поддержки",
+            region="federal",
+            title="Отбор на субсидию АПК",
+            url="https://promote.budget.gov.ru/public/minfin/selection/view/weak-card",
+            action_level="requires_attention",
+            page_type="selection_announcement",
+            summary="Открыт прием заявок.",
+        )
+        document.application_status = "open"
+        document.deadline_text = "Прием заявок до 20.05.2099."
+        save_document_enrichment(
+            document_id=document.id,
+            document_url=document.url,
+            provider="mock",
+            model="mock-enrichment",
+            enrichment=EnrichmentResult.from_facts(
+                DocumentCardFacts(
+                    document_type="отбор",
+                    status="прием открыт",
+                    deadline="2099-05-20",
+                    why_matters="Открыт прием заявок",
+                    what_to_check="Проверить применимость меры, сроки подачи и ответственного",
+                    short_summary="Открыт прием заявок на субсидию.",
+                    confidence="high",
+                )
+            ),
+            db_path=db_path,
+        )
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-20",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+            db_path=db_path,
+        )
+
+        self.assertNotIn("- Почему важно: Открыт прием заявок", markdown)
+        self.assertNotIn(
+            "Проверить применимость меры, сроки подачи и ответственного",
+            markdown,
+        )
+        self.assertIn("Открыто окно подачи заявок по мере поддержки", markdown)
+        self.assertIn("Проверить сроки подачи документов и готовность заявки.", markdown)
+
     def test_report_deduplicates_government_news_and_docs_by_shared_id(self) -> None:
         news_document = self._doc(
             doc_id=21,
@@ -1901,12 +2022,13 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             "или порядку поддержки; держать на наблюдении."
         )
 
-        markdown = generate_markdown_report(
-            [evergreen_measure, fresh_order],
-            report_date="2026-05-13",
-            relevant_only=True,
-            action_levels=["requires_attention", "watchlist"],
-        )
+        with patch("app.reports.markdown_report.list_document_enrichments", return_value={}):
+            markdown = generate_markdown_report(
+                [evergreen_measure, fresh_order],
+                report_date="2026-05-13",
+                relevant_only=True,
+                action_levels=["requires_attention", "watchlist"],
+            )
 
         self.assertIn("Изменены условия субсидирования", markdown)
         self.assertIn("https://npa.krasnodar.ru/rest/files/1233833", markdown)

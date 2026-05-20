@@ -194,7 +194,10 @@ class TelegramFormatterTest(unittest.TestCase):
         self.assertIn("статус: активна", text)
         self.assertIn("режим: регулярная мера", text)
         self.assertIn("Сигнал: Активная федеральная мера поддержки", text)
-        self.assertIn("Что проверить: Проверить применимость меры, сроки и ответственного.", text)
+        self.assertIn(
+            "Что проверить: Проверить применимость меры, окно подачи, критерии получателей и ответственного.",
+            text,
+        )
         self.assertIn("https://gisp.gov.ru/nmp/measure/9512857", text)
 
     def test_long_text_is_truncated(self) -> None:
@@ -470,7 +473,10 @@ class TelegramFormatterTest(unittest.TestCase):
 
         self.assertIn("Executive summary для Telegram.", text)
         self.assertIn("Новая редакция меры меняет условия участия для заемщиков АПК.", text)
-        self.assertIn("Проверить применимость меры, сроки и ответственного.", text)
+        self.assertIn(
+            "Проверить применимость меры, окно подачи, критерии получателей и ответственного.",
+            text,
+        )
         self.assertIn("До 30 июня 2026 года.", text)
 
     def test_formatter_strips_legacy_ai_prefixes_from_enrichment(self) -> None:
@@ -522,7 +528,10 @@ class TelegramFormatterTest(unittest.TestCase):
             text = build_digest_message([document])
 
         self.assertIn("Сигнал: Базовый сигнал.", text)
-        self.assertIn("Что проверить: Проверить применимость меры, сроки и ответственного.", text)
+        self.assertIn(
+            "Что проверить: Проверить применимость меры, окно подачи, критерии получателей и ответственного.",
+            text,
+        )
         self.assertNotIn("Executive summary для Telegram.", text)
 
     def test_formatter_ignores_errored_or_low_confidence_enrichment(self) -> None:
