@@ -26,6 +26,7 @@ node_modules/
 *.egg-info/
 
 reports/*.md
+report/*.txt
 !reports/.gitkeep
 reports/review_exports/
 docs/demo_report.md
