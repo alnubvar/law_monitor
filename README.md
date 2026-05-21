@@ -144,19 +144,27 @@ python main.py check-tracked
 python -m unittest -v
 ```
 
-## Deployment
+## Развертывание
 
-Deployment guide: [docs/deployment.md](docs/deployment.md)
+Руководство по deployment: [docs/deployment.md](docs/deployment.md)
 
-Operations docs:
+Пакет для передачи в корпоративную Linux-эксплуатацию:
+
+- [docs/CORPORATE_DEPLOYMENT.md](docs/CORPORATE_DEPLOYMENT.md)
+- [docs/PRODUCTION_ENV_TEMPLATE.md](docs/PRODUCTION_ENV_TEMPLATE.md)
+- [docs/OPERATOR_RUNBOOK.md](docs/OPERATOR_RUNBOOK.md)
+- [docs/DEPLOYMENT_CHECKLIST.md](docs/DEPLOYMENT_CHECKLIST.md)
+- [docs/SECURITY_NOTES.md](docs/SECURITY_NOTES.md)
+
+Операционные документы:
 
 - [docs/PRODUCTION_RUNBOOK.md](docs/PRODUCTION_RUNBOOK.md)
 - [docs/ACCEPTANCE_CHECKLIST.md](docs/ACCEPTANCE_CHECKLIST.md)
 - [docs/BACKUP_RESTORE.md](docs/BACKUP_RESTORE.md)
 
-This repository currently recommends Windows-first MVP deployment (`Task Scheduler` + SQLite), with optional Linux `systemd` examples.
+Для MVP в репозитории исторически описан Windows-first deployment (`Task Scheduler` + SQLite), а также optional Linux `systemd` examples.
 
-Windows OCR note (optional local runtime):
+Примечание по Windows OCR (optional local runtime):
 
 - Tesseract binary example: `C:\Program Files\Tesseract-OCR\tesseract.exe`
 - Tessdata path: `C:\Program Files\Tesseract-OCR\tessdata`
