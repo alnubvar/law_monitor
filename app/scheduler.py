@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import logging
+import signal
+import threading
 import time
 from datetime import datetime
+from pathlib import Path
 
 from app.config import (
+    DATA_DIR,
     DB_PATH,
     SCHEDULER_DAILY_REPORT_HOUR,
     SCHEDULER_HOURLY_INTERVAL_MINUTES,
@@ -35,11 +39,53 @@ from app.user_facing import user_facing_action_level
 
 logger = logging.getLogger(__name__)
 DAILY_DIGEST_EVENT_NAME = "daily_digest"
+HEARTBEAT_HOURLY_PATH = DATA_DIR / "last_success.cycle"
+HEARTBEAT_DAILY_PATH = DATA_DIR / "last_success.daily"
+
+_shutdown_event = threading.Event()
 
 try:
     from apscheduler.schedulers.blocking import BlockingScheduler
 except Exception:  # pragma: no cover - optional dependency fallback
     BlockingScheduler = None
+
+
+def _signal_name(signum: int) -> str:
+    try:
+        return signal.Signals(signum).name
+    except (ValueError, AttributeError):
+        return f"signal {signum}"
+
+
+def _request_shutdown(signum: int, _frame) -> None:
+    logger.info("Shutdown signal received (%s). Will exit after current cycle.", _signal_name(signum))
+    _shutdown_event.set()
+
+
+def _install_shutdown_handlers() -> None:
+    """Install SIGTERM/SIGINT handlers for the loop scheduler.
+
+    Only main-thread signal installation is supported; if called from a worker
+    thread the install is skipped silently and shutdown still works on SIGINT
+    via the default KeyboardInterrupt path.
+    """
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(sig, _request_shutdown)
+        except (ValueError, OSError):
+            logger.debug("Could not install handler for %s (not in main thread).", _signal_name(sig))
+
+
+def shutdown_requested() -> bool:
+    return _shutdown_event.is_set()
+
+
+def _touch_heartbeat(path: Path) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch(exist_ok=True)
+    except OSError as exc:
+        logger.warning("Heartbeat update failed for %s: %s", path, exc)
 
 
 def _build_visible_digest_documents(days: int = 1) -> list:
@@ -112,6 +158,7 @@ def run_hourly_cycle() -> tuple[int, int, int]:
                 requires_attention_count,
                 notified_count,
             )
+            _touch_heartbeat(HEARTBEAT_HOURLY_PATH)
             return collected_count, analyzed_count, notified_count
     except WriterLockHeldError:
         logger.warning("Hourly cycle skipped because another write operation is already running.")
@@ -151,6 +198,7 @@ def run_daily_report_cycle(
                 len(visible_documents),
                 sent,
             )
+            _touch_heartbeat(HEARTBEAT_DAILY_PATH)
             return report_path
     except WriterLockHeldError:
         logger.warning("Daily report cycle skipped because another write operation is already running.")
@@ -173,15 +221,15 @@ def run_scheduler(*, once: bool = False, days: int = 7, force_daily_digest: bool
         _run_loop_scheduler(days=days)
         return
 
-    scheduler = BlockingScheduler(timezone=SCHEDULER_TIMEZONE)
-    scheduler.add_job(
+    aps_scheduler = BlockingScheduler(timezone=SCHEDULER_TIMEZONE)
+    aps_scheduler.add_job(
         run_hourly_cycle,
         "interval",
         minutes=SCHEDULER_HOURLY_INTERVAL_MINUTES,
         id="hourly_collect_analyze",
         replace_existing=True,
     )
-    scheduler.add_job(
+    aps_scheduler.add_job(
         run_daily_report_cycle,
         "cron",
         hour=SCHEDULER_DAILY_REPORT_HOUR,
@@ -190,16 +238,34 @@ def run_scheduler(*, once: bool = False, days: int = 7, force_daily_digest: bool
         replace_existing=True,
         kwargs={"days": days},
     )
+
+    def _aps_shutdown(signum: int, _frame) -> None:
+        logger.info(
+            "Shutdown signal received (%s). Stopping APScheduler.", _signal_name(signum)
+        )
+        _shutdown_event.set()
+        try:
+            aps_scheduler.shutdown(wait=False)
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("APScheduler shutdown raised; process will exit anyway.")
+
+    try:
+        signal.signal(signal.SIGTERM, _aps_shutdown)
+    except (ValueError, OSError):
+        logger.debug("Could not install SIGTERM handler for APScheduler (not in main thread).")
+
     logger.info(
         "Scheduler started. Hourly interval=%s minutes, daily report at %02d:00 %s",
         SCHEDULER_HOURLY_INTERVAL_MINUTES,
         SCHEDULER_DAILY_REPORT_HOUR,
         SCHEDULER_TIMEZONE_NAME,
     )
-    scheduler.start()
+    aps_scheduler.start()
+    logger.info("Scheduler stopped cleanly.")
 
 
 def _run_loop_scheduler(*, days: int = 7) -> None:
+    _install_shutdown_handlers()
     logger.info(
         "Loop scheduler started. Hourly interval=%s minutes, daily report at %02d:00 %s",
         SCHEDULER_HOURLY_INTERVAL_MINUTES,
@@ -207,12 +273,26 @@ def _run_loop_scheduler(*, days: int = 7) -> None:
         SCHEDULER_TIMEZONE_NAME,
     )
     interval_seconds = max(SCHEDULER_HOURLY_INTERVAL_MINUTES, 1) * 60
-    while True:
+    while not _shutdown_event.is_set():
         run_hourly_cycle()
+        if _shutdown_event.is_set():
+            break
         now = datetime.now(SCHEDULER_TIMEZONE)
         if _daily_digest_due(now):
             run_daily_report_cycle(days=days, now=now)
-        time.sleep(interval_seconds)
+            if _shutdown_event.is_set():
+                break
+        if _interruptible_sleep(interval_seconds):
+            break
+    logger.info("Loop scheduler stopped cleanly.")
+
+
+def _interruptible_sleep(seconds: float) -> bool:
+    """Wait up to ``seconds`` or until shutdown is requested.
+
+    Returns True if shutdown was requested during the wait, False otherwise.
+    """
+    return _shutdown_event.wait(timeout=seconds)
 
 
 def _scheduler_now(now: datetime | None = None) -> datetime:

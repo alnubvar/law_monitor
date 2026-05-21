@@ -200,15 +200,102 @@ class SchedulerAutonomyTest(unittest.TestCase):
         self.assertTrue(due)
 
     def test_loop_scheduler_uses_daily_due_check(self) -> None:
-        with patch.object(scheduler, "run_hourly_cycle"):
-            with patch.object(scheduler, "_daily_digest_due", return_value=True) as due_check:
-                with patch.object(scheduler, "run_daily_report_cycle") as run_daily:
-                    with patch.object(scheduler.time, "sleep", side_effect=RuntimeError("stop")):
-                        with self.assertRaises(RuntimeError):
-                            scheduler._run_loop_scheduler(days=3)
+        scheduler._shutdown_event.clear()
+        try:
+            with patch.object(scheduler, "_install_shutdown_handlers"):
+                with patch.object(scheduler, "run_hourly_cycle"):
+                    with patch.object(scheduler, "_daily_digest_due", return_value=True) as due_check:
+                        with patch.object(scheduler, "run_daily_report_cycle") as run_daily:
+                            with patch.object(
+                                scheduler, "_interruptible_sleep", side_effect=RuntimeError("stop")
+                            ):
+                                with self.assertRaises(RuntimeError):
+                                    scheduler._run_loop_scheduler(days=3)
+        finally:
+            scheduler._shutdown_event.clear()
 
         due_check.assert_called_once()
         run_daily.assert_called_once()
+
+    def test_loop_scheduler_exits_when_shutdown_event_set(self) -> None:
+        scheduler._shutdown_event.clear()
+        try:
+            with patch.object(scheduler, "_install_shutdown_handlers"):
+                with patch.object(scheduler, "run_hourly_cycle") as hourly:
+                    with patch.object(scheduler, "_daily_digest_due", return_value=False):
+                        with patch.object(scheduler, "_interruptible_sleep") as interruptible:
+                            def _stop(*_args, **_kwargs):
+                                scheduler._shutdown_event.set()
+                                return True
+
+                            interruptible.side_effect = _stop
+                            scheduler._run_loop_scheduler(days=3)
+        finally:
+            scheduler._shutdown_event.clear()
+
+        hourly.assert_called_once()
+
+    def test_request_shutdown_sets_event(self) -> None:
+        scheduler._shutdown_event.clear()
+        try:
+            scheduler._request_shutdown(15, None)
+            self.assertTrue(scheduler._shutdown_event.is_set())
+        finally:
+            scheduler._shutdown_event.clear()
+
+    def test_hourly_cycle_touches_heartbeat_on_success(self) -> None:
+        heartbeat = Path("data/test_artifacts/last_success.cycle.test")
+        if heartbeat.exists():
+            heartbeat.unlink()
+        heartbeat.parent.mkdir(parents=True, exist_ok=True)
+        with patch.object(scheduler, "HEARTBEAT_HOURLY_PATH", heartbeat):
+            with patch.object(scheduler, "writer_lock", return_value=nullcontext()):
+                with patch.object(scheduler, "run_collect", return_value=0):
+                    with patch.object(scheduler, "run_analyze", return_value=0):
+                        with patch.object(scheduler, "notify_new_requires_attention", return_value=0):
+                            with patch.object(scheduler, "count_documents_by_action_level", return_value=0):
+                                scheduler.run_hourly_cycle()
+
+        self.assertTrue(heartbeat.exists())
+
+    def test_hourly_cycle_does_not_touch_heartbeat_when_lock_held(self) -> None:
+        from app.run_lock import WriterLockHeldError
+
+        heartbeat = Path("data/test_artifacts/last_success.cycle.held.test")
+        if heartbeat.exists():
+            heartbeat.unlink()
+        heartbeat.parent.mkdir(parents=True, exist_ok=True)
+
+        def _raise(*_args, **_kwargs):
+            raise WriterLockHeldError(lock_path=Path("dummy"))
+
+        with patch.object(scheduler, "HEARTBEAT_HOURLY_PATH", heartbeat):
+            with patch.object(scheduler, "writer_lock", side_effect=_raise):
+                result = scheduler.run_hourly_cycle()
+
+        self.assertEqual(result, (0, 0, 0))
+        self.assertFalse(heartbeat.exists())
+
+    def test_daily_cycle_touches_heartbeat_on_success(self) -> None:
+        db_path = self._db_path("scheduler_daily_heartbeat.db")
+        init_db(db_path)
+        heartbeat = Path("data/test_artifacts/last_success.daily.test")
+        if heartbeat.exists():
+            heartbeat.unlink()
+        report_path = Path("data/test_artifacts/scheduler_heartbeat_report.md")
+        report_path.write_text("# report", encoding="utf-8")
+
+        with patch.object(scheduler, "DB_PATH", db_path):
+            with patch.object(scheduler, "HEARTBEAT_DAILY_PATH", heartbeat):
+                with patch.object(scheduler, "writer_lock", return_value=nullcontext()):
+                    with patch.object(scheduler, "run_digest", return_value=report_path):
+                        with patch.object(scheduler, "_build_visible_digest_documents", return_value=[]):
+                            with patch.object(scheduler, "send_daily_report_digest", return_value=True):
+                                scheduler.run_daily_report_cycle(
+                                    now=datetime(2026, 5, 18, 9, 0, tzinfo=scheduler.SCHEDULER_TIMEZONE)
+                                )
+
+        self.assertTrue(heartbeat.exists())
 
 
 if __name__ == "__main__":

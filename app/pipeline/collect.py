@@ -29,6 +29,7 @@ from app.sources.stavropol_source import StavropolSource
 from app.storage import (
     determine_ocr_priority,
     get_document_by_url,
+    get_runtime_event,
     update_document_published_at_by_url,
     update_document_text_by_url,
     clear_source_errors,
@@ -47,6 +48,7 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 PROGRESS_LOG_EVERY = 25
+EMPTY_CYCLE_ALERT_EVENT_NAME = "collect_empty_cycle_alert"
 
 PARSER_REGISTRY: dict[str, type[BaseSource]] = {
     "generic_html": GenericHTMLSource,
@@ -260,15 +262,19 @@ def run_collect_with_options(
         raise ValueError(f"Source not found or disabled: {source_name}")
 
     saved_count = 0
+    sources_attempted = 0
+    sources_failed_fetch = 0
 
     for source_config in sources:
         logger.info("Collecting from source: %s", source_config.name)
         clear_source_errors(source_name=source_config.name, db_path=resolved_db_path)
         attempted_at = datetime.now(timezone.utc)
+        sources_attempted += 1
         try:
             source = create_source(source_config)
             items = source.fetch_items()
         except RequestException as exc:
+            sources_failed_fetch += 1
             source_warning = _format_source_access_warning(exc)
             logger.warning(
                 "Source collection failed for %s: %s (%s)",
@@ -294,6 +300,7 @@ def run_collect_with_options(
             )
             continue
         except Exception as exc:
+            sources_failed_fetch += 1
             logger.exception("Source collection failed for %s: %s", source_config.name, exc)
             save_source_error(source_config.name, source_config.url, str(exc), db_path=resolved_db_path)
             save_source_audit_record(
@@ -599,4 +606,93 @@ def run_collect_with_options(
 
     logger.info("Collection completed. Saved %s new documents.", saved_count)
     mark_runtime_event("collect", details=f"saved={saved_count}", db_path=resolved_db_path)
+    _maybe_emit_empty_cycle_alert(
+        sources_attempted=sources_attempted,
+        sources_failed_fetch=sources_failed_fetch,
+        source_name=source_name,
+        db_path=resolved_db_path,
+    )
     return saved_count
+
+
+def _maybe_emit_empty_cycle_alert(
+    *,
+    sources_attempted: int,
+    sources_failed_fetch: int,
+    source_name: str | None,
+    db_path: str | Path,
+) -> None:
+    """Send an operator alert when every source in a full cycle failed to fetch.
+
+    Conditions enforced to keep alerts non-noisy:
+    - only for full cycles (no source filter), so manual single-source runs
+      do not page;
+    - only when every attempted source raised at fetch time (not when sources
+      simply returned no new items, which is normal);
+    - de-duplicated via a runtime event, so a multi-hour outage produces one
+      alert, not one per cycle. Recovery silently clears the flag.
+    """
+    if source_name is not None:
+        return
+    if sources_attempted <= 0:
+        return
+
+    catastrophic = sources_failed_fetch == sources_attempted
+    previous_state = _read_empty_cycle_alert_state(db_path)
+
+    if catastrophic:
+        if previous_state == "alerted":
+            logger.info(
+                "Empty-cycle alert already sent for current outage; suppressing duplicate."
+            )
+            return
+        message = (
+            "⚠️ AHSTEP GR Monitor: сбор источников не выполнен.\n"
+            f"Все {sources_attempted} активных источников вернули ошибку на этапе загрузки.\n"
+            "Возможные причины: сеть, прокси, истёкшие сертификаты, блокировка по IP.\n"
+            "Проверьте журналы и доступность источников."
+        )
+        sent = False
+        try:
+            from app.notify.telegram import send_operator_alert
+
+            sent = send_operator_alert(message)
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("Operator alert delivery raised; alert state will retry next cycle.")
+            return
+        if sent:
+            _write_empty_cycle_alert_state("alerted", db_path)
+            logger.warning(
+                "Empty-cycle operator alert sent: %s/%s sources failed at fetch.",
+                sources_failed_fetch,
+                sources_attempted,
+            )
+        else:
+            logger.warning(
+                "Empty-cycle operator alert could not be delivered (Telegram not configured?)."
+            )
+        return
+
+    if previous_state == "alerted":
+        _write_empty_cycle_alert_state("ok", db_path)
+        logger.info("Source collection recovered; empty-cycle alert flag cleared.")
+
+
+def _read_empty_cycle_alert_state(db_path: str | Path) -> str:
+    event = get_runtime_event(EMPTY_CYCLE_ALERT_EVENT_NAME, db_path=db_path)
+    if not event:
+        return "ok"
+    details = str(event.get("details") or "")
+    for part in details.split(";"):
+        normalized = part.strip()
+        if normalized.startswith("state="):
+            return normalized[len("state="):].strip() or "ok"
+    return "ok"
+
+
+def _write_empty_cycle_alert_state(state: str, db_path: str | Path) -> None:
+    mark_runtime_event(
+        EMPTY_CYCLE_ALERT_EVENT_NAME,
+        details=f"state={state}",
+        db_path=db_path,
+    )

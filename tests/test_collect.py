@@ -1042,6 +1042,170 @@ class CollectAuditTest(unittest.TestCase):
         self.assertGreaterEqual(int(audit_rows[0]["links_filtered_count"] or 0), 2)
 
 
+class EmptyCycleAlertTest(unittest.TestCase):
+    def _db_path(self, name: str) -> Path:
+        path = Path(f"data/test_artifacts/{name}")
+        if path.exists():
+            path.unlink()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _source(self, name: str) -> SourceConfig:
+        return SourceConfig(
+            name=name,
+            url=f"https://example.com/{name}",
+            level="regional",
+            region="rostov",
+            source_role="regional_npa",
+            parser="generic_html",
+            description="test",
+        )
+
+    def test_alert_sent_when_all_sources_fail_at_fetch(self) -> None:
+        db_path = self._db_path("collect_empty_cycle_alert.db")
+        init_db(db_path)
+        configs = [self._source("alpha"), self._source("beta")]
+
+        class FailingSource:
+            def __init__(self) -> None:
+                self.last_fetch_stats = {}
+
+            def fetch_items(self):
+                raise requests.exceptions.ConnectionError("network down")
+
+        with patch("app.pipeline.collect.load_sources", return_value=configs):
+            with patch("app.pipeline.collect.create_source", return_value=FailingSource()):
+                with patch("app.notify.telegram.send_operator_alert", return_value=True) as alert:
+                    saved = run_collect_with_options(db_path=str(db_path))
+
+        self.assertEqual(saved, 0)
+        alert.assert_called_once()
+        message = alert.call_args.args[0]
+        self.assertIn("сбор источников", message.lower())
+
+    def test_alert_not_repeated_on_consecutive_failures(self) -> None:
+        db_path = self._db_path("collect_empty_cycle_dedup.db")
+        init_db(db_path)
+        configs = [self._source("alpha")]
+
+        class FailingSource:
+            def __init__(self) -> None:
+                self.last_fetch_stats = {}
+
+            def fetch_items(self):
+                raise requests.exceptions.ConnectionError("network down")
+
+        with patch("app.pipeline.collect.load_sources", return_value=configs):
+            with patch("app.pipeline.collect.create_source", return_value=FailingSource()):
+                with patch("app.notify.telegram.send_operator_alert", return_value=True) as alert:
+                    run_collect_with_options(db_path=str(db_path))
+                    run_collect_with_options(db_path=str(db_path))
+
+        self.assertEqual(alert.call_count, 1)
+
+    def test_alert_state_resets_on_recovery(self) -> None:
+        db_path = self._db_path("collect_empty_cycle_recovery.db")
+        init_db(db_path)
+        configs = [self._source("alpha")]
+
+        class FailingSource:
+            def __init__(self) -> None:
+                self.last_fetch_stats = {}
+
+            def fetch_items(self):
+                raise requests.exceptions.ConnectionError("network down")
+
+        class SucceedingSource:
+            def __init__(self) -> None:
+                self.last_fetch_stats = {}
+
+            def fetch_items(self):
+                return []
+
+        with patch("app.pipeline.collect.load_sources", return_value=configs):
+            with patch("app.notify.telegram.send_operator_alert", return_value=True) as alert:
+                with patch("app.pipeline.collect.create_source", return_value=FailingSource()):
+                    run_collect_with_options(db_path=str(db_path))
+                # recovery: source now succeeds
+                with patch("app.pipeline.collect.create_source", return_value=SucceedingSource()):
+                    run_collect_with_options(db_path=str(db_path))
+                # another outage — should re-alert
+                with patch("app.pipeline.collect.create_source", return_value=FailingSource()):
+                    run_collect_with_options(db_path=str(db_path))
+
+        self.assertEqual(alert.call_count, 2)
+
+    def test_no_alert_when_sources_return_no_new_items(self) -> None:
+        db_path = self._db_path("collect_empty_cycle_no_alert_clean.db")
+        init_db(db_path)
+        configs = [self._source("alpha")]
+
+        class EmptyButHealthySource:
+            def __init__(self) -> None:
+                self.last_fetch_stats = {}
+
+            def fetch_items(self):
+                return []
+
+        with patch("app.pipeline.collect.load_sources", return_value=configs):
+            with patch("app.pipeline.collect.create_source", return_value=EmptyButHealthySource()):
+                with patch("app.notify.telegram.send_operator_alert", return_value=True) as alert:
+                    saved = run_collect_with_options(db_path=str(db_path))
+
+        self.assertEqual(saved, 0)
+        alert.assert_not_called()
+
+    def test_no_alert_when_source_filter_applied(self) -> None:
+        db_path = self._db_path("collect_empty_cycle_filter.db")
+        init_db(db_path)
+        config = self._source("alpha")
+
+        class FailingSource:
+            def __init__(self) -> None:
+                self.last_fetch_stats = {}
+
+            def fetch_items(self):
+                raise requests.exceptions.ConnectionError("network down")
+
+        with patch("app.pipeline.collect.load_sources", return_value=[config]):
+            with patch("app.pipeline.collect.create_source", return_value=FailingSource()):
+                with patch("app.notify.telegram.send_operator_alert", return_value=True) as alert:
+                    run_collect_with_options(source_name="alpha", db_path=str(db_path))
+
+        alert.assert_not_called()
+
+    def test_no_alert_when_some_sources_succeed(self) -> None:
+        db_path = self._db_path("collect_empty_cycle_partial.db")
+        init_db(db_path)
+        configs = [self._source("alpha"), self._source("beta")]
+
+        class FailingSource:
+            def __init__(self) -> None:
+                self.last_fetch_stats = {}
+
+            def fetch_items(self):
+                raise requests.exceptions.ConnectionError("network down")
+
+        class HealthySource:
+            def __init__(self) -> None:
+                self.last_fetch_stats = {}
+
+            def fetch_items(self):
+                return []
+
+        sources_by_name = {"alpha": FailingSource(), "beta": HealthySource()}
+
+        def create_source_for(config):
+            return sources_by_name[config.name]
+
+        with patch("app.pipeline.collect.load_sources", return_value=configs):
+            with patch("app.pipeline.collect.create_source", side_effect=create_source_for):
+                with patch("app.notify.telegram.send_operator_alert", return_value=True) as alert:
+                    run_collect_with_options(db_path=str(db_path))
+
+        alert.assert_not_called()
+
+
 class BaseSourceUserAgentTest(unittest.TestCase):
     def test_user_agent_field_overrides_request_headers_ua(self) -> None:
         from app.sources.base import BaseSource

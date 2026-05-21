@@ -202,6 +202,30 @@ def _send_message_chunk(
     return False
 
 
+def send_operator_alert(text: str) -> bool:
+    """Send an operator/admin alert to the dedicated operator chat if configured.
+
+    Falls back to the main GR chat with a system-notice prefix when no operator
+    chat is configured, so first-deployment installs still surface alerts. If no
+    Telegram chat is configured at all, the alert is logged at WARNING level and
+    skipped — operator alerts must never raise.
+    """
+    message = (text or "").strip()
+    if not message:
+        return False
+    if not config.TELEGRAM_BOT_TOKEN:
+        logger.warning("Operator alert not sent (Telegram token missing): %s", message[:120])
+        return False
+    operator_chat_id = config.TELEGRAM_OPERATOR_CHAT_ID
+    if operator_chat_id:
+        return send_message_to_chat(chat_id=operator_chat_id, text=message)
+    if config.TELEGRAM_CHAT_ID:
+        prefixed = f"⚙️ Системное уведомление\n\n{message}"
+        return send_message_to_chat(chat_id=config.TELEGRAM_CHAT_ID, text=prefixed)
+    logger.warning("Operator alert not sent (no Telegram chat configured): %s", message[:120])
+    return False
+
+
 def send_test_message(command_name: str = "notify-test") -> bool:
     return send_message(
         "Law Monitor MVP: Telegram check.\n"

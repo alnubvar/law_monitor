@@ -1122,5 +1122,87 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         self.assertIn("Льготное кредитование АПК", text)
 
 
+class OperatorAlertTest(unittest.TestCase):
+    def test_uses_operator_chat_when_configured(self) -> None:
+        response = Mock()
+        response.raise_for_status.return_value = None
+
+        with patch.multiple(
+            telegram.config,
+            TELEGRAM_BOT_TOKEN="token",
+            TELEGRAM_CHAT_ID="user-chat",
+            TELEGRAM_OPERATOR_CHAT_ID="operator-chat",
+            TELEGRAM_PROXY_URL="",
+            TELEGRAM_PROXY_ENABLED=False,
+            TELEGRAM_API_TIMEOUT=10,
+        ):
+            with patch("app.notify.telegram.requests.post", return_value=response) as post:
+                sent = telegram.send_operator_alert("source outage")
+
+        self.assertTrue(sent)
+        self.assertEqual(post.call_count, 1)
+        self.assertEqual(post.call_args.kwargs["json"]["chat_id"], "operator-chat")
+        self.assertEqual(post.call_args.kwargs["json"]["text"], "source outage")
+
+    def test_falls_back_to_main_chat_with_prefix(self) -> None:
+        response = Mock()
+        response.raise_for_status.return_value = None
+
+        with patch.multiple(
+            telegram.config,
+            TELEGRAM_BOT_TOKEN="token",
+            TELEGRAM_CHAT_ID="user-chat",
+            TELEGRAM_OPERATOR_CHAT_ID="",
+            TELEGRAM_PROXY_URL="",
+            TELEGRAM_PROXY_ENABLED=False,
+            TELEGRAM_API_TIMEOUT=10,
+        ):
+            with patch("app.notify.telegram.requests.post", return_value=response) as post:
+                sent = telegram.send_operator_alert("source outage")
+
+        self.assertTrue(sent)
+        self.assertEqual(post.call_args.kwargs["json"]["chat_id"], "user-chat")
+        self.assertTrue(post.call_args.kwargs["json"]["text"].startswith("⚙️ Системное уведомление"))
+        self.assertIn("source outage", post.call_args.kwargs["json"]["text"])
+
+    def test_returns_false_when_no_chat_configured(self) -> None:
+        with patch.multiple(
+            telegram.config,
+            TELEGRAM_BOT_TOKEN="token",
+            TELEGRAM_CHAT_ID="",
+            TELEGRAM_OPERATOR_CHAT_ID="",
+        ):
+            with patch("app.notify.telegram.requests.post") as post:
+                sent = telegram.send_operator_alert("source outage")
+
+        self.assertFalse(sent)
+        post.assert_not_called()
+
+    def test_returns_false_when_token_missing(self) -> None:
+        with patch.multiple(
+            telegram.config,
+            TELEGRAM_BOT_TOKEN="",
+            TELEGRAM_CHAT_ID="user-chat",
+            TELEGRAM_OPERATOR_CHAT_ID="operator-chat",
+        ):
+            with patch("app.notify.telegram.requests.post") as post:
+                sent = telegram.send_operator_alert("source outage")
+
+        self.assertFalse(sent)
+        post.assert_not_called()
+
+    def test_empty_message_is_dropped(self) -> None:
+        with patch.multiple(
+            telegram.config,
+            TELEGRAM_BOT_TOKEN="token",
+            TELEGRAM_OPERATOR_CHAT_ID="operator-chat",
+        ):
+            with patch("app.notify.telegram.requests.post") as post:
+                sent = telegram.send_operator_alert("   ")
+
+        self.assertFalse(sent)
+        post.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
