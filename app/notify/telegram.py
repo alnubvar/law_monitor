@@ -278,7 +278,16 @@ def send_daily_report_digest(
 
     if report_path is None:
         return True
-    return send_document(Path(report_path))
+    return send_document(_prepare_daily_report_attachment(Path(report_path)))
+
+
+def _prepare_daily_report_attachment(report_path: Path) -> Path:
+    txt_path = report_path.with_suffix(".txt")
+    if not report_path.exists():
+        return txt_path
+    content = report_path.read_text(encoding="utf-8-sig")
+    txt_path.write_text(content, encoding="utf-8-sig")
+    return txt_path
 
 
 def send_document(path: Path | str) -> bool:

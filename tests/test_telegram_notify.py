@@ -127,9 +127,11 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         self.assertEqual(sleep.call_count, telegram.TELEGRAM_SEND_ATTEMPTS - 1)
 
     def test_daily_report_digest_sends_empty_state_and_attachment(self) -> None:
-        report_path = Path("data/test_artifacts/daily_report.md")
+        report_path = Path("data/test_artifacts/gr_monitoring_2026-05-18.md")
         report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text("# report", encoding="utf-8")
+        report_path.write_text("# Отчет\n\nКириллический текст отчета.", encoding="utf-8")
+        txt_path = report_path.with_suffix(".txt")
+        txt_path.unlink(missing_ok=True)
 
         with patch("app.notify.telegram.collect_operational_notices", return_value=[]):
             with patch("app.notify.telegram.send_message", return_value=True) as send_message:
@@ -142,7 +144,15 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         self.assertIn("Полная версия отчета — во вложении.", message_text)
         self.assertNotIn("сервер", message_text.lower())
         self.assertNotIn("data/test_artifacts", message_text)
-        send_document.assert_called_once_with(report_path)
+        send_document.assert_called_once_with(txt_path)
+        self.assertTrue(report_path.exists())
+        self.assertTrue(txt_path.exists())
+        self.assertTrue(txt_path.read_bytes().startswith(b"\xef\xbb\xbf"))
+        self.assertEqual(
+            txt_path.read_text(encoding="utf-8-sig"),
+            report_path.read_text(encoding="utf-8"),
+        )
+        txt_path.unlink(missing_ok=True)
 
     def test_daily_report_digest_sends_visible_docs_as_daily_not_hourly(self) -> None:
         document = self._doc(
