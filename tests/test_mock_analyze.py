@@ -1466,7 +1466,7 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         )
 
         self.assertEqual(result.page_type, "selection_announcement")
-        self.assertEqual(result.action_level, "requires_attention")
+        self.assertEqual(result.action_level, "watchlist")
 
     def test_pravo_donland_listing_is_background_reference_page(self) -> None:
         client = MockLLMClient(["субсидии сельское хозяйство"])

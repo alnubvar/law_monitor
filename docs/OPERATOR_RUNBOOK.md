@@ -136,19 +136,46 @@ LLM_DOCUMENT_ENRICHMENT_ENABLED=false
 
 - Проверить `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` и `LLM_TIMEOUT_SECONDS`.
 - Если provider endpoint требует отдельный corporate proxy/VPN path, проверить `LLM_PROXY_URL`.
-  `TELEGRAM_PROXY_URL` для LLM не используется.
+  `TELEGRAM_PROXY_URL` для LLM не используется и не дает доступ к Google/Gemini.
 - Для Google Gemini OpenAI-compatible endpoint оставить `LLM_RESPONSE_FORMAT=auto`
   либо временно поставить `LLM_RESPONSE_FORMAT=none`, если provider возвращает
   400 на `response_format`.
+- Проверить retry-параметры: `LLM_MAX_RETRIES=2`,
+  `LLM_RETRY_BACKOFF_SECONDS=2`, `LLM_RETRY_MAX_BACKOFF_SECONDS=10`.
 - Убедиться, что сервер может открыть approved provider endpoint.
 - Проверить provider quota и rate limits.
-- Выключить enrichment, если он блокирует эксплуатацию.
+- Если provider нестабилен, снизить `LLM_ENRICHMENT_LIMIT` до `1`-`2` или
+  временно выключить `LLM_ENRICHMENT_ENABLED`.
 - Не менять rule-based логику `action_level`.
 
 `LLM_PROXY_URL` поддерживает `http`, `https`, `socks5` и `socks5h` proxy URLs.
 Не вставляйте реальные credentials в tickets, screenshots или shell history.
 Ошибки provider path должны сохранять API key и proxy credentials в redacted
 виде.
+
+Для первого корпоративного запуска с Google/Gemma через proxy используйте
+малый лимит enrichment (`2` или `3`) и повышайте его только после 2-3 стабильных
+дней:
+
+```env
+LLM_ENRICHMENT_ENABLED=true
+LLM_DOCUMENT_ENRICHMENT_ENABLED=true
+LLM_PROVIDER=openai_compatible
+LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
+LLM_MODEL=gemma-4-31b-it
+LLM_RESPONSE_FORMAT=none
+LLM_PROXY_URL=socks5h://USER:PASSWORD@HOST:PORT
+LLM_MAX_DOCUMENT_CHARS=1000
+LLM_TIMEOUT_SECONDS=300
+LLM_ENRICHMENT_LIMIT=3
+LLM_MAX_RETRIES=2
+LLM_RETRY_BACKOFF_SECONDS=2
+LLM_RETRY_MAX_BACKOFF_SECONDS=10
+```
+
+LLM failures должны деградировать только детализацию отчета. Collection,
+deterministic `action_level`, report generation и Telegram sending должны
+продолжать работать через fallback.
 
 Отключение enrichment:
 

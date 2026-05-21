@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
+import random
 import re
+import time
 from abc import ABC, abstractmethod
 from datetime import datetime
 from functools import lru_cache
@@ -28,6 +31,8 @@ from app.rules.deadline_truth import (
     parse_deadline_date,
 )
 
+LOGGER = logging.getLogger(__name__)
+
 ELIGIBLE_ACTION_LEVELS: set[str] = {"requires_attention", "watchlist"}
 READ_PATH_MIN_CONFIDENCE = 0.5
 CONFIDENCE_TO_SCORE = {"high": 0.9, "medium": 0.75, "low": 0.45}
@@ -38,6 +43,12 @@ TARGET_REGIONS = {
     "stavropol": "Ставропольский край",
 }
 LLM_PROVIDER_ERROR_SNIPPET_CHARS = 600
+LLM_RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
+LLM_RETRYABLE_REQUEST_EXCEPTIONS = (
+    requests.Timeout,
+    requests.ConnectionError,
+    requests.exceptions.ChunkedEncodingError,
+)
 LLM_RESPONSE_FORMAT_DISABLED_VALUES = {"", "none", "off", "false", "disabled", "omit"}
 LLM_RESPONSE_FORMAT_JSON_OBJECT_VALUES = {"auto", "json", "json_object", "true", "1"}
 LLM_PROXY_SCHEMES = {"http", "https", "socks5", "socks5h"}
@@ -719,6 +730,9 @@ class OpenAICompatibleEnrichmentProvider(BaseEnrichmentProvider):
         timeout_seconds: int,
         proxy_url: str | None = None,
         response_format: str | None = "auto",
+        max_retries: int | None = None,
+        retry_backoff_seconds: int | None = None,
+        retry_max_backoff_seconds: int | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -726,6 +740,26 @@ class OpenAICompatibleEnrichmentProvider(BaseEnrichmentProvider):
         self.timeout_seconds = timeout_seconds
         self.proxy_url = (proxy_url or "").strip()
         self.response_format = (response_format or "auto").strip().lower()
+        self.max_retries = max(
+            0,
+            int(max_retries if max_retries is not None else config.LLM_MAX_RETRIES),
+        )
+        self.retry_backoff_seconds = max(
+            0,
+            int(
+                retry_backoff_seconds
+                if retry_backoff_seconds is not None
+                else config.LLM_RETRY_BACKOFF_SECONDS
+            ),
+        )
+        self.retry_max_backoff_seconds = max(
+            1,
+            int(
+                retry_max_backoff_seconds
+                if retry_max_backoff_seconds is not None
+                else config.LLM_RETRY_MAX_BACKOFF_SECONDS
+            ),
+        )
 
     def enrich_document(
         self,
@@ -869,38 +903,134 @@ class OpenAICompatibleEnrichmentProvider(BaseEnrichmentProvider):
         }
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
-        try:
-            response = requests.post(
-                endpoint,
-                data=body,
-                headers=headers,
-                timeout=self.timeout_seconds,
-                proxies=_build_llm_proxy_config(self.proxy_url),
-            )
-            response.raise_for_status()
-            return response.json()
-        except requests.HTTPError as exc:
-            response = exc.response
-            status = "HTTP provider error"
-            body_text = ""
-            if response is not None:
-                status = f"HTTP {response.status_code} {response.reason}".strip()
-                body_text = response.text or ""
-            body_snippet = _safe_llm_provider_error_snippet(
-                body_text,
-                secrets=(self.api_key, self.proxy_url),
-            )
-            detail = status
-            if body_snippet:
-                detail = f"{detail}; body={body_snippet!r}"
-            detail = f"{detail}; payload_keys={','.join(payload.keys())}"
-            raise RuntimeError(f"LLM provider request failed: {detail}") from exc
-        except requests.RequestException as exc:
+        proxies = _build_llm_proxy_config(self.proxy_url)
+        max_attempts = self.max_retries + 1
+        for attempt in range(1, max_attempts + 1):
+            try:
+                response = requests.post(
+                    endpoint,
+                    data=body,
+                    headers=headers,
+                    timeout=self.timeout_seconds,
+                    proxies=proxies,
+                )
+                response.raise_for_status()
+                return response.json()
+            except requests.HTTPError as exc:
+                if self._should_retry_http_error(
+                    exc,
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                ):
+                    self._log_retry_attempt(
+                        exc,
+                        attempt=attempt,
+                        max_attempts=max_attempts,
+                        payload=payload,
+                    )
+                    self._sleep_before_retry(attempt)
+                    continue
+                raise self._build_http_runtime_error(exc, payload) from exc
+            except LLM_RETRYABLE_REQUEST_EXCEPTIONS as exc:
+                if attempt < max_attempts:
+                    self._log_retry_attempt(
+                        exc,
+                        attempt=attempt,
+                        max_attempts=max_attempts,
+                        payload=payload,
+                    )
+                    self._sleep_before_retry(attempt)
+                    continue
+                raise self._build_request_runtime_error(exc) from exc
+            except requests.RequestException as exc:
+                raise self._build_request_runtime_error(exc) from exc
+        raise RuntimeError("LLM provider request failed: retry attempts exhausted")
+
+    def _should_retry_http_error(
+        self,
+        exc: requests.HTTPError,
+        *,
+        attempt: int,
+        max_attempts: int,
+    ) -> bool:
+        response = exc.response
+        return (
+            attempt < max_attempts
+            and response is not None
+            and response.status_code in LLM_RETRYABLE_HTTP_STATUS_CODES
+        )
+
+    def _retry_delay_seconds(self, attempt: int) -> float:
+        base_delay = min(
+            self.retry_max_backoff_seconds,
+            self.retry_backoff_seconds * (2 ** max(0, attempt - 1)),
+        )
+        if base_delay <= 0:
+            return 0.0
+        jitter = random.uniform(0, min(1.0, base_delay * 0.25))
+        return min(self.retry_max_backoff_seconds, base_delay + jitter)
+
+    def _sleep_before_retry(self, attempt: int) -> None:
+        delay = self._retry_delay_seconds(attempt)
+        if delay > 0:
+            time.sleep(delay)
+
+    def _log_retry_attempt(
+        self,
+        exc: BaseException,
+        *,
+        attempt: int,
+        max_attempts: int,
+        payload: Mapping[str, object],
+    ) -> None:
+        if isinstance(exc, requests.HTTPError):
+            detail = self._format_http_error_detail(exc, payload)
+        else:
             detail = _safe_llm_provider_error_snippet(
                 str(exc),
                 secrets=(self.api_key, self.proxy_url),
             )
-            raise RuntimeError(f"LLM provider request failed: {detail}") from exc
+        LOGGER.warning(
+            "LLM provider transient failure; retrying attempt %s/%s: %s",
+            attempt + 1,
+            max_attempts,
+            detail,
+        )
+
+    def _format_http_error_detail(
+        self,
+        exc: requests.HTTPError,
+        payload: Mapping[str, object],
+    ) -> str:
+        response = exc.response
+        status = "HTTP provider error"
+        body_text = ""
+        if response is not None:
+            status = f"HTTP {response.status_code} {response.reason}".strip()
+            body_text = response.text or ""
+        body_snippet = _safe_llm_provider_error_snippet(
+            body_text,
+            secrets=(self.api_key, self.proxy_url),
+        )
+        detail = status
+        if body_snippet:
+            detail = f"{detail}; body={body_snippet!r}"
+        return f"{detail}; payload_keys={','.join(payload.keys())}"
+
+    def _build_http_runtime_error(
+        self,
+        exc: requests.HTTPError,
+        payload: Mapping[str, object],
+    ) -> RuntimeError:
+        detail = self._format_http_error_detail(exc, payload)
+        return RuntimeError(f"LLM provider request failed: {detail}")
+
+    def _build_request_runtime_error(self, exc: requests.RequestException) -> RuntimeError:
+        detail = _safe_llm_provider_error_snippet(
+            str(exc),
+            secrets=(self.api_key, self.proxy_url),
+        )
+        return RuntimeError(f"LLM provider request failed: {detail}")
 
     def _extract_content(self, payload: dict[str, Any]) -> str:
         try:
@@ -1170,6 +1300,13 @@ def build_document_enricher() -> DocumentEnricher:
                 timeout_seconds=config.LLM_TIMEOUT_SECONDS,
                 proxy_url=getattr(config, "LLM_PROXY_URL", ""),
                 response_format=getattr(config, "LLM_RESPONSE_FORMAT", "auto"),
+                max_retries=getattr(config, "LLM_MAX_RETRIES", 2),
+                retry_backoff_seconds=getattr(config, "LLM_RETRY_BACKOFF_SECONDS", 2),
+                retry_max_backoff_seconds=getattr(
+                    config,
+                    "LLM_RETRY_MAX_BACKOFF_SECONDS",
+                    10,
+                ),
             ),
             provider_name=provider_name,
             model_name=config.LLM_MODEL or "",

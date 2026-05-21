@@ -37,7 +37,9 @@ class DeploymentArtifactsTest(unittest.TestCase):
         self.assertNotIn("YOUR_TELEGRAM_CHAT_ID", content)
 
     def test_deployment_docs_and_scripts_exist(self) -> None:
-        self.assertTrue(Path("docs/deployment.md").exists())
+        self.assertTrue(Path("docs/CORPORATE_DEPLOYMENT.md").exists())
+        self.assertTrue(Path("docs/PRODUCTION_ENV_TEMPLATE.md").exists())
+        self.assertTrue(Path("docs/OPERATOR_RUNBOOK.md").exists())
         self.assertTrue(Path("scripts/run_smoke_check.ps1").exists())
         self.assertTrue(Path("scripts/run_scheduler_once.ps1").exists())
         self.assertTrue(Path("scripts/run_scheduler.ps1").exists())

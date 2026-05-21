@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 import unittest
 from unittest.mock import MagicMock, patch
@@ -1485,16 +1485,20 @@ class RefreshExistingUrlTest(unittest.TestCase):
             "competitionId": "competition-1",
             "id": "card-1",
         }
-        old_text = _build_raw_text(base_item)
-        new_text = _build_raw_text(
-            {
-                **base_item,
-                "selectionAcceptingApplicationInfo": {
-                    "acceptingApplicationsInfo": "3 дня",
-                    "countDaysEndDate": 3.25,
-                },
-            }
-        )
+        with patch(
+            "app.sources.promote_budget_source._today_utc",
+            return_value=date(2026, 5, 16),
+        ):
+            old_text = _build_raw_text(base_item)
+            new_text = _build_raw_text(
+                {
+                    **base_item,
+                    "selectionAcceptingApplicationInfo": {
+                        "acceptingApplicationsInfo": "3 дня",
+                        "countDaysEndDate": 3.25,
+                    },
+                }
+            )
         self.assertEqual(old_text, new_text)
         self.assertIn("Прием заявок открыт до 20.05.2026.", old_text)
         self.assertNotIn("4 дня", old_text)

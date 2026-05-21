@@ -179,6 +179,9 @@ class ConfigSmokeTest(unittest.TestCase):
                 "LLM_TIMEOUT_SECONDS": "",
                 "LLM_PROXY_URL": "",
                 "LLM_RESPONSE_FORMAT": "",
+                "LLM_MAX_RETRIES": "",
+                "LLM_RETRY_BACKOFF_SECONDS": "",
+                "LLM_RETRY_MAX_BACKOFF_SECONDS": "",
                 "LLM_MAX_DOCUMENT_CHARS": "",
                 "LLM_ENRICHMENT_LIMIT": "",
             },
@@ -192,8 +195,29 @@ class ConfigSmokeTest(unittest.TestCase):
             self.assertEqual(reloaded.LLM_TIMEOUT_SECONDS, 60)
             self.assertEqual(reloaded.LLM_PROXY_URL, "")
             self.assertEqual(reloaded.LLM_RESPONSE_FORMAT, "auto")
+            self.assertEqual(reloaded.LLM_MAX_RETRIES, 2)
+            self.assertEqual(reloaded.LLM_RETRY_BACKOFF_SECONDS, 2)
+            self.assertEqual(reloaded.LLM_RETRY_MAX_BACKOFF_SECONDS, 10)
             self.assertEqual(reloaded.LLM_MAX_DOCUMENT_CHARS, 12000)
             self.assertEqual(reloaded.LLM_ENRICHMENT_LIMIT, 20)
+        importlib.reload(config_module)
+
+    def test_reads_llm_retry_settings_from_env(self) -> None:
+        import app.config as config_module
+
+        with patch.dict(
+            os.environ,
+            {
+                "LLM_MAX_RETRIES": "3",
+                "LLM_RETRY_BACKOFF_SECONDS": "1",
+                "LLM_RETRY_MAX_BACKOFF_SECONDS": "8",
+            },
+            clear=False,
+        ):
+            reloaded = importlib.reload(config_module)
+            self.assertEqual(reloaded.LLM_MAX_RETRIES, 3)
+            self.assertEqual(reloaded.LLM_RETRY_BACKOFF_SECONDS, 1)
+            self.assertEqual(reloaded.LLM_RETRY_MAX_BACKOFF_SECONDS, 8)
         importlib.reload(config_module)
 
     def test_reads_llm_proxy_url_from_env(self) -> None:

@@ -161,6 +161,13 @@ LLM_MODEL = _get_env_str("LLM_MODEL", "")
 LLM_TIMEOUT_SECONDS = _get_env_int("LLM_TIMEOUT_SECONDS", 60, min_value=1)
 LLM_PROXY_URL = _get_env_str("LLM_PROXY_URL", "")
 LLM_RESPONSE_FORMAT = _get_env_str("LLM_RESPONSE_FORMAT", "auto").lower()
+LLM_MAX_RETRIES = _get_env_int("LLM_MAX_RETRIES", 2, min_value=0, max_value=10)
+LLM_RETRY_BACKOFF_SECONDS = _get_env_int("LLM_RETRY_BACKOFF_SECONDS", 2, min_value=0)
+LLM_RETRY_MAX_BACKOFF_SECONDS = _get_env_int(
+    "LLM_RETRY_MAX_BACKOFF_SECONDS",
+    10,
+    min_value=1,
+)
 LLM_MAX_DOCUMENT_CHARS = _get_env_int(
     "LLM_MAX_DOCUMENT_CHARS",
     12000,

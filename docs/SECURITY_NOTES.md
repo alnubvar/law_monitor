@@ -65,9 +65,19 @@ requests. Он не наследуется из `TELEGRAM_PROXY_URL` и не п�
 или source requests. Поддерживаются `http`, `https`, `socks5` и `socks5h`
 proxy URLs, если SOCKS extras доступны через `requests[socks]`.
 
+Telegram proxy и LLM proxy разделены намеренно: `TELEGRAM_PROXY_URL` помогает
+только Telegram Bot API и не обеспечивает доступ к Google/Gemini. Для
+Google/Gemma OpenAI-compatible endpoint через корпоративную сеть используйте
+отдельный `LLM_PROXY_URL` и храните его только в production env-файле.
+
 Не логируйте полный `LLM_PROXY_URL`. Если proxy URL содержит credentials, они
 должны храниться только в production env-файле и попадать в diagnostics/errors
 только в redacted виде. LLM API key redaction также должна сохраняться.
+
+LLM provider failures, включая 429/5xx, timeout и proxy/network errors, не
+должны останавливать deterministic pipeline. Они могут сделать report enrichment
+более общим, но не должны менять `action_level`, collection, report generation
+или Telegram delivery.
 
 ## TLS и corporate CA
 

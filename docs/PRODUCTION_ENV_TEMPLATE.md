@@ -47,6 +47,9 @@ LLM_MODEL=
 LLM_TIMEOUT_SECONDS=60
 LLM_PROXY_URL=
 LLM_RESPONSE_FORMAT=auto
+LLM_MAX_RETRIES=2
+LLM_RETRY_BACKOFF_SECONDS=2
+LLM_RETRY_MAX_BACKOFF_SECONDS=10
 LLM_MAX_DOCUMENT_CHARS=12000
 LLM_ENRICHMENT_LIMIT=20
 ```
@@ -78,6 +81,34 @@ LLM_DOCUMENT_ENRICHMENT_ENABLED=false
 document enrichment. `LLM_ENRICHMENT_ENABLED` сохранен как compatibility alias и
 включен выше, потому что существующие handoff-чеклисты могут на него ссылаться.
 
+## Рекомендуемый preset для Google/Gemma через LLM proxy
+
+Используйте этот preset только после согласования owner/IT и только в реальном
+production env-файле. Для первого корпоративного запуска держите
+`LLM_ENRICHMENT_LIMIT=2` или `3`; увеличивайте лимит только после 2-3 стабильных
+дней без quota/timeout/provider ошибок.
+
+```env
+LLM_ENRICHMENT_ENABLED=true
+LLM_DOCUMENT_ENRICHMENT_ENABLED=true
+LLM_PROVIDER=openai_compatible
+LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
+LLM_MODEL=gemma-4-31b-it
+LLM_RESPONSE_FORMAT=none
+LLM_PROXY_URL=socks5h://USER:PASSWORD@HOST:PORT
+LLM_MAX_DOCUMENT_CHARS=1000
+LLM_TIMEOUT_SECONDS=300
+LLM_ENRICHMENT_LIMIT=3
+LLM_MAX_RETRIES=2
+LLM_RETRY_BACKOFF_SECONDS=2
+LLM_RETRY_MAX_BACKOFF_SECONDS=10
+```
+
+`TELEGRAM_PROXY_URL` и `LLM_PROXY_URL` - разные настройки. Telegram proxy
+используется только для Telegram Bot API и не дает доступ к Google/Gemini.
+Для Google/Gemma нужен отдельный `LLM_PROXY_URL` или другой согласованный
+сетевой маршрут.
+
 `TELEGRAM_OPERATOR_CHAT_ID` — отдельный chat ID для оперативных уведомлений
 (например, об отсутствии сбора при катастрофическом сбое всех источников).
 Если значение пустое, оперативные уведомления будут отправлены в основной
@@ -101,6 +132,8 @@ document enrichment. `LLM_ENRICHMENT_ENABLED` сохранен как compatibil
 - [ ] `LLM_ENRICHMENT_ENABLED=false` для первичного корпоративного handoff, если owner/IT явно не одобрили LLM enrichment.
 - [ ] Если LLM включен, `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_API_KEY` и `LLM_MODEL` согласованы с IT.
 - [ ] `LLM_PROXY_URL` пустой, если LLM provider endpoint не требует отдельный proxy/VPN path.
+- [ ] Если Google/Gemma включен через proxy, `LLM_MAX_RETRIES=2`, `LLM_RETRY_BACKOFF_SECONDS=2`, `LLM_RETRY_MAX_BACKOFF_SECONDS=10`.
+- [ ] Для первого запуска с LLM задан `LLM_ENRICHMENT_LIMIT=2` или `3`.
 - [ ] В git checkout нет production `.env`.
 - [ ] `.gitignore` по-прежнему исключает `.env`, `.env.*`, DBs, logs, data и generated reports.
 
@@ -117,6 +150,12 @@ enrichment. Этот режим нельзя использовать для к�
 requests и не наследует `TELEGRAM_PROXY_URL`. Поддерживаются схемы `http`,
 `https`, `socks5` и `socks5h`; SOCKS требует установленной зависимости
 `requests[socks]`. Не размещайте proxy credentials в git, tickets или логах.
+
+LLM enrichment является только обогащением отчета. Сбой provider, timeout,
+429/5xx или proxy error должны ухудшать детализацию карточек, но не должны
+останавливать collection, deterministic classification, report generation или
+Telegram sending. Если provider нестабилен, снизьте `LLM_ENRICHMENT_LIMIT` до
+`1`-`2` или временно установите `LLM_ENRICHMENT_ENABLED=false`.
 
 ## Примечания по proxy и CA
 

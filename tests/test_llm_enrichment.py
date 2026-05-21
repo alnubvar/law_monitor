@@ -584,6 +584,8 @@ class LLMEnrichmentTest(unittest.TestCase):
             api_key=secret,
             model="test-model",
             timeout_seconds=5,
+            max_retries=2,
+            retry_backoff_seconds=0,
         )
         response = mock.Mock()
         response.status_code = 400
@@ -597,7 +599,7 @@ class LLMEnrichmentTest(unittest.TestCase):
         with mock.patch(
             "app.llm.enrichment.requests.post",
             side_effect=error,
-        ):
+        ) as post_mock:
             with self.assertRaises(RuntimeError) as context:
                 provider._post_json(
                     {
@@ -608,11 +610,84 @@ class LLMEnrichmentTest(unittest.TestCase):
                 )
 
         message = str(context.exception)
+        self.assertEqual(post_mock.call_count, 1)
         self.assertIn("HTTP 400 Bad Request", message)
         self.assertIn("Invalid response_format", message)
         self.assertIn("payload_keys=model,messages,response_format", message)
         self.assertNotIn(secret, message)
         self.assertNotIn("hidden-token-1234567890", message)
+
+    def test_openai_compatible_retries_transient_http_error_then_succeeds(self) -> None:
+        provider = OpenAICompatibleEnrichmentProvider(
+            base_url="https://api.example.test/v1",
+            api_key="",
+            model="test-model",
+            timeout_seconds=5,
+            max_retries=2,
+            retry_backoff_seconds=0,
+        )
+        failure_response = mock.Mock()
+        failure_response.status_code = 500
+        failure_response.reason = "Internal Server Error"
+        failure_response.text = '{"error":"temporary"}'
+        failure_response.raise_for_status.side_effect = requests.HTTPError(
+            "500 Server Error",
+            response=failure_response,
+        )
+        success_response = mock.Mock()
+        success_response.raise_for_status.return_value = None
+        success_response.json.return_value = {"choices": []}
+
+        with mock.patch(
+            "app.llm.enrichment.requests.post",
+            side_effect=[failure_response, success_response],
+        ) as post_mock:
+            result = provider._post_json({"model": "test-model", "messages": []})
+
+        self.assertEqual(result, {"choices": []})
+        self.assertEqual(post_mock.call_count, 2)
+
+    def test_openai_compatible_retries_timeout_then_fails_after_limit(self) -> None:
+        provider = OpenAICompatibleEnrichmentProvider(
+            base_url="https://api.example.test/v1",
+            api_key="",
+            model="test-model",
+            timeout_seconds=5,
+            max_retries=2,
+            retry_backoff_seconds=0,
+        )
+
+        with mock.patch(
+            "app.llm.enrichment.requests.post",
+            side_effect=requests.Timeout("provider timeout"),
+        ) as post_mock:
+            with self.assertRaises(RuntimeError) as context:
+                provider._post_json({"model": "test-model", "messages": []})
+
+        self.assertEqual(post_mock.call_count, 3)
+        self.assertIn("provider timeout", str(context.exception))
+
+    def test_openai_compatible_does_not_retry_successful_invalid_json_response(self) -> None:
+        provider = OpenAICompatibleEnrichmentProvider(
+            base_url="https://api.example.test/v1",
+            api_key="",
+            model="test-model",
+            timeout_seconds=5,
+            max_retries=2,
+            retry_backoff_seconds=0,
+        )
+        response = mock.Mock()
+        response.raise_for_status.return_value = None
+        response.json.side_effect = ValueError("bad json")
+
+        with mock.patch(
+            "app.llm.enrichment.requests.post",
+            return_value=response,
+        ) as post_mock:
+            with self.assertRaises(ValueError):
+                provider._post_json({"model": "test-model", "messages": []})
+
+        self.assertEqual(post_mock.call_count, 1)
 
     def test_openai_compatible_request_uses_llm_proxy_when_set(self) -> None:
         proxy_url = "http://user:secret@proxy.local:8080"
