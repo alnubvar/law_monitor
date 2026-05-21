@@ -1,6 +1,6 @@
 [Unit]
 Description=AHSTEP law_monitor Telegram polling bot
-Documentation=file:/opt/ahstep/law_monitor/docs/PRODUCTION_RUNBOOK.md
+Documentation=file:/opt/ahstep/law_monitor/docs/OPERATOR_RUNBOOK.md
 Wants=network-online.target
 After=network-online.target
 
