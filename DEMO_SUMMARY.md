@@ -1,22 +1,24 @@
-# Demo Summary
+# Кратко о демо
 
-AHSTEP GR Monitor demonstrates a compact production-style monitoring loop for GR teams:
+AHSTEP GR Monitor показывает компактный production-style цикл мониторинга для
+GR-команд:
 
-1. collect source materials;
-2. extract text (`html/pdf/docx`);
-3. assign action levels with rule-based analysis;
-4. generate markdown report;
-5. send Telegram summaries and serve interactive commands.
+1. сбор материалов из источников;
+2. извлечение текста (`html/pdf/docx`);
+3. присвоение action level через rule-based анализ;
+4. генерация Markdown-отчёта;
+5. отправка Telegram-сводок и обслуживание интерактивных команд.
 
-## What To Show In Demo
+## Что показать в демо
 
-- `requires_attention` items are kept focused and actionable;
-- watchlist/background signals are separated from noise;
-- source diagnostics highlight extraction and coverage gaps;
-- OCR scan-candidates are managed through triage queue (`/ocr`, `ocr-queue`, `ocr-mark`);
-- tracking and refresh commands support daily GR operations.
+- блок `requires_attention` остаётся сфокусированным и actionable;
+- сигналы watchlist / background отделены от шума;
+- диагностика источников подсвечивает пробелы в извлечении и покрытии;
+- OCR scan-candidates обрабатываются через triage queue (`/ocr`,
+  `ocr-queue`, `ocr-mark`);
+- команды трекинга и refresh поддерживают ежедневные операции GR.
 
-## Demo Run
+## Сценарий запуска демо
 
 ```bash
 python main.py smoke-check
@@ -25,8 +27,8 @@ python main.py report --days 7 --action-level requires_attention watchlist --max
 python main.py ocr-queue
 ```
 
-## Key Constraints
+## Ключевые ограничения
 
-- no OCR runtime in core pipeline (triage only);
-- no changes to action-level policy logic in this phase;
-- no heavy infrastructure requirements.
+- OCR runtime не используется в основном pipeline (только triage);
+- логика action level в этой фазе не меняется;
+- инфраструктура без тяжёлых требований.

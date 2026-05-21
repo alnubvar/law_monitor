@@ -1,83 +1,83 @@
-# AHSTEP GR Monitor MVP
+# AHSTEP GR Monitor
 
-Production-style MVP for GR monitoring of agricultural policy signals: regional/federal regulations, support measures, and industry news.
+Производственный MVP мониторинга GR-сигналов в сельском хозяйстве:
+региональное и федеральное регулирование, меры поддержки, отраслевые новости.
 
-## Project Overview
+## Назначение
 
-AHSTEP GR Monitor is built for GR and policy teams that need daily visibility into:
+AHSTEP GR Monitor предназначен для GR- и policy-команд, которым нужна
+ежедневная видимость:
 
-- what requires immediate action;
-- what should stay on watchlist;
-- what is useful background but not actionable.
+- что требует немедленной реакции;
+- что должно оставаться на watchlist;
+- что важно как фон, но не требует действий.
 
-The system continuously collects source documents, extracts text, applies rule-based analysis, stores results in SQLite, and delivers reports + Telegram summaries.
+Система собирает документы из настроенных публичных источников, извлекает
+текст, применяет rule-based анализ, сохраняет результаты в SQLite и
+доставляет Markdown-отчёты и Telegram-сводки.
 
-## Architecture
+## Архитектура
 
-Pipeline flow:
+Поток обработки:
 
-1. `collect` -> source fetch + link filtering + extraction audit
-2. `extract` -> `html/pdf/docx` text extraction
-3. `analyze` -> rule-based classification + `action_level` + business facts
-4. `report` -> markdown GR report
-5. `notify` -> Telegram digest and interactive commands
+1. `collect` — fetch источников, фильтрация ссылок, аудит извлечения.
+2. `extract` — извлечение текста для `html`, `pdf`, `docx`.
+3. `analyze` — rule-based классификация, `action_level`, бизнес-факты.
+4. `report` — Markdown-отчёт для GR.
+5. `notify` — Telegram digest и интерактивные команды.
 
-Core entrypoint: [main.py](main.py)
+Точка входа CLI: [main.py](main.py)
 
-## Current Capabilities
+## Возможности
 
-- source collection from federal and regional endpoints;
-- extraction for `html`, `pdf`, `docx`;
-- extraction diagnostics (`diagnostics`, extraction quality, source coverage);
-- OCR triage queue + optional local OCR runtime (disabled by default);
-- interactive Telegram bot with commands and reply keyboard;
-- document tracking (`/track`, `/untrack`, `/tracked`);
-- archive search (`/search`);
-- manual refresh flow (`/refresh`) with cooldown;
-- smoke checks and regression test suite.
+- сбор из федеральных и региональных источников;
+- извлечение `html`, `pdf`, `docx`;
+- диагностика извлечения (`diagnostics`, качество, покрытие источников);
+- OCR triage queue и опциональный локальный OCR (по умолчанию выключен);
+- интерактивный Telegram-бот с командами и reply-клавиатурой;
+- трекинг документов (`/track`, `/untrack`, `/tracked`);
+- архивный поиск (`/search`);
+- ручной refresh (`/refresh`) с cooldown;
+- smoke checks и регрессионные тесты.
 
-## Action Levels
+## Уровни действий (`action_level`)
 
-- `requires_attention`: requires GR action now.
-- `watchlist`: important to monitor, no immediate action.
-- `background`: useful context without direct action signal.
-- `irrelevant`: noisy/service/non-target material.
+- `requires_attention` — требует действий GR сейчас.
+- `watchlist` — важно мониторить, действия не требуются.
+- `background` — полезный контекст без прямого сигнала.
+- `irrelevant` — шум, служебные или нерелевантные материалы.
 
-## OCR Triage Workflow
+## OCR triage
 
-### Why scan-candidates exist
+### Зачем нужны scan-candidates
 
-Some PDFs are effectively scans or have weak/no text layer. They are detected as `scan_candidate` during extraction audit.
+Часть PDF — фактически сканы или с очень слабым текстовым слоем. Они
+помечаются как `scan_candidate` на этапе extraction audit.
 
-### OCR runtime mode
+### Режим OCR runtime
 
-Local OCR runtime is supported, but remains opt-in:
+Локальный OCR поддерживается, но включается опционально:
 
-- `LAW_MONITOR_OCR_ENABLED=false` by default;
-- manual-first triage remains primary workflow;
-- cloud OCR stays out of scope until ROI is validated.
+- `LAW_MONITOR_OCR_ENABLED=false` по умолчанию;
+- manual-first triage остаётся основным workflow;
+- cloud OCR вне scope до подтверждения ROI.
 
-### Why OCR queue is useful
+### Зачем нужна очередь OCR
 
-OCR triage prevents scan-heavy documents from being lost:
+OCR triage не даёт потерять scan-heavy документы:
 
-- keeps a managed queue of OCR candidates;
-- gives GR team visibility into pending work;
-- supports manual status updates (`pending`, `in_review`, `done`, `skipped`).
+- ведёт управляемую очередь кандидатов;
+- даёт GR-команде видимость pending-работы;
+- поддерживает ручные статусы (`pending`, `in_review`, `done`, `skipped`).
 
-### Current strategy
+### Приоритеты
 
-- manual-first triage now;
-- optional local OCR later (selective, low-risk rollout);
-- cloud OCR only after ROI validation.
+- `high`: видимые policy-сигналы (`requires_attention` / `watchlist`) или
+  источник `Нормативные акты Краснодарского края`.
+- `medium`: default для нейтральных или неизвестных кандидатов.
+- `low`: нерелевантные (`irrelevant`) кандидаты.
 
-### Priority model
-
-- `high`: visible policy signals (`requires_attention` / `watchlist`) or source `Нормативные акты Краснодарского края`.
-- `medium`: default for unknown/neutral candidates.
-- `low`: non-actionable (`irrelevant`) candidates.
-
-### Commands
+### Команды OCR
 
 ```bash
 python main.py ocr-check
@@ -91,43 +91,58 @@ python main.py ocr-mark <url> --status done
 python main.py ocr-mark <url> --status in_review --notes "checking text quality"
 ```
 
-Telegram:
+В Telegram:
 
 ```text
 /ocr
 ```
 
-## Telegram Commands
+## Команды Telegram
 
-| Command | Purpose |
+| Команда | Назначение |
 | --- | --- |
-| `/start` | open menu |
-| `/help` | show command list |
-| `/status` | system status and freshness |
-| `/today` | visible documents for today |
-| `/urgent [days]` | `requires_attention` documents |
-| `/watchlist [days]` | watchlist documents |
-| `/report [days]` | short summary + `.txt` attachment |
-| `/sources` | source health summary |
-| `/ocr` | OCR triage queue summary |
-| `/search <query>` | archive search |
-| `/track <url>` | add document to tracking |
-| `/untrack <url>` | remove from tracking |
-| `/tracked` | list active tracked documents |
-| `/refresh` | manual collect/analyze/report run |
+| `/start` | открыть меню |
+| `/help` | список команд |
+| `/status` | состояние системы и свежесть |
+| `/today` | видимые документы за сегодня |
+| `/urgent [days]` | документы `requires_attention` |
+| `/watchlist [days]` | документы watchlist |
+| `/report [days]` | короткая сводка + `.txt` вложение |
+| `/sources` | состояние источников |
+| `/ocr` | состояние OCR triage |
+| `/search <query>` | поиск по архиву |
+| `/track <url>` | добавить документ в трекинг |
+| `/untrack <url>` | убрать из трекинга |
+| `/tracked` | активные tracked-документы |
+| `/refresh` | ручной collect/analyze/report |
 
-## Quick Start
+## Локальная разработка и demo (Windows)
 
-```bash
+Используйте виртуальное окружение проекта. Не предполагайте, что system Python
+содержит все зависимости.
+
+Базовый локальный workflow:
+
+```powershell
 python -m venv .venv
-.venv\Scripts\activate
+.\.venv\Scripts\Activate.ps1
 python -m pip install -e .
 python main.py init-db
 python main.py smoke-check
 python main.py run-scheduler --once
 ```
 
-## Common CLI Commands
+Запускать команды через интерпретатор venv, без активации:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest
+.\.venv\Scripts\python.exe main.py smoke-check
+.\.venv\Scripts\python.exe main.py demo-report
+```
+
+Чеклист локальной и demo-приёмки: [docs/LOCAL_ACCEPTANCE_CHECKLIST.md](docs/LOCAL_ACCEPTANCE_CHECKLIST.md)
+
+## Частые CLI-команды
 
 ```bash
 python main.py collect
@@ -144,55 +159,55 @@ python main.py check-tracked
 python -m unittest -v
 ```
 
-## Развертывание
+## Развертывание на Linux/VPS (production)
 
-Руководство по deployment: [docs/deployment.md](docs/deployment.md)
+Эксплуатационные документы для передачи в корпоративный IT:
 
-Пакет для передачи в корпоративную Linux-эксплуатацию:
+- [docs/CORPORATE_DEPLOYMENT.md](docs/CORPORATE_DEPLOYMENT.md) — полная
+  инструкция по корпоративному развертыванию.
+- [docs/PRODUCTION_ENV_TEMPLATE.md](docs/PRODUCTION_ENV_TEMPLATE.md) — шаблон
+  production env и чеклист обязательных значений.
+- [docs/OPERATOR_RUNBOOK.md](docs/OPERATOR_RUNBOOK.md) — операторский runbook,
+  ежедневные/еженедельные проверки, обработка сбоев, обновление и rollback.
+- [docs/DEPLOYMENT_CHECKLIST.md](docs/DEPLOYMENT_CHECKLIST.md) — чеклист
+  приемки production Linux/VPS-развертывания.
+- [docs/BACKUP_RESTORE.md](docs/BACKUP_RESTORE.md) — backup и restore SQLite
+  DB.
+- [docs/SECURITY_NOTES.md](docs/SECURITY_NOTES.md) — заметки по безопасности
+  для корпоративного IT.
 
-- [docs/CORPORATE_DEPLOYMENT.md](docs/CORPORATE_DEPLOYMENT.md)
-- [docs/PRODUCTION_ENV_TEMPLATE.md](docs/PRODUCTION_ENV_TEMPLATE.md)
-- [docs/OPERATOR_RUNBOOK.md](docs/OPERATOR_RUNBOOK.md)
-- [docs/DEPLOYMENT_CHECKLIST.md](docs/DEPLOYMENT_CHECKLIST.md)
-- [docs/SECURITY_NOTES.md](docs/SECURITY_NOTES.md)
+## Примечание по Windows OCR (optional local runtime)
 
-Операционные документы:
-
-- [docs/PRODUCTION_RUNBOOK.md](docs/PRODUCTION_RUNBOOK.md)
-- [docs/ACCEPTANCE_CHECKLIST.md](docs/ACCEPTANCE_CHECKLIST.md)
-- [docs/BACKUP_RESTORE.md](docs/BACKUP_RESTORE.md)
-
-Для MVP в репозитории исторически описан Windows-first deployment (`Task Scheduler` + SQLite), а также optional Linux `systemd` examples.
-
-Примечание по Windows OCR (optional local runtime):
-
-- Tesseract binary example: `C:\Program Files\Tesseract-OCR\tesseract.exe`
-- Tessdata path: `C:\Program Files\Tesseract-OCR\tessdata`
+- бинарь Tesseract, пример: `C:\Program Files\Tesseract-OCR\tesseract.exe`
+- tessdata: `C:\Program Files\Tesseract-OCR\tessdata`
 - env:
   - `LAW_MONITOR_OCR_ENABLED=true`
   - `LAW_MONITOR_OCR_LANGUAGE=rus+eng`
   - `LAW_MONITOR_OCR_TESSDATA_PATH=C:\Program Files\Tesseract-OCR\tessdata`
-  - `LLM_DOCUMENT_ENRICHMENT_ENABLED=false` by default
-  - `LLM_ENRICHMENT_ENABLED=false` remains as a compatibility alias
-  - `LLM_PROVIDER=mock` for local safe testing
-  - `LLM_TIMEOUT_SECONDS=60`, `LLM_MAX_DOCUMENT_CHARS=12000`, `LLM_ENRICHMENT_LIMIT=20`
-  - OpenAI-compatible example: `LLM_BASE_URL=http://127.0.0.1:1234/v1` for LM Studio or `http://127.0.0.1:11434/v1` for Ollama
+  - `LLM_DOCUMENT_ENRICHMENT_ENABLED=false` по умолчанию
+  - `LLM_ENRICHMENT_ENABLED=false` сохранён как compatibility alias
+  - `LLM_PROVIDER=mock` для безопасного локального тестирования
+  - `LLM_TIMEOUT_SECONDS=60`, `LLM_MAX_DOCUMENT_CHARS=12000`,
+    `LLM_ENRICHMENT_LIMIT=20`
+  - OpenAI-совместимый пример: `LLM_BASE_URL=http://127.0.0.1:1234/v1` для LM
+    Studio или `http://127.0.0.1:11434/v1` для Ollama
 
-## Screenshots / Examples
+## Демо
 
-- Demo summary: [DEMO_SUMMARY.md](DEMO_SUMMARY.md)
-- Safe demo report artifact: generated by `python main.py demo-report` → `docs/demo_report.md` (gitignored, not committed)
-- Example generated reports: `reports/gr_monitoring_*.md`
+- Краткое описание демо: [DEMO_SUMMARY.md](DEMO_SUMMARY.md)
+- Безопасный demo-артефакт: `python main.py demo-report` →
+  `docs/demo_report.md` (в `.gitignore`, не коммитится)
+- Примеры сгенерированных отчётов: `reports/gr_monitoring_*.md`
 
-## Roadmap
+## Дорожная карта
 
-- optional LLM-assisted summaries on top of clean extracted text;
-- retrieval and historical analysis (RAG-style workflows);
-- extraction robustness improvements for source-specific edge cases.
+- опциональные LLM-сводки поверх чистого извлечённого текста;
+- retrieval и историческая аналитика (RAG-style workflows);
+- улучшение устойчивости извлечения для source-specific edge cases.
 
-## Constraints (Current Phase)
+## Ограничения текущей фазы
 
-- no cloud OCR in production pipeline;
-- no changes to `action_level` business logic in triage/docs phase;
-- no heavy dependency additions;
-- no overengineering of infra for MVP stage.
+- нет cloud OCR в основном pipeline;
+- не меняем бизнес-логику `action_level` в фазе triage и docs;
+- без тяжёлых дополнительных зависимостей;
+- без переусложнения инфраструктуры на MVP-стадии.

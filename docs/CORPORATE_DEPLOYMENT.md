@@ -242,6 +242,61 @@ sudo -u ahstep bash -lc 'cd /opt/ahstep/law_monitor && set -a && . /etc/ahstep-l
 
 Не копируйте production reports в `reports/` внутри git checkout.
 
+## Безопасное обновление
+
+Любое обновление кода и зависимостей в production выполняется по этой
+последовательности. Скрипты `scripts/backup_db.sh` и `scripts/restore_db.sh`
+рассчитаны именно на этот flow.
+
+```bash
+sudo systemctl stop ahstep-scheduler.service ahstep-telegram-bot.service
+
+cd /opt/ahstep/law_monitor
+sudo -u ahstep LAW_MONITOR_ENV_FILE=/etc/ahstep-law-monitor/law-monitor.env \
+  bash scripts/backup_db.sh
+
+sudo -u ahstep git pull --ff-only
+sudo -u ahstep .venv/bin/python -m pip install -e .
+
+sudo -u ahstep bash -lc 'cd /opt/ahstep/law_monitor && set -a && . /etc/ahstep-law-monitor/law-monitor.env && set +a && .venv/bin/python main.py init-db'
+sudo -u ahstep bash -lc 'cd /opt/ahstep/law_monitor && set -a && . /etc/ahstep-law-monitor/law-monitor.env && set +a && .venv/bin/python main.py smoke-check'
+sudo -u ahstep bash -lc 'cd /opt/ahstep/law_monitor && set -a && . /etc/ahstep-law-monitor/law-monitor.env && set +a && .venv/bin/python main.py telegram-check'
+
+sudo systemctl start ahstep-scheduler.service ahstep-telegram-bot.service
+sudo journalctl -u ahstep-scheduler.service -n 100 --no-pager
+sudo journalctl -u ahstep-telegram-bot.service -n 100 --no-pager
+```
+
+Эксплуатационное правило: `git pull` должен обновлять только код в
+`/opt/ahstep/law_monitor`. SQLite DB, сгенерированные отчеты, backups, логи и
+временные файлы располагаются вне git checkout и не должны попадать в commit.
+
+## Изменение Telegram proxy
+
+```bash
+sudoedit /etc/ahstep-law-monitor/law-monitor.env
+# изменить TELEGRAM_PROXY_URL=...
+sudo systemctl restart ahstep-telegram-bot.service ahstep-scheduler.service
+sudo -u ahstep bash -lc 'cd /opt/ahstep/law_monitor && set -a && . /etc/ahstep-law-monitor/law-monitor.env && set +a && .venv/bin/python main.py telegram-check'
+```
+
+Не коммитьте реальные proxy credentials. Перезапускайте как минимум Telegram bot
+после изменения proxy; при сомнениях перезапускайте оба сервиса, так как
+scheduler также отправляет Telegram digests.
+
+`TELEGRAM_PROXY_URL` применяется только к Telegram Bot API. Он не направляет
+запросы к государственным или региональным источникам через этот proxy. Если IT
+требует, чтобы source-запросы шли через сетевой proxy, задайте стандартные
+переменные `HTTPS_PROXY` или `HTTP_PROXY` явно в production env-файле.
+
+## Сетевой caveat по источникам
+
+Поведение сети при обращении к публичным источникам может отличаться в
+зависимости от server network, VPN, DNS, TLS inspection и proxy policy.
+Источник, который работает с рабочей станции разработчика, может не работать с
+внутреннего сервера, и наоборот. Проверяйте доступ к источникам с целевой сети
+сервера до go-live и после изменений сетевой политики.
+
 ## Rollback
 
 Rollback применяется, если обновление ломает smoke checks, запуск сервисов,

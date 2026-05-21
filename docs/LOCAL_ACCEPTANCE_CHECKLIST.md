@@ -1,6 +1,11 @@
-# Acceptance Checklist
+# Локальная / demo-приёмка на Windows
 
-Используйте этот checklist перед demo, handover или production-like запуском.
+Чеклист для локальной разработческой и demo-проверки на Windows-рабочей
+станции. Это не production-приёмка Linux/VPS — для развертывания на сервере
+используйте [DEPLOYMENT_CHECKLIST.md](DEPLOYMENT_CHECKLIST.md).
+
+Используйте этот checklist перед demo, handover или production-like прогоном
+на локальной машине.
 
 ## Core acceptance
 

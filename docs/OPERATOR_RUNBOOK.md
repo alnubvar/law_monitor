@@ -237,6 +237,51 @@ sudo journalctl -u ahstep-scheduler.service --since "24 hours ago" --no-pager
 sudo journalctl -u ahstep-telegram-bot.service --since "24 hours ago" --no-pager
 ```
 
+## Безопасное обновление кода в production
+
+Выполняется при плановых обновлениях, после смены зависимостей и после
+изменений в env, которые требуют peер-проверки smoke-check.
+
+```bash
+sudo systemctl stop ahstep-scheduler.service ahstep-telegram-bot.service
+
+cd /opt/ahstep/law_monitor
+sudo -u ahstep LAW_MONITOR_ENV_FILE=/etc/ahstep-law-monitor/law-monitor.env \
+  bash scripts/backup_db.sh
+
+sudo -u ahstep git pull --ff-only
+sudo -u ahstep .venv/bin/python -m pip install -e .
+
+sudo -u ahstep bash -lc 'cd /opt/ahstep/law_monitor && set -a && . /etc/ahstep-law-monitor/law-monitor.env && set +a && .venv/bin/python main.py init-db'
+sudo -u ahstep bash -lc 'cd /opt/ahstep/law_monitor && set -a && . /etc/ahstep-law-monitor/law-monitor.env && set +a && .venv/bin/python main.py smoke-check'
+sudo -u ahstep bash -lc 'cd /opt/ahstep/law_monitor && set -a && . /etc/ahstep-law-monitor/law-monitor.env && set +a && .venv/bin/python main.py telegram-check'
+
+sudo systemctl start ahstep-scheduler.service ahstep-telegram-bot.service
+sudo journalctl -u ahstep-scheduler.service -n 100 --no-pager
+sudo journalctl -u ahstep-telegram-bot.service -n 100 --no-pager
+```
+
+`telegram-check` отправит тестовое сообщение в Telegram, выполняйте его только
+когда IT и владелец проекта готовы это увидеть.
+
+## Базовый rollback
+
+1. Остановить оба сервиса.
+2. Определить последнюю стабильную git-ревизию.
+3. Восстановить код, например `git checkout <known-good-sha>`.
+4. Переустановить зависимости: `.venv/bin/python -m pip install -e .`.
+5. Восстановить DB только если неудачное обновление изменило состояние БД и
+   нужен предыдущий state.
+6. Выполнить `init-db`, `smoke-check`, `telegram-check`.
+7. Запустить сервисы, посмотреть логи.
+
+## Сетевой caveat по источникам
+
+Поведение государственных и региональных источников может отличаться в
+зависимости от server network, VPN, DNS, TLS inspection и proxy routing.
+Проверяйте доступ к источникам с целевой сети сервера до go-live и после
+изменений сетевой политики.
+
 ## Правила перезапуска сервисов
 
 Перезапускайте оба сервиса после изменений env, которые влияют на paths,

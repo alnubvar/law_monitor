@@ -1,19 +1,20 @@
-# Backup and Restore
+# Backup и restore
 
-Production data lives outside the git checkout:
+Production-данные располагаются вне git checkout:
 
 - DB: `/var/lib/ahstep-law-monitor/data/law_monitor.db`
 - reports: `/var/lib/ahstep-law-monitor/reports`
 - backups: `/var/lib/ahstep-law-monitor/backups`
-- temp files: `/var/lib/ahstep-law-monitor/tmp`
+- временные файлы: `/var/lib/ahstep-law-monitor/tmp`
 - logs: `/var/log/ahstep-law-monitor`
 
-Local development still defaults to `data/`, `reports/`, and `logs/` inside the
-repository.
+Локальная разработка по-прежнему использует `data/`, `reports/` и `logs/`
+внутри репозитория по умолчанию.
 
 ## Backup
 
-Run before updates, risky maintenance, manual DB work, and restore attempts:
+Запускать перед обновлениями, рискованным сопровождением, ручной работой с БД и
+перед попытками restore:
 
 ```bash
 cd /opt/ahstep/law_monitor
@@ -21,15 +22,15 @@ sudo -u ahstep LAW_MONITOR_ENV_FILE=/etc/ahstep-law-monitor/law-monitor.env \
   bash scripts/backup_db.sh
 ```
 
-The script uses `sqlite3 .backup` when available. If `sqlite3` is not installed,
-it copies the DB and WAL/SHM sidecars. The copy fallback should be used only
-after stopping services:
+Скрипт использует `sqlite3 .backup`, если он доступен. Если `sqlite3` не
+установлен, копируются файл БД и WAL/SHM-сайдкары. Copy fallback использовать
+только при остановленных сервисах:
 
 ```bash
 sudo systemctl stop ahstep-scheduler.service ahstep-telegram-bot.service
 ```
 
-Backup files are timestamped as:
+Файлы backup получают timestamp:
 
 ```text
 /var/lib/ahstep-law-monitor/backups/law_monitor_YYYYMMDD_HHMMSS.db
@@ -37,18 +38,19 @@ Backup files are timestamped as:
 
 ## Restore
 
-Always stop services first:
+Сначала остановить сервисы:
 
 ```bash
 sudo systemctl stop ahstep-scheduler.service ahstep-telegram-bot.service
 ```
 
-On systemd hosts, `scripts/restore_db.sh` enforces this and exits non-zero if
-either service is still active. It also refuses to run while the app writer lock
-exists. On non-systemd/manual deployments, the operator must verify no app
-process is running before restore.
+На системах с systemd `scripts/restore_db.sh` сам проверяет это и
+возвращает non-zero, если один из сервисов всё ещё активен. Скрипт также
+отказывается работать при существующем writer lock. На не-systemd или ручных
+deployment оператор должен сам убедиться, что ни один процесс приложения не
+запущен.
 
-Restore requires an explicit `--confirm`:
+Restore требует явного `--confirm`:
 
 ```bash
 cd /opt/ahstep/law_monitor
@@ -56,10 +58,10 @@ sudo -u ahstep LAW_MONITOR_ENV_FILE=/etc/ahstep-law-monitor/law-monitor.env \
   bash scripts/restore_db.sh /var/lib/ahstep-law-monitor/backups/law_monitor_YYYYMMDD_HHMMSS.db --confirm
 ```
 
-The restore script creates a pre-restore backup of the current DB before it
-overwrites anything.
+Restore-скрипт создаёт pre-restore backup текущей БД до того, как что-либо
+перезапишется.
 
-Validate and start services:
+Проверить и запустить сервисы:
 
 ```bash
 sudo -u ahstep bash -lc 'cd /opt/ahstep/law_monitor && set -a && . /etc/ahstep-law-monitor/law-monitor.env && set +a && .venv/bin/python main.py smoke-check'
@@ -68,10 +70,10 @@ sudo journalctl -u ahstep-scheduler.service -n 100 --no-pager
 sudo journalctl -u ahstep-telegram-bot.service -n 100 --no-pager
 ```
 
-## Reports and Logs
+## Reports и logs
 
-DB scripts cover the SQLite database only. For a wider operational snapshot,
-copy these directories separately:
+DB-скрипты охватывают только SQLite-базу. Для более широкого снимка
+эксплуатации копируйте каталоги отдельно:
 
 ```bash
 sudo tar -C /var/lib -czf /var/lib/ahstep-law-monitor/backups/reports_$(date +%Y%m%d_%H%M%S).tar.gz ahstep-law-monitor/reports

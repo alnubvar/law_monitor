@@ -1,34 +1,38 @@
-# Project Context
+# Контекст проекта
 
-This file gives AI assistants compact current-state context.
+Этот файл даёт AI-ассистентам компактный контекст текущего состояния.
 
-Use it together with `.claude/CLAUDE.md` and `REPO_MAP.md`.
+Используйте вместе с `.claude/CLAUDE.md` и `REPO_MAP.md`.
 
-## Current System Shape
+## Текущая форма системы
 
-The project already has the main product backbone in place:
+Основной product backbone уже реализован:
 
-- source collection from configured public sources;
-- extraction for common document formats;
-- SQLite-based storage and history;
-- rule-based analysis and classification;
-- Markdown report generation;
-- Telegram notification and interaction flows;
-- scheduled and manual run paths;
-- tests, fixtures, and smoke-style operational checks.
+- сбор из настроенных публичных источников;
+- извлечение типовых форматов документов;
+- хранение и история на SQLite;
+- rule-based анализ и классификация;
+- генерация Markdown-отчётов;
+- Telegram-уведомления и интерактивные сценарии;
+- запуск по расписанию и вручную;
+- тесты, фикстуры и smoke-style эксплуатационные проверки.
 
-This means most work should be treated as improving a running monitoring product, not inventing a new one.
+То есть основная работа должна рассматриваться как улучшение работающего
+продукта мониторинга, а не как создание нового.
 
-## Current Constraints And Pain Points
+## Ограничения и болевые точки
 
-Important things to remember about the current state:
+Что важно помнить о текущем состоянии:
 
-- the product is judged by relevance and clarity, not by raw collection volume;
-- noisy outputs are harmful because they reduce trust in monitoring;
-- false positives create alert fatigue for GR users;
-- user-facing text must avoid technical leakage;
-- parsers and extraction flows need to stay defensive because source quality is inconsistent;
-- reports, Telegram behavior, and scheduler flows are sensitive surfaces;
-- some capabilities may exist in partial or optional form, so changes should be grounded in the current code, not assumed from generic patterns.
+- продукт оценивается по релевантности и ясности, а не по объёму сбора;
+- шумные результаты вредны — они снижают доверие к мониторингу;
+- false positives создают alert fatigue для GR-пользователей;
+- user-facing текст не должен утекать в технические детали;
+- парсеры и flow извлечения должны оставаться defensive, потому что качество
+  источников неоднородно;
+- отчёты, поведение Telegram и scheduler — чувствительные поверхности;
+- часть возможностей может быть в частичной или опциональной форме, поэтому
+  изменения должны опираться на текущий код, а не на generic-предположения.
 
-In short: the project benefits more from precision, stability, and cleaner communication than from ambitious new abstractions.
+Короче: проект выигрывает от точности, стабильности и более чистой
+коммуникации больше, чем от амбициозных новых абстракций.
