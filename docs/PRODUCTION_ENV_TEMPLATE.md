@@ -45,6 +45,8 @@ LLM_BASE_URL=
 LLM_API_KEY=
 LLM_MODEL=
 LLM_TIMEOUT_SECONDS=60
+LLM_PROXY_URL=
+LLM_RESPONSE_FORMAT=auto
 LLM_MAX_DOCUMENT_CHARS=12000
 LLM_ENRICHMENT_LIMIT=20
 ```
@@ -98,6 +100,7 @@ document enrichment. `LLM_ENRICHMENT_ENABLED` сохранен как compatibil
 - [ ] `TELEGRAM_OPERATOR_CHAT_ID` задан, если нужен отдельный канал для оперативных алертов (рекомендуется на production).
 - [ ] `LLM_ENRICHMENT_ENABLED=false` для первичного корпоративного handoff, если owner/IT явно не одобрили LLM enrichment.
 - [ ] Если LLM включен, `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_API_KEY` и `LLM_MODEL` согласованы с IT.
+- [ ] `LLM_PROXY_URL` пустой, если LLM provider endpoint не требует отдельный proxy/VPN path.
 - [ ] В git checkout нет production `.env`.
 - [ ] `.gitignore` по-прежнему исключает `.env`, `.env.*`, DBs, logs, data и generated reports.
 
@@ -109,10 +112,17 @@ enrichment. Этот режим нельзя использовать для к�
 документов AHSTEP, если project owner и IT не согласовали provider, условия
 обработки данных и сетевой маршрут.
 
+Если provider endpoint требует отдельный сетевой маршрут, задайте
+`LLM_PROXY_URL`. Он применяется только к OpenAI-compatible LLM provider
+requests и не наследует `TELEGRAM_PROXY_URL`. Поддерживаются схемы `http`,
+`https`, `socks5` и `socks5h`; SOCKS требует установленной зависимости
+`requests[socks]`. Не размещайте proxy credentials в git, tickets или логах.
+
 ## Примечания по proxy и CA
 
 `TELEGRAM_PROXY_URL` применяется только к Telegram Bot API. Он не проксирует
-запросы к государственным или региональным источникам.
+запросы к государственным или региональным источникам и не используется для
+LLM provider requests.
 
 Если корпоративная сеть требует proxy для источников, IT может задать
 стандартные env vars `HTTPS_PROXY`, `HTTP_PROXY` и `NO_PROXY` в production
@@ -123,4 +133,3 @@ env-файле.
 предпочитайте настройку corporate CA bundle вместо добавления новых отключений
 TLS verification. Не меняйте SSL-политику источников во время deployment без
 явной необходимости.
-

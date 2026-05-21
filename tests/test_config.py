@@ -177,6 +177,8 @@ class ConfigSmokeTest(unittest.TestCase):
                 "LLM_API_KEY": "",
                 "LLM_MODEL": "",
                 "LLM_TIMEOUT_SECONDS": "",
+                "LLM_PROXY_URL": "",
+                "LLM_RESPONSE_FORMAT": "",
                 "LLM_MAX_DOCUMENT_CHARS": "",
                 "LLM_ENRICHMENT_LIMIT": "",
             },
@@ -188,8 +190,25 @@ class ConfigSmokeTest(unittest.TestCase):
             self.assertEqual(reloaded.LLM_PROVIDER, "mock")
             self.assertEqual(reloaded.LLM_API_KEY, "")
             self.assertEqual(reloaded.LLM_TIMEOUT_SECONDS, 60)
+            self.assertEqual(reloaded.LLM_PROXY_URL, "")
+            self.assertEqual(reloaded.LLM_RESPONSE_FORMAT, "auto")
             self.assertEqual(reloaded.LLM_MAX_DOCUMENT_CHARS, 12000)
             self.assertEqual(reloaded.LLM_ENRICHMENT_LIMIT, 20)
+        importlib.reload(config_module)
+
+    def test_reads_llm_proxy_url_from_env(self) -> None:
+        import app.config as config_module
+
+        with patch.dict(
+            os.environ,
+            {"LLM_PROXY_URL": "http://user:secret@proxy.local:8080"},
+            clear=False,
+        ):
+            reloaded = importlib.reload(config_module)
+            self.assertEqual(
+                reloaded.LLM_PROXY_URL,
+                "http://user:secret@proxy.local:8080",
+            )
         importlib.reload(config_module)
 
 

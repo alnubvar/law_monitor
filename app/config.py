@@ -159,6 +159,8 @@ LLM_BASE_URL = _get_env_str("LLM_BASE_URL", "")
 LLM_API_KEY = _get_env_str("LLM_API_KEY", "")
 LLM_MODEL = _get_env_str("LLM_MODEL", "")
 LLM_TIMEOUT_SECONDS = _get_env_int("LLM_TIMEOUT_SECONDS", 60, min_value=1)
+LLM_PROXY_URL = _get_env_str("LLM_PROXY_URL", "")
+LLM_RESPONSE_FORMAT = _get_env_str("LLM_RESPONSE_FORMAT", "auto").lower()
 LLM_MAX_DOCUMENT_CHARS = _get_env_int(
     "LLM_MAX_DOCUMENT_CHARS",
     12000,

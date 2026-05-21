@@ -7,9 +7,9 @@ from datetime import datetime
 from functools import lru_cache
 from hashlib import sha256
 from typing import Any, Mapping
-from urllib import error as urllib_error
-from urllib import request as urllib_request
+from urllib.parse import urlparse
 
+import requests
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from app import config
@@ -37,6 +37,21 @@ TARGET_REGIONS = {
     "krasnodar": "Краснодарский край",
     "stavropol": "Ставропольский край",
 }
+LLM_PROVIDER_ERROR_SNIPPET_CHARS = 600
+LLM_RESPONSE_FORMAT_DISABLED_VALUES = {"", "none", "off", "false", "disabled", "omit"}
+LLM_RESPONSE_FORMAT_JSON_OBJECT_VALUES = {"auto", "json", "json_object", "true", "1"}
+LLM_PROXY_SCHEMES = {"http", "https", "socks5", "socks5h"}
+URL_CREDENTIALS_RE = re.compile(
+    r"([a-z][a-z0-9+.-]*://)[^/\s:@]+(?::[^@\s/]*)?@",
+    re.IGNORECASE,
+)
+SECRET_TEXT_PATTERNS = (
+    re.compile(r"(Authorization\s*:\s*Bearer\s+)[^\s,;]+", re.IGNORECASE),
+    re.compile(r"(Bearer\s+)[A-Za-z0-9._~+\-/=]{12,}", re.IGNORECASE),
+    re.compile(r"(api[_-]?key[\"'\s:=]+)[^\"'\s,;}]+", re.IGNORECASE),
+    re.compile(r"\b(?:sk|sk-proj|sk-or-v1)-[A-Za-z0-9._\-]{8,}\b"),
+    re.compile(r"\bAIza[A-Za-z0-9_\-]{20,}\b"),
+)
 GENERIC_FALLBACK_TEXT_MARKERS = (
     "документ оставлен на наблюдении",
     "сигнал может повлиять",
@@ -702,11 +717,15 @@ class OpenAICompatibleEnrichmentProvider(BaseEnrichmentProvider):
         api_key: str,
         model: str,
         timeout_seconds: int,
+        proxy_url: str | None = None,
+        response_format: str | None = "auto",
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
         self.timeout_seconds = timeout_seconds
+        self.proxy_url = (proxy_url or "").strip()
+        self.response_format = (response_format or "auto").strip().lower()
 
     def enrich_document(
         self,
@@ -763,10 +782,9 @@ class OpenAICompatibleEnrichmentProvider(BaseEnrichmentProvider):
         user_prompt = build_document_card_prompt(
             json.dumps(document_payload, ensure_ascii=False, sort_keys=True)
         )
-        return {
+        payload: dict[str, object] = {
             "model": self.model,
             "temperature": 0,
-            "response_format": {"type": "json_object"},
             "messages": [
                 {
                     "role": "system",
@@ -778,12 +796,14 @@ class OpenAICompatibleEnrichmentProvider(BaseEnrichmentProvider):
                 },
             ],
         }
+        if self._uses_json_object_response_format():
+            payload["response_format"] = {"type": "json_object"}
+        return payload
 
     def _build_repair_payload(self, *, invalid_content: str) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "model": self.model,
             "temperature": 0,
-            "response_format": {"type": "json_object"},
             "messages": [
                 {
                     "role": "system",
@@ -799,6 +819,24 @@ class OpenAICompatibleEnrichmentProvider(BaseEnrichmentProvider):
                 },
             ],
         }
+        if self._uses_json_object_response_format():
+            payload["response_format"] = {"type": "json_object"}
+        return payload
+
+    def _uses_json_object_response_format(self) -> bool:
+        mode = self.response_format
+        if mode in LLM_RESPONSE_FORMAT_DISABLED_VALUES:
+            return False
+        if mode == "auto":
+            return not self._is_google_openai_compatible_endpoint()
+        return mode in LLM_RESPONSE_FORMAT_JSON_OBJECT_VALUES
+
+    def _is_google_openai_compatible_endpoint(self) -> bool:
+        parsed = urlparse(self.base_url)
+        host = parsed.netloc.lower()
+        return host == "generativelanguage.googleapis.com" or host.endswith(
+            ".generativelanguage.googleapis.com"
+        )
 
     def _parse_json_content(self, content: str) -> dict[str, Any]:
         normalized = content.strip()
@@ -831,12 +869,38 @@ class OpenAICompatibleEnrichmentProvider(BaseEnrichmentProvider):
         }
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
-        request = urllib_request.Request(endpoint, data=body, headers=headers, method="POST")
         try:
-            with urllib_request.urlopen(request, timeout=self.timeout_seconds) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except urllib_error.URLError as exc:
-            raise RuntimeError(f"LLM provider request failed: {exc.reason}") from exc
+            response = requests.post(
+                endpoint,
+                data=body,
+                headers=headers,
+                timeout=self.timeout_seconds,
+                proxies=_build_llm_proxy_config(self.proxy_url),
+            )
+            response.raise_for_status()
+            return response.json()
+        except requests.HTTPError as exc:
+            response = exc.response
+            status = "HTTP provider error"
+            body_text = ""
+            if response is not None:
+                status = f"HTTP {response.status_code} {response.reason}".strip()
+                body_text = response.text or ""
+            body_snippet = _safe_llm_provider_error_snippet(
+                body_text,
+                secrets=(self.api_key, self.proxy_url),
+            )
+            detail = status
+            if body_snippet:
+                detail = f"{detail}; body={body_snippet!r}"
+            detail = f"{detail}; payload_keys={','.join(payload.keys())}"
+            raise RuntimeError(f"LLM provider request failed: {detail}") from exc
+        except requests.RequestException as exc:
+            detail = _safe_llm_provider_error_snippet(
+                str(exc),
+                secrets=(self.api_key, self.proxy_url),
+            )
+            raise RuntimeError(f"LLM provider request failed: {detail}") from exc
 
     def _extract_content(self, payload: dict[str, Any]) -> str:
         try:
@@ -1104,6 +1168,8 @@ def build_document_enricher() -> DocumentEnricher:
                 api_key=config.LLM_API_KEY,
                 model=config.LLM_MODEL,
                 timeout_seconds=config.LLM_TIMEOUT_SECONDS,
+                proxy_url=getattr(config, "LLM_PROXY_URL", ""),
+                response_format=getattr(config, "LLM_RESPONSE_FORMAT", "auto"),
             ),
             provider_name=provider_name,
             model_name=config.LLM_MODEL or "",
@@ -1283,6 +1349,49 @@ def _looks_like_weak_user_text(value: str | None) -> bool:
 
 def _normalize_text(value: Any) -> str:
     return WHITESPACE_RE.sub(" ", str(value or "").replace("\xa0", " ")).strip()
+
+
+def _build_llm_proxy_config(proxy_url: str | None) -> dict[str, str] | None:
+    normalized = (proxy_url or "").strip()
+    if not normalized:
+        return None
+    scheme = urlparse(normalized).scheme.lower()
+    if scheme not in LLM_PROXY_SCHEMES:
+        safe_scheme = scheme or "missing"
+        raise ValueError(f"Unsupported LLM_PROXY_URL scheme: {safe_scheme}")
+    return {
+        "http": normalized,
+        "https": normalized,
+    }
+
+
+def _safe_llm_provider_error_snippet(
+    value: bytes | str,
+    *,
+    secrets: tuple[str, ...] = (),
+    max_chars: int = LLM_PROVIDER_ERROR_SNIPPET_CHARS,
+) -> str:
+    if isinstance(value, bytes):
+        text = value.decode("utf-8", errors="replace")
+    else:
+        text = str(value or "")
+    text = _normalize_text(text)
+    for secret in secrets:
+        if secret and len(secret) >= 8:
+            text = text.replace(secret, "[REDACTED]")
+    text = URL_CREDENTIALS_RE.sub(r"\1[REDACTED]@", text)
+    for pattern in SECRET_TEXT_PATTERNS:
+        text = pattern.sub(
+            lambda match: (
+                f"{match.group(1)}[REDACTED]"
+                if match.groups()
+                else "[REDACTED]"
+            ),
+            text,
+        )
+    if len(text) > max_chars:
+        return f"{text[: max_chars - 3].rstrip()}..."
+    return text
 
 
 def _sanitize_text_for_llm_input(

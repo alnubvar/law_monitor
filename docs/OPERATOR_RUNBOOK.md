@@ -135,10 +135,20 @@ LLM_DOCUMENT_ENRICHMENT_ENABLED=false
 Если LLM enrichment позднее включен и появляются сбои:
 
 - Проверить `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` и `LLM_TIMEOUT_SECONDS`.
+- Если provider endpoint требует отдельный corporate proxy/VPN path, проверить `LLM_PROXY_URL`.
+  `TELEGRAM_PROXY_URL` для LLM не используется.
+- Для Google Gemini OpenAI-compatible endpoint оставить `LLM_RESPONSE_FORMAT=auto`
+  либо временно поставить `LLM_RESPONSE_FORMAT=none`, если provider возвращает
+  400 на `response_format`.
 - Убедиться, что сервер может открыть approved provider endpoint.
 - Проверить provider quota и rate limits.
 - Выключить enrichment, если он блокирует эксплуатацию.
 - Не менять rule-based логику `action_level`.
+
+`LLM_PROXY_URL` поддерживает `http`, `https`, `socks5` и `socks5h` proxy URLs.
+Не вставляйте реальные credentials в tickets, screenshots или shell history.
+Ошибки provider path должны сохранять API key и proxy credentials в redacted
+виде.
 
 Отключение enrichment:
 

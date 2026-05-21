@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import requests
+
 from app.llm.enrichment import (
     DOCUMENT_CARD_PROMPT_VERSION,
     DocumentCardFacts,
@@ -102,6 +104,15 @@ class _SpyProvider(MockEnrichmentProvider):
 class _FailingProvider(MockEnrichmentProvider):
     def enrich_document(self, **kwargs) -> EnrichmentResult:
         raise RuntimeError("provider timeout")
+
+
+class _BadRequestProvider(MockEnrichmentProvider):
+    def enrich_document(self, **kwargs) -> EnrichmentResult:
+        raise RuntimeError(
+            "LLM provider request failed: HTTP 400 Bad Request; "
+            "body='Invalid response_format [REDACTED]'; "
+            "payload_keys=model,messages,response_format"
+        )
 
 
 class _CountingProvider(MockEnrichmentProvider):
@@ -514,6 +525,170 @@ class LLMEnrichmentTest(unittest.TestCase):
         self.assertEqual(result.status, "success")
         self.assertEqual(result.deadline_hint, "Конец обсуждения: 30.06.2026")
 
+    def test_openai_compatible_provider_keeps_json_object_response_format_by_default(self) -> None:
+        provider = OpenAICompatibleEnrichmentProvider(
+            base_url="https://api.studio.nebius.com/v1",
+            api_key="",
+            model="test-model",
+            timeout_seconds=5,
+        )
+
+        payload = provider._build_payload(
+            document_payload={
+                "title": "Тест",
+                "raw_text_excerpt": "Текст",
+            }
+        )
+
+        self.assertEqual(payload["response_format"], {"type": "json_object"})
+
+    def test_google_compatible_provider_omits_json_object_response_format_by_default(self) -> None:
+        provider = OpenAICompatibleEnrichmentProvider(
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+            api_key="",
+            model="gemini-3.5-flash",
+            timeout_seconds=5,
+        )
+
+        payload = provider._build_payload(
+            document_payload={
+                "title": "Тест",
+                "raw_text_excerpt": "Текст",
+            }
+        )
+
+        self.assertNotIn("response_format", payload)
+
+    def test_google_compatible_provider_can_force_json_object_response_format(self) -> None:
+        provider = OpenAICompatibleEnrichmentProvider(
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+            api_key="",
+            model="gemini-3.5-flash",
+            timeout_seconds=5,
+            response_format="json_object",
+        )
+
+        payload = provider._build_payload(
+            document_payload={
+                "title": "Тест",
+                "raw_text_excerpt": "Текст",
+            }
+        )
+
+        self.assertEqual(payload["response_format"], {"type": "json_object"})
+
+    def test_provider_bad_request_error_includes_safe_body_snippet(self) -> None:
+        secret = "sk-testsecret1234567890"
+        provider = OpenAICompatibleEnrichmentProvider(
+            base_url="https://api.example.test/v1",
+            api_key=secret,
+            model="test-model",
+            timeout_seconds=5,
+        )
+        response = mock.Mock()
+        response.status_code = 400
+        response.reason = "Bad Request"
+        response.text = (
+            '{"error":{"message":"Invalid response_format for '
+            f'{secret} and Bearer hidden-token-1234567890"}}'
+        )
+        error = requests.HTTPError("400 Client Error", response=response)
+
+        with mock.patch(
+            "app.llm.enrichment.requests.post",
+            side_effect=error,
+        ):
+            with self.assertRaises(RuntimeError) as context:
+                provider._post_json(
+                    {
+                        "model": "test-model",
+                        "messages": [],
+                        "response_format": {"type": "json_object"},
+                    }
+                )
+
+        message = str(context.exception)
+        self.assertIn("HTTP 400 Bad Request", message)
+        self.assertIn("Invalid response_format", message)
+        self.assertIn("payload_keys=model,messages,response_format", message)
+        self.assertNotIn(secret, message)
+        self.assertNotIn("hidden-token-1234567890", message)
+
+    def test_openai_compatible_request_uses_llm_proxy_when_set(self) -> None:
+        proxy_url = "http://user:secret@proxy.local:8080"
+        provider = OpenAICompatibleEnrichmentProvider(
+            base_url="https://api.example.test/v1",
+            api_key="",
+            model="test-model",
+            timeout_seconds=5,
+            proxy_url=proxy_url,
+        )
+        response = mock.Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"choices": []}
+
+        with mock.patch(
+            "app.llm.enrichment.requests.post",
+            return_value=response,
+        ) as post_mock:
+            result = provider._post_json({"model": "test-model", "messages": []})
+
+        self.assertEqual(result, {"choices": []})
+        _, kwargs = post_mock.call_args
+        self.assertEqual(
+            kwargs["proxies"],
+            {
+                "http": proxy_url,
+                "https": proxy_url,
+            },
+        )
+
+    def test_openai_compatible_request_uses_no_proxy_when_unset(self) -> None:
+        provider = OpenAICompatibleEnrichmentProvider(
+            base_url="https://api.example.test/v1",
+            api_key="",
+            model="test-model",
+            timeout_seconds=5,
+        )
+        response = mock.Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"choices": []}
+
+        with mock.patch(
+            "app.llm.enrichment.requests.post",
+            return_value=response,
+        ) as post_mock:
+            provider._post_json({"model": "test-model", "messages": []})
+
+        _, kwargs = post_mock.call_args
+        self.assertIsNone(kwargs["proxies"])
+
+    def test_proxy_credentials_are_redacted_from_provider_error(self) -> None:
+        proxy_url = "http://proxy_user:proxy_password@proxy.local:8080"
+        provider = OpenAICompatibleEnrichmentProvider(
+            base_url="https://api.example.test/v1",
+            api_key="",
+            model="test-model",
+            timeout_seconds=5,
+            proxy_url=proxy_url,
+        )
+        error = requests.exceptions.ProxyError(
+            f"Could not connect through {proxy_url}"
+        )
+
+        with mock.patch(
+            "app.llm.enrichment.requests.post",
+            side_effect=error,
+        ):
+            with self.assertRaises(RuntimeError) as context:
+                provider._post_json({"model": "test-model", "messages": []})
+
+        message = str(context.exception)
+        self.assertNotIn(proxy_url, message)
+        self.assertNotIn("proxy_user", message)
+        self.assertNotIn("proxy_password", message)
+        self.assertIn("[REDACTED]", message)
+
     def test_weak_llm_json_uses_deterministic_fallback(self) -> None:
         provider = OpenAICompatibleEnrichmentProvider(
             base_url="http://127.0.0.1:1234/v1",
@@ -770,6 +945,42 @@ class LLMEnrichmentTest(unittest.TestCase):
         assert enrichment is not None
         self.assertIn("provider timeout", enrichment["error"] or "")
         self.assertEqual(enrichment["status"], "fallback")
+
+    def test_bad_request_fallback_persists_safe_provider_details(self) -> None:
+        db_path = self._db_path("llm_enrichment_provider_bad_request.db")
+        init_db(db_path)
+        document = _raw_document()
+        analysis = _analysis_result("watchlist")
+        client = mock.Mock()
+        client.analyze_document.return_value = analysis
+        enricher = DocumentEnricher(
+            enabled=True,
+            provider=_BadRequestProvider(),
+            provider_name="openai-compatible",
+            model_name="gemini-3.5-flash",
+        )
+
+        with mock.patch("app.pipeline.analyze.get_document_enricher", return_value=enricher):
+            with mock.patch("app.pipeline.analyze.update_analysis"):
+                processed = analyze_pipeline._analyze_documents(
+                    [document],
+                    client=client,
+                    db_path=db_path,
+                )
+
+        self.assertEqual(processed, 1)
+        enrichment = get_document_enrichment(
+            document.url,
+            provider="openai-compatible",
+            model="gemini-3.5-flash",
+            db_path=db_path,
+        )
+        self.assertIsNotNone(enrichment)
+        assert enrichment is not None
+        self.assertEqual(enrichment["status"], "fallback")
+        self.assertIn("HTTP 400 Bad Request", enrichment["error"] or "")
+        self.assertIn("Invalid response_format", enrichment["error"] or "")
+        self.assertNotIn("sk-test", enrichment["error"] or "")
 
     def test_prompt_contains_no_hallucination_and_null_if_missing_rules(self) -> None:
         prompt = DOCUMENT_CARD_SYSTEM_PROMPT.lower()

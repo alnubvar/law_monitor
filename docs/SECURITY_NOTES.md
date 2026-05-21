@@ -60,6 +60,15 @@ enrichment. Не обрабатывайте через LLM path конфиден
 если owner/IT не согласовали provider, data handling terms, retention policy и
 network route.
 
+`LLM_PROXY_URL` задает отдельный proxy только для OpenAI-compatible LLM provider
+requests. Он не наследуется из `TELEGRAM_PROXY_URL` и не применяется к Telegram
+или source requests. Поддерживаются `http`, `https`, `socks5` и `socks5h`
+proxy URLs, если SOCKS extras доступны через `requests[socks]`.
+
+Не логируйте полный `LLM_PROXY_URL`. Если proxy URL содержит credentials, они
+должны храниться только в production env-файле и попадать в diagnostics/errors
+только в redacted виде. LLM API key redaction также должна сохраняться.
+
 ## TLS и corporate CA
 
 Некоторые настроенные публичные источники используют `verify_ssl: false` в
