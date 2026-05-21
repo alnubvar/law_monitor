@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 import sqlite3
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from unittest.mock import patch
 
 from app.models import ActionLevel, PageType, RawDocument
@@ -2535,13 +2535,16 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             summary="Фоновая новость без срочной реакции.",
         )
 
-        markdown = generate_markdown_report(
-            [support_document, regional_npa, news_document],
-            report_date="2026-05-05",
-            relevant_only=True,
-            action_levels=["requires_attention", "watchlist"],
-            include_market_background=True,
-        )
+        frozen_today = date(2026, 5, 5)
+        with patch("app.rules.deadline_truth.today_utc", return_value=frozen_today):
+            with patch("app.reports.markdown_report.today_utc", return_value=frozen_today):
+                markdown = generate_markdown_report(
+                    [support_document, regional_npa, news_document],
+                    report_date="2026-05-05",
+                    relevant_only=True,
+                    action_levels=["requires_attention", "watchlist"],
+                    include_market_background=True,
+                )
 
         self.assertIn("Проверить сроки подачи документов и готовность заявки.", markdown)
         self.assertIn(
