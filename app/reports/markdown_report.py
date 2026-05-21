@@ -132,6 +132,48 @@ _BUREAUCRATIC_TITLE_PREFIXES = (
     "об изменении",
     "о введении",
 )
+_ENGLISH_REPORT_TERM_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(r"\b(проверк[аеиу])\s+eligibility\b", re.IGNORECASE),
+        r"\1 соответствия критериям",
+    ),
+    (re.compile(r"\beligibility\b", re.IGNORECASE), "соответствие критериям"),
+)
+_USER_FACING_REGION_LABELS = {
+    "federal": "РФ",
+    "krasnodar": "Краснодарский край",
+    "rostov": "Ростовская область",
+    "stavropol": "Ставропольский край",
+}
+_RAW_HEADER_SUMMARY_RE = re.compile(
+    r"^\s*(?:"
+    r"(?:краснодар|ростов-на-дону)\s+об\s+\w+"
+    r"|постановление\s+вносит\s+отдел\b"
+    r")",
+    re.IGNORECASE,
+)
+_SAFE_REGIONAL_ACT_SUMMARY = (
+    "Региональный акт затрагивает порядок предоставления поддержки; требуется "
+    "проверить приложение/текст приказа для определения конкретных условий."
+)
+_PROMOTE_GENERIC_SUMMARY_MARKERS = (
+    "по документу видно окно поддержки или отбора",
+    "нужно уточнить условия участия, круг получателей и рабочие сроки",
+)
+_PROMOTE_GENERIC_IMPORTANCE_MARKERS = (
+    "документ помогает понять, применима ли мера к контуру ahstep",
+    "нужен ли срочный организационный шаг по подаче",
+)
+_PROMOTE_GENERIC_ACTION_MARKERS = (
+    "проверить критерии получателя; окно подачи или текущий статус отбора",
+    "проверить применимость меры, сроки подачи и ответственного",
+)
+_PROMOTE_WEAK_TEXT_VALUES = {
+    "открыт прием заявок",
+    "открыт прием заявок.",
+    "прием заявок завершён",
+    "прием заявок завершен",
+}
 BACKGROUND_DEFAULT_LIMIT = 5
 MARKET_BACKGROUND_LIMIT = 5
 REPORT_BUCKET_ORDER = (
@@ -1107,6 +1149,205 @@ def _shorten_summary(text: str | None) -> str:
     return _word_boundary_clip(normalized, SHORT_SUMMARY_MAX_CHARS)
 
 
+def _sanitize_report_display_text(
+    text: str | None,
+    *,
+    max_chars: int | None = None,
+    dedupe_sentences: bool = True,
+    guard_raw_header_summary: bool = False,
+) -> str:
+    normalized = re.sub(r"\s+", " ", _clean_iso_timestamps(text or "")).strip()
+    if not normalized:
+        return ""
+    if guard_raw_header_summary and _RAW_HEADER_SUMMARY_RE.search(normalized):
+        normalized = _SAFE_REGIONAL_ACT_SUMMARY
+    for pattern, replacement in _ENGLISH_REPORT_TERM_REPLACEMENTS:
+        normalized = pattern.sub(replacement, normalized)
+    for raw_region, label in _USER_FACING_REGION_LABELS.items():
+        normalized = re.sub(
+            rf"\b{re.escape(raw_region)}\b",
+            label,
+            normalized,
+            flags=re.IGNORECASE,
+        )
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    if dedupe_sentences:
+        normalized = _dedupe_report_sentences(normalized)
+    if max_chars is not None and len(normalized) > max_chars:
+        return _word_boundary_clip(normalized, max_chars)
+    return normalized
+
+
+def _dedupe_report_sentences(text: str) -> str:
+    chunks = re.split(r"(?<=[.!?])\s+", text)
+    seen: set[str] = set()
+    kept: list[str] = []
+    for chunk in chunks:
+        sentence = chunk.strip()
+        if not sentence:
+            continue
+        key = re.sub(r"[\W_]+", "", sentence.lower(), flags=re.UNICODE)
+        if not key:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(sentence)
+    return " ".join(kept).strip()
+
+
+def _region_display_label(value: str | None) -> str:
+    normalized = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not normalized:
+        return ""
+    return _USER_FACING_REGION_LABELS.get(normalized.lower(), normalized)
+
+
+def _is_promote_budget_item(item: DigestItem) -> bool:
+    return "promote.budget.gov.ru" in f"{item.source_name} {item.url}".lower()
+
+
+def _is_weak_promote_budget_summary(text: str | None) -> bool:
+    normalized = re.sub(r"\s+", " ", str(text or "").lower()).strip(" .;:-")
+    if not normalized:
+        return True
+    if normalized in _PROMOTE_WEAK_TEXT_VALUES:
+        return True
+    return any(marker in normalized for marker in _PROMOTE_GENERIC_SUMMARY_MARKERS)
+
+
+def _is_weak_promote_budget_importance(text: str | None) -> bool:
+    normalized = re.sub(r"\s+", " ", str(text or "").lower()).strip(" .;:-")
+    if not normalized:
+        return True
+    if normalized in _PROMOTE_WEAK_TEXT_VALUES:
+        return True
+    return any(marker in normalized for marker in _PROMOTE_GENERIC_IMPORTANCE_MARKERS)
+
+
+def _is_weak_promote_budget_action(text: str | None) -> bool:
+    normalized = re.sub(r"\s+", " ", str(text or "").lower()).strip(" .;:-")
+    if not normalized:
+        return True
+    if normalized in _PROMOTE_WEAK_TEXT_VALUES:
+        return True
+    return any(marker in normalized for marker in _PROMOTE_GENERIC_ACTION_MARKERS)
+
+
+def _promote_budget_topic(item: DigestItem) -> str:
+    title = _sanitize_report_display_text(item.title, dedupe_sentences=False)
+    title = re.sub(
+        r"^(?:открыт\s+при[её]м\s+заявок|при[её]м\s+заявок\s+заверш[её]н|"
+        r"отбор\s+заявок|объявлен\s+отбор|отбор)\s*(?:на|по)?\s*",
+        "",
+        title,
+        flags=re.IGNORECASE,
+    ).strip(" .;:-")
+    return title or "мера поддержки"
+
+
+def _promote_budget_status(item: DigestItem, enrichment: dict[str, str]) -> str:
+    status = (enrichment.get("status") or "").strip().lower()
+    if item.application_status == "closed" or status == "прием завершен":
+        return "closed"
+    deadline = enrichment.get("deadline") or item.deadline_text
+    if deadline and is_deadline_expired(deadline):
+        return "closed"
+    if item.application_status == "open" or status == "прием открыт":
+        return "open"
+    return "unknown"
+
+
+def _build_promote_budget_summary_text(
+    item: DigestItem,
+    *,
+    enrichment: dict[str, str],
+) -> str:
+    topic = _promote_budget_topic(item)
+    status = _promote_budget_status(item, enrichment)
+    support_type = _sanitize_report_display_text(
+        enrichment.get("support_type"),
+        dedupe_sentences=False,
+    )
+    measure = support_type if support_type and support_type != "другое" else "мера поддержки"
+    if status == "closed":
+        text = (
+            f"Прием заявок по теме: {topic} завершен; тип поддержки {measure} "
+            "полезен для проверки условий отбора и вероятности повторного окна."
+        )
+    elif status == "open":
+        text = f"Открыт отбор по теме: {topic}; нужно проверить условия участия по этой мере."
+    else:
+        text = f"Опубликован отбор или мера поддержки по теме: {topic}; условия требуют проверки по карточке."
+    deadline_text = _format_deadline_hint(enrichment.get("deadline_hint") or item.deadline_text)
+    if deadline_text:
+        text = f"{text} {deadline_text}."
+    return _sanitize_report_display_text(
+        text,
+        max_chars=DETAIL_SUMMARY_MAX_CHARS,
+        guard_raw_header_summary=True,
+    )
+
+
+def _build_promote_budget_importance_text(
+    item: DigestItem,
+    *,
+    enrichment: dict[str, str],
+) -> str:
+    topic = _promote_budget_topic(item)
+    status = _promote_budget_status(item, enrichment)
+    recipients = _sanitize_report_display_text(
+        enrichment.get("target_recipients"),
+        dedupe_sentences=False,
+    )
+    if status == "closed":
+        text = (
+            f"Тема {topic} важна как ориентир по условиям поддержки: можно заранее "
+            "сверить требования и подготовиться к следующему окну."
+        )
+    elif status == "open":
+        text = (
+            f"По теме {topic} может потребоваться решение о подаче; важно быстро "
+            "сверить соответствие критериям, документы и срок."
+        )
+    else:
+        text = (
+            f"По теме {topic} нужно понять, подходит ли мера под контур AHSTEP "
+            "и есть ли практический следующий шаг."
+        )
+    if recipients:
+        text = f"{text} Получатели: {recipients}."
+    return _sanitize_report_display_text(text, max_chars=DETAIL_TEXT_MAX_CHARS)
+
+
+def _build_promote_budget_action_text(
+    item: DigestItem,
+    *,
+    enrichment: dict[str, str],
+) -> str:
+    topic = _promote_budget_topic(item)
+    support_type = _sanitize_report_display_text(
+        enrichment.get("support_type"),
+        dedupe_sentences=False,
+    )
+    prefix = (
+        f"Для меры типа {support_type} по теме {topic}"
+        if support_type and support_type != "другое"
+        else f"По теме {topic}"
+    )
+    checks = [
+        "критерии получателя",
+        "статус окна подачи",
+        "сроки и перечень документов",
+        "бюджетные условия",
+        "ответственного за решение по участию",
+    ]
+    return _sanitize_report_display_text(
+        f"{prefix}: проверить {', '.join(checks)}.",
+        max_chars=DETAIL_TEXT_MAX_CHARS,
+    )
+
+
 def _format_deadline_hint(text: str | None) -> str | None:
     if not text:
         return None
@@ -1155,12 +1396,21 @@ def _format_human_item(
         fallback_text=clean_summary,
         max_chars=SHORT_SUMMARY_MAX_CHARS,
     )
+    importance_text = _sanitize_report_display_text(
+        _build_human_importance_text(item, enrichment=enrichment),
+        max_chars=SHORT_SUMMARY_MAX_CHARS,
+    )
     lines = [
-        f"### {item.title}",
-        f"- Почему важно: {_build_human_importance_text(item, enrichment=enrichment)}",
+        f"### {_sanitize_report_display_text(item.title, dedupe_sentences=False)}",
+        f"- Почему важно: {importance_text}",
     ]
     if summary_text:
-        lines.append(f"- Кратко: {_clean_iso_timestamps(summary_text)}")
+        clean_short = _sanitize_report_display_text(
+            summary_text,
+            max_chars=SHORT_SUMMARY_MAX_CHARS,
+            guard_raw_header_summary=True,
+        )
+        lines.append(f"- Кратко: {clean_short}")
     deadline_text = _format_deadline_hint(
         (enrichment.get("deadline_hint") if enrichment else None)
         or item.deadline_text
@@ -1172,8 +1422,12 @@ def _format_human_item(
         lines.append(f"- {deadline_text}")
     action_text = _build_human_action_text(item, enrichment=enrichment)
     if require_action or action_text:
+        clean_action = _sanitize_report_display_text(
+            action_text or "Оценить влияние и определить следующий шаг.",
+            max_chars=SHORT_SUMMARY_MAX_CHARS,
+        )
         lines.append(
-            f"- Что проверить: {action_text or 'Оценить влияние и определить следующий шаг.'}"
+            f"- Что проверить: {clean_action}"
         )
     lines.extend(
         [
@@ -1189,7 +1443,7 @@ def _format_document_card_item(
     *,
     enrichment: dict[str, str],
 ) -> list[str]:
-    lines = [f"### {item.title}"]
+    lines = [f"### {_sanitize_report_display_text(item.title, dedupe_sentences=False)}"]
     summary_text = _build_document_card_summary_text(item, enrichment=enrichment)
     if summary_text:
         lines.append(f"- Суть документа: {summary_text}")
@@ -1229,16 +1483,26 @@ def _build_document_card_summary_text(
         enrichment.get("factual_summary"),
         enrichment.get("executive_summary"),
     )
+    if _is_promote_budget_item(item) and _is_weak_promote_budget_summary(combined):
+        return _build_promote_budget_summary_text(item, enrichment=enrichment)
     if combined:
-        return _clip_detail_text(combined, max_chars=DETAIL_SUMMARY_MAX_CHARS)
-    clean_summary = _clean_iso_timestamps(item.summary) if item.summary else None
-    return _clip_detail_text(
-        select_executive_summary(
-            item,
-            fallback_text=clean_summary,
+        return _sanitize_report_display_text(
+            combined,
             max_chars=DETAIL_SUMMARY_MAX_CHARS,
-        ),
+            guard_raw_header_summary=True,
+        )
+    clean_summary = _clean_iso_timestamps(item.summary) if item.summary else None
+    fallback = select_executive_summary(
+        item,
+        fallback_text=clean_summary,
         max_chars=DETAIL_SUMMARY_MAX_CHARS,
+    )
+    if _is_promote_budget_item(item) and _is_weak_promote_budget_summary(fallback):
+        return _build_promote_budget_summary_text(item, enrichment=enrichment)
+    return _sanitize_report_display_text(
+        fallback,
+        max_chars=DETAIL_SUMMARY_MAX_CHARS,
+        guard_raw_header_summary=True,
     )
 
 
@@ -1248,15 +1512,25 @@ def _build_document_card_importance_text(
     enrichment: dict[str, str],
 ) -> str:
     impact = enrichment.get("business_impact")
+    if _is_promote_budget_item(item) and _is_weak_promote_budget_importance(impact):
+        return _build_promote_budget_importance_text(item, enrichment=enrichment)
     if impact and _is_useful_visible_importance(impact):
-        return _clip_detail_text(impact, max_chars=DETAIL_TEXT_MAX_CHARS)
-    return _clip_detail_text(
-        build_executive_reason(
-            item,
-            fallback_text=item.business_signal or item.impact or item.summary,
+        return _sanitize_report_display_text(
+            impact,
             max_chars=DETAIL_TEXT_MAX_CHARS,
-        ),
+            guard_raw_header_summary=True,
+        )
+    fallback = build_executive_reason(
+        item,
+        fallback_text=item.business_signal or item.impact or item.summary,
         max_chars=DETAIL_TEXT_MAX_CHARS,
+    )
+    if _is_promote_budget_item(item) and _is_weak_promote_budget_importance(fallback):
+        return _build_promote_budget_importance_text(item, enrichment=enrichment)
+    return _sanitize_report_display_text(
+        fallback,
+        max_chars=DETAIL_TEXT_MAX_CHARS,
+        guard_raw_header_summary=True,
     )
 
 
@@ -1266,22 +1540,35 @@ def _build_document_card_applicability_text(
     enrichment: dict[str, str],
 ) -> str:
     parts: list[str] = []
-    region = enrichment.get("region") or (item.region if item.region and item.region != "federal" else "")
+    region = _region_display_label(enrichment.get("region")) or (
+        _region_display_label(item.region)
+        if item.region and item.region != "federal"
+        else ""
+    )
     if region:
         parts.append(f"Регион: {region}")
-    recipients = enrichment.get("target_recipients")
+    recipients = _sanitize_report_display_text(
+        enrichment.get("target_recipients"),
+        dedupe_sentences=False,
+    )
     if recipients:
         parts.append(f"Получатели: {recipients}")
-    support_type = enrichment.get("support_type")
+    support_type = _sanitize_report_display_text(
+        enrichment.get("support_type"),
+        dedupe_sentences=False,
+    )
     if support_type:
         label = "Тип поддержки" if support_type != "другое" else "Тип меры"
         parts.append(f"{label}: {support_type}")
-    applicability_note = enrichment.get("applicability_note")
+    applicability_note = _sanitize_report_display_text(enrichment.get("applicability_note"))
     if applicability_note:
         parts.append(applicability_note)
     if not parts:
         return ""
-    return _clip_detail_text("; ".join(parts), max_chars=DETAIL_APPLICABILITY_MAX_CHARS)
+    return _sanitize_report_display_text(
+        "; ".join(parts),
+        max_chars=DETAIL_APPLICABILITY_MAX_CHARS,
+    )
 
 
 def _build_document_card_action_text(
@@ -1290,10 +1577,14 @@ def _build_document_card_action_text(
     enrichment: dict[str, str],
 ) -> str:
     action = enrichment.get("recommended_action")
+    if _is_promote_budget_item(item) and _is_weak_promote_budget_action(action):
+        return _build_promote_budget_action_text(item, enrichment=enrichment)
     if action and _is_useful_visible_action(action):
-        return _clip_detail_text(action, max_chars=DETAIL_TEXT_MAX_CHARS)
+        return _sanitize_report_display_text(action, max_chars=DETAIL_TEXT_MAX_CHARS)
     fallback = _build_human_action_text(item, enrichment=enrichment)
-    return _clip_detail_text(fallback, max_chars=DETAIL_TEXT_MAX_CHARS)
+    if _is_promote_budget_item(item) and _is_weak_promote_budget_action(fallback):
+        return _build_promote_budget_action_text(item, enrichment=enrichment)
+    return _sanitize_report_display_text(fallback, max_chars=DETAIL_TEXT_MAX_CHARS)
 
 
 def _build_document_card_discussion_action(
@@ -1322,7 +1613,10 @@ def _build_document_card_dates_text(
     enrichment: dict[str, str],
 ) -> str:
     parts: list[str] = []
-    status = enrichment.get("status")
+    status = _sanitize_report_display_text(
+        enrichment.get("status"),
+        dedupe_sentences=False,
+    )
     if status:
         parts.append(f"Статус: {status}")
     deadline_value = enrichment.get("deadline")
@@ -1351,7 +1645,10 @@ def _build_document_card_dates_text(
         parts.append(f"Вступление в силу: {effective_date}")
     if not parts:
         return ""
-    return _clip_detail_text("; ".join(parts), max_chars=DETAIL_DATES_MAX_CHARS)
+    return _sanitize_report_display_text(
+        "; ".join(parts),
+        max_chars=DETAIL_DATES_MAX_CHARS,
+    )
 
 
 def _merge_detail_texts(primary: str | None, secondary: str | None) -> str:
@@ -1377,7 +1674,10 @@ def _merge_detail_texts(primary: str | None, secondary: str | None) -> str:
 def _normalize_detail_text(text: str | None) -> str:
     if not text:
         return ""
-    return re.sub(r"\s+", " ", _clean_iso_timestamps(text)).strip()
+    return _sanitize_report_display_text(
+        text,
+        dedupe_sentences=False,
+    )
 
 
 def _clip_detail_text(text: str | None, *, max_chars: int) -> str:

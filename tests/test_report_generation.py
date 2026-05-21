@@ -284,6 +284,169 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertIn("Что проверить: Проверить критерии получателя и срок подачи заявки.", markdown)
         self.assertIn("Сроки / даты: Статус: прием открыт; Срок подачи заявок: до 30.06.2026", markdown)
 
+    def test_promote_budget_weak_fallback_card_uses_deterministic_facts(self) -> None:
+        db_path = self._db_path("report_promote_budget_cleanup.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=508,
+            source_name="promote.budget.gov.ru / Минфин - отборы и меры поддержки",
+            region="krasnodar",
+            title="Открыт прием заявок на возмещение части затрат на элитные семена АПК",
+            url="https://promote.budget.gov.ru/public/minfin/selection/view/cleanup",
+            action_level="requires_attention",
+            page_type="selection_announcement",
+            summary="Открыт прием заявок для сельхозтоваропроизводителей АПК.",
+        )
+        document.application_status = "open"
+        document.deadline_text = "Прием заявок до 30.06.2099."
+        document.raw_text = "Отбор на субсидии для сельхозтоваропроизводителей АПК."
+        save_document_enrichment(
+            document_id=document.id,
+            document_url=document.url,
+            provider="mock",
+            model="mock-enrichment",
+            enrichment=EnrichmentResult.from_facts(
+                DocumentCardFacts(
+                    document_type="отбор",
+                    region="krasnodar",
+                    status="прием открыт",
+                    deadline="2099-06-30",
+                    support_type="субсидия",
+                    target_recipients=["сельхозтоваропроизводители"],
+                    what_changed=(
+                        "По документу видно окно поддержки или отбора. Нужно уточнить "
+                        "условия участия, круг получателей и рабочие сроки."
+                    ),
+                    why_matters=(
+                        "Документ помогает понять, применима ли мера к контуру AHSTEP, "
+                        "и нужна ли проверка eligibility."
+                    ),
+                    what_to_check=(
+                        "Проверить критерии получателя; окно подачи или текущий статус отбора; "
+                        "перечень документов."
+                    ),
+                    short_summary="Открыт прием заявок.",
+                    confidence="high",
+                )
+            ),
+            db_path=db_path,
+        )
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-21",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+            db_path=db_path,
+        )
+
+        self.assertNotIn("По документу видно окно поддержки или отбора", markdown)
+        self.assertNotIn("Документ помогает понять, применима ли мера", markdown)
+        self.assertNotIn("eligibility", markdown.lower())
+        self.assertIn("элитное семеноводство", markdown)
+        self.assertIn("Регион: Краснодарский край", markdown)
+        self.assertIn("соответствие критериям", markdown)
+
+    def test_document_card_summary_replaces_raw_city_header_garbage(self) -> None:
+        db_path = self._db_path("report_raw_header_summary_cleanup.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=509,
+            source_name="Нормативные акты Краснодарского края",
+            region="krasnodar",
+            title="О внесении изменений в порядок предоставления субсидий в АПК",
+            url="https://admkrai.krasnodar.ru/upload/iblock/header.pdf",
+            action_level="requires_attention",
+            page_type="new_rule",
+            summary="Краснодар Об образовании рабочей группы по документу.",
+        )
+        document.business_signal = "Изменены условия предоставления субсидий в АПК."
+        document.raw_text = "Порядок предоставления субсидий сельхозтоваропроизводителям АПК."
+        save_document_enrichment(
+            document_id=document.id,
+            document_url=document.url,
+            provider="mock",
+            model="mock-enrichment",
+            enrichment=EnrichmentResult.from_facts(
+                DocumentCardFacts(
+                    document_type="НПА",
+                    region="krasnodar",
+                    status="принято",
+                    what_changed="Краснодар Об образовании рабочей группы по документу.",
+                    why_matters="Постановление вносит отдел правового сопровождения.",
+                    what_to_check="Проверить приложение и условия поддержки.",
+                    short_summary="Ростов-на-Дону Об утверждении состава комиссии.",
+                    confidence="high",
+                )
+            ),
+            db_path=db_path,
+        )
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-21",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+            db_path=db_path,
+        )
+
+        self.assertIn(
+            "Региональный акт затрагивает порядок предоставления поддержки",
+            markdown,
+        )
+        self.assertNotIn("Краснодар Об образовании", markdown)
+        self.assertNotIn("Ростов-на-Дону Об утверждении", markdown)
+        self.assertNotIn("Постановление вносит отдел", markdown)
+
+    def test_document_card_deduplicates_repeated_sentences(self) -> None:
+        db_path = self._db_path("report_sentence_dedup.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=510,
+            source_name="ГИСП - меры поддержки АПК",
+            region="federal",
+            title="Отбор на субсидию АПК",
+            url="https://gisp.gov.ru/nmp/measure/dedup",
+            action_level="requires_attention",
+            page_type="selection_announcement",
+            summary="Базовая summary.",
+        )
+        save_document_enrichment(
+            document_id=document.id,
+            document_url=document.url,
+            provider="mock",
+            model="mock-enrichment",
+            enrichment=EnrichmentResult.from_facts(
+                DocumentCardFacts(
+                    document_type="отбор",
+                    status="прием открыт",
+                    what_changed="Открыт отбор на субсидию. Открыт отбор на субсидию.",
+                    why_matters="Нужно проверить условия участия. Нужно проверить условия участия.",
+                    what_to_check="Проверить критерии получателя.",
+                    short_summary="Открыт отбор на субсидию.",
+                    confidence="high",
+                )
+            ),
+            db_path=db_path,
+        )
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-21",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+            db_path=db_path,
+        )
+
+        self.assertNotIn(
+            "Открыт отбор на субсидию. Открыт отбор на субсидию.",
+            markdown,
+        )
+        self.assertNotIn(
+            "Нужно проверить условия участия. Нужно проверить условия участия.",
+            markdown,
+        )
+
     def test_report_strips_legacy_ai_prefixes_from_enrichment(self) -> None:
         db_path = self._db_path("report_enrichment_legacy_prefix.db")
         init_db(db_path)
@@ -1700,8 +1863,8 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             "Проверить применимость меры, сроки подачи и ответственного",
             markdown,
         )
-        self.assertIn("Открыто окно подачи заявок по мере поддержки", markdown)
-        self.assertIn("Проверить сроки подачи документов и готовность заявки.", markdown)
+        self.assertIn("По теме субсидии может потребоваться решение о подаче", markdown)
+        self.assertIn("По теме субсидии: проверить критерии получателя", markdown)
 
     def test_report_deduplicates_government_news_and_docs_by_shared_id(self) -> None:
         news_document = self._doc(
