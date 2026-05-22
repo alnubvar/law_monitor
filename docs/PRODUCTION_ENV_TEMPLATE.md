@@ -48,9 +48,12 @@ LLM_PROVIDER=mock
 LLM_BASE_URL=
 LLM_API_KEY=
 LLM_MODEL=
+LLM_MODEL_FALLBACKS=
 LLM_TIMEOUT_SECONDS=60
 LLM_PROXY_URL=
 LLM_RESPONSE_FORMAT=auto
+LLM_MAX_DOCS_PER_BATCH=20
+LLM_REQUEST_DELAY_SECONDS=0
 LLM_MAX_RETRIES=2
 LLM_RETRY_BACKOFF_SECONDS=2
 LLM_RETRY_MAX_BACKOFF_SECONDS=10
@@ -98,14 +101,17 @@ LLM_DOCUMENT_ENRICHMENT_ENABLED=true
 LLM_PROVIDER=openai_compatible
 LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
 LLM_MODEL=gemma-4-31b-it
+LLM_MODEL_FALLBACKS=gemma-4-26b-it,gemini-2.5-flash
 LLM_RESPONSE_FORMAT=none
 LLM_PROXY_URL=socks5h://USER:PASSWORD@HOST:PORT
 LLM_MAX_DOCUMENT_CHARS=1000
 LLM_TIMEOUT_SECONDS=300
 LLM_ENRICHMENT_LIMIT=3
-LLM_MAX_RETRIES=2
-LLM_RETRY_BACKOFF_SECONDS=2
-LLM_RETRY_MAX_BACKOFF_SECONDS=10
+LLM_MAX_DOCS_PER_BATCH=3
+LLM_REQUEST_DELAY_SECONDS=3
+LLM_MAX_RETRIES=3
+LLM_RETRY_BACKOFF_SECONDS=30
+LLM_RETRY_MAX_BACKOFF_SECONDS=60
 ```
 
 `TELEGRAM_PROXY_URL` и `LLM_PROXY_URL` - разные настройки. Telegram proxy
@@ -185,7 +191,7 @@ owner попросит immediate notifications.
 - [ ] `LLM_ENRICHMENT_ENABLED=false` для первичного корпоративного handoff, если owner/IT явно не одобрили LLM enrichment.
 - [ ] Если LLM включен, `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_API_KEY` и `LLM_MODEL` согласованы с IT.
 - [ ] `LLM_PROXY_URL` пустой, если LLM provider endpoint не требует отдельный proxy/VPN path.
-- [ ] Если Google/Gemma включен через proxy, `LLM_MAX_RETRIES=2`, `LLM_RETRY_BACKOFF_SECONDS=2`, `LLM_RETRY_MAX_BACKOFF_SECONDS=10`.
+- [ ] Если Google/Gemma включен через proxy, заданы `LLM_MAX_DOCS_PER_BATCH`, `LLM_REQUEST_DELAY_SECONDS`, `LLM_MAX_RETRIES`, `LLM_RETRY_BACKOFF_SECONDS` и при необходимости `LLM_MODEL_FALLBACKS`.
 - [ ] Для первого запуска с LLM задан `LLM_ENRICHMENT_LIMIT=2` или `3`.
 - [ ] В git checkout нет production `.env`.
 - [ ] `.gitignore` по-прежнему исключает `.env`, `.env.*`, DBs, logs, data и generated reports.

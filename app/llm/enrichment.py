@@ -52,6 +52,16 @@ LLM_RETRYABLE_REQUEST_EXCEPTIONS = (
     requests.ConnectionError,
     requests.exceptions.ChunkedEncodingError,
 )
+LLM_RATE_LIMIT_TEXT_MARKERS = (
+    "429",
+    "rate limit",
+    "ratelimit",
+    "quota",
+    "too many requests",
+    "resource exhausted",
+    "requests per minute",
+    "rpm",
+)
 LLM_RESPONSE_FORMAT_DISABLED_VALUES = {"", "none", "off", "false", "disabled", "omit"}
 LLM_RESPONSE_FORMAT_JSON_OBJECT_VALUES = {"auto", "json", "json_object", "true", "1"}
 LLM_PROXY_SCHEMES = {"http", "https", "socks5", "socks5h"}
@@ -730,6 +740,7 @@ class OpenAICompatibleEnrichmentProvider(BaseEnrichmentProvider):
         timeout_seconds: int,
         proxy_url: str | None = None,
         response_format: str | None = "auto",
+        request_delay_seconds: float | None = None,
         max_retries: int | None = None,
         retry_backoff_seconds: int | None = None,
         retry_max_backoff_seconds: int | None = None,
@@ -740,6 +751,14 @@ class OpenAICompatibleEnrichmentProvider(BaseEnrichmentProvider):
         self.timeout_seconds = timeout_seconds
         self.proxy_url = (proxy_url or "").strip()
         self.response_format = (response_format or "auto").strip().lower()
+        self.request_delay_seconds = max(
+            0.0,
+            float(
+                request_delay_seconds
+                if request_delay_seconds is not None
+                else getattr(config, "LLM_REQUEST_DELAY_SECONDS", 0.0)
+            ),
+        )
         self.max_retries = max(
             0,
             int(max_retries if max_retries is not None else config.LLM_MAX_RETRIES),
@@ -775,6 +794,7 @@ class OpenAICompatibleEnrichmentProvider(BaseEnrichmentProvider):
         document_type: str | None = None,
         max_document_chars: int | None = None,
     ) -> EnrichmentResult:
+        LOGGER.info("LLM enrichment selected model=%s", self.model or "<unset>")
         prepared = build_document_card_input(
             title=title,
             raw_text=raw_text,
@@ -907,6 +927,7 @@ class OpenAICompatibleEnrichmentProvider(BaseEnrichmentProvider):
         max_attempts = self.max_retries + 1
         for attempt in range(1, max_attempts + 1):
             try:
+                self._sleep_before_request()
                 response = requests.post(
                     endpoint,
                     data=body,
@@ -946,6 +967,10 @@ class OpenAICompatibleEnrichmentProvider(BaseEnrichmentProvider):
                 raise self._build_request_runtime_error(exc) from exc
         raise RuntimeError("LLM provider request failed: retry attempts exhausted")
 
+    def _sleep_before_request(self) -> None:
+        if self.request_delay_seconds > 0:
+            time.sleep(self.request_delay_seconds)
+
     def _should_retry_http_error(
         self,
         exc: requests.HTTPError,
@@ -957,7 +982,10 @@ class OpenAICompatibleEnrichmentProvider(BaseEnrichmentProvider):
         return (
             attempt < max_attempts
             and response is not None
-            and response.status_code in LLM_RETRYABLE_HTTP_STATUS_CODES
+            and (
+                response.status_code in LLM_RETRYABLE_HTTP_STATUS_CODES
+                or _is_rate_limit_response(response)
+            )
         )
 
     def _retry_delay_seconds(self, attempt: int) -> float:
@@ -991,7 +1019,8 @@ class OpenAICompatibleEnrichmentProvider(BaseEnrichmentProvider):
                 secrets=(self.api_key, self.proxy_url),
             )
         LOGGER.warning(
-            "LLM provider transient failure; retrying attempt %s/%s: %s",
+            "LLM provider transient failure for model=%s; retry %s/%s: %s",
+            self.model or "<unset>",
             attempt + 1,
             max_attempts,
             detail,
@@ -1043,6 +1072,50 @@ class OpenAICompatibleEnrichmentProvider(BaseEnrichmentProvider):
         if not isinstance(content, str) or not content.strip():
             raise ValueError("empty LLM provider content")
         return content.strip()
+
+
+class AllLLMModelsFailedError(RuntimeError):
+    """Raised when every configured LLM model failed on a retryable limit error."""
+
+
+class ModelFallbackEnrichmentProvider(BaseEnrichmentProvider):
+    def __init__(self, providers: list[OpenAICompatibleEnrichmentProvider]) -> None:
+        self.providers = providers
+
+    def enrich_document(self, **kwargs) -> EnrichmentResult:
+        if not self.providers:
+            raise AllLLMModelsFailedError("no LLM models configured")
+        failures: list[str] = []
+        for index, provider in enumerate(self.providers):
+            try:
+                return provider.enrich_document(**kwargs)
+            except Exception as exc:
+                safe_error = _safe_llm_provider_error_snippet(
+                    f"{type(exc).__name__}: {exc}",
+                    secrets=(provider.api_key, provider.proxy_url),
+                )
+                if not _is_rate_limit_error(exc):
+                    raise
+                failures.append(f"{provider.model}: {safe_error}")
+                next_provider = (
+                    self.providers[index + 1]
+                    if index + 1 < len(self.providers)
+                    else None
+                )
+                if next_provider is not None:
+                    LOGGER.warning(
+                        "LLM rate limit/quota failure for model=%s; switching to fallback model=%s",
+                        provider.model or "<unset>",
+                        next_provider.model or "<unset>",
+                    )
+                    continue
+                LOGGER.warning(
+                    "LLM enrichment failed after all configured models. Last model=%s error=%s",
+                    provider.model or "<unset>",
+                    safe_error,
+                )
+                raise AllLLMModelsFailedError("; ".join(failures)) from exc
+        raise AllLLMModelsFailedError("; ".join(failures) or "LLM models failed")
 
 
 class DocumentEnricher:
@@ -1119,7 +1192,32 @@ class DocumentEnricher:
                 document_type=document_type,
                 max_document_chars=max_document_chars,
             )
+        except AllLLMModelsFailedError as exc:
+            error_text = _safe_llm_provider_error_snippet(str(exc))
+            LOGGER.warning(
+                "LLM enrichment final failure for document url=%s: %s",
+                url,
+                error_text,
+            )
+            return self._build_failed_result(
+                error_text=f"LLM enrichment failed for all models: {error_text}",
+                title=title,
+                raw_text=raw_text,
+                analysis=analysis,
+                source_name=source_name,
+                url=url,
+                level=level,
+                region=region,
+                published_at=published_at,
+                document_type=document_type,
+                max_document_chars=max_document_chars,
+            )
         except Exception as exc:
+            LOGGER.warning(
+                "LLM enrichment provider failed for document url=%s: %s",
+                url,
+                _safe_llm_provider_error_snippet(f"{type(exc).__name__}: {exc}"),
+            )
             return self._build_fallback_result(
                 error_text=f"{type(exc).__name__}: {exc}",
                 title=title,
@@ -1270,9 +1368,60 @@ class DocumentEnricher:
                 source_hash=compute_document_card_source_hash(prepared),
             )
 
+    def _build_failed_result(
+        self,
+        *,
+        error_text: str,
+        title: str,
+        raw_text: str,
+        analysis: AnalysisResult,
+        source_name: str | None,
+        url: str | None,
+        level: str | None,
+        region: str | None,
+        published_at: datetime | None,
+        document_type: str | None,
+        max_document_chars: int | None,
+    ) -> EnrichmentResult:
+        prepared = build_document_card_input(
+            title=title,
+            raw_text=raw_text,
+            analysis=analysis,
+            source_name=source_name,
+            url=url,
+            level=level,
+            region=region,
+            published_at=published_at,
+            document_type=document_type,
+            max_document_chars=max_document_chars or config.LLM_MAX_DOCUMENT_CHARS,
+        )
+        return EnrichmentResult.failed(
+            error_text,
+            source_hash=compute_document_card_source_hash(prepared),
+        )
+
 
 def is_enrichment_eligible(action_level: ActionLevel | str | None) -> bool:
     return str(action_level or "").strip() in ELIGIBLE_ACTION_LEVELS
+
+
+def _build_openai_compatible_provider(model: str) -> OpenAICompatibleEnrichmentProvider:
+    return OpenAICompatibleEnrichmentProvider(
+        base_url=config.LLM_BASE_URL,
+        api_key=config.LLM_API_KEY,
+        model=model,
+        timeout_seconds=config.LLM_TIMEOUT_SECONDS,
+        proxy_url=getattr(config, "LLM_PROXY_URL", ""),
+        response_format=getattr(config, "LLM_RESPONSE_FORMAT", "auto"),
+        request_delay_seconds=getattr(config, "LLM_REQUEST_DELAY_SECONDS", 0.0),
+        max_retries=getattr(config, "LLM_MAX_RETRIES", 2),
+        retry_backoff_seconds=getattr(config, "LLM_RETRY_BACKOFF_SECONDS", 2),
+        retry_max_backoff_seconds=getattr(
+            config,
+            "LLM_RETRY_MAX_BACKOFF_SECONDS",
+            10,
+        ),
+    )
 
 
 def build_document_enricher() -> DocumentEnricher:
@@ -1291,23 +1440,25 @@ def build_document_enricher() -> DocumentEnricher:
             model_name=config.LLM_MODEL or "mock-enrichment",
         )
     if provider_name in {"openai", "openai-compatible", "openai_compatible", "lmstudio", "ollama"}:
+        configured_models = [
+            model
+            for model in (config.LLM_MODEL, *getattr(config, "LLM_MODEL_FALLBACKS", ()))
+            if str(model or "").strip()
+        ]
+        providers = [
+            _build_openai_compatible_provider(str(model).strip())
+            for model in configured_models
+        ]
+        provider: BaseEnrichmentProvider | None
+        if len(providers) > 1:
+            provider = ModelFallbackEnrichmentProvider(providers)
+        elif providers:
+            provider = providers[0]
+        else:
+            provider = _build_openai_compatible_provider(config.LLM_MODEL)
         return DocumentEnricher(
             enabled=True,
-            provider=OpenAICompatibleEnrichmentProvider(
-                base_url=config.LLM_BASE_URL,
-                api_key=config.LLM_API_KEY,
-                model=config.LLM_MODEL,
-                timeout_seconds=config.LLM_TIMEOUT_SECONDS,
-                proxy_url=getattr(config, "LLM_PROXY_URL", ""),
-                response_format=getattr(config, "LLM_RESPONSE_FORMAT", "auto"),
-                max_retries=getattr(config, "LLM_MAX_RETRIES", 2),
-                retry_backoff_seconds=getattr(config, "LLM_RETRY_BACKOFF_SECONDS", 2),
-                retry_max_backoff_seconds=getattr(
-                    config,
-                    "LLM_RETRY_MAX_BACKOFF_SECONDS",
-                    10,
-                ),
-            ),
+            provider=provider,
             provider_name=provider_name,
             model_name=config.LLM_MODEL or "",
         )
@@ -1489,6 +1640,30 @@ def _looks_like_weak_user_text(value: str | None) -> bool:
 
 def _normalize_text(value: Any) -> str:
     return WHITESPACE_RE.sub(" ", str(value or "").replace("\xa0", " ")).strip()
+
+
+def _contains_rate_limit_text(value: object) -> bool:
+    lowered = _normalize_text(value).lower()
+    return any(marker in lowered for marker in LLM_RATE_LIMIT_TEXT_MARKERS)
+
+
+def _is_rate_limit_response(response: requests.Response | Any) -> bool:
+    status_code = getattr(response, "status_code", None)
+    if status_code == 429:
+        return True
+    return _contains_rate_limit_text(getattr(response, "text", ""))
+
+
+def _is_rate_limit_error(exc: BaseException) -> bool:
+    response = getattr(exc, "response", None)
+    if response is not None and _is_rate_limit_response(response):
+        return True
+    current: BaseException | None = exc
+    while current is not None:
+        if _contains_rate_limit_text(current):
+            return True
+        current = current.__cause__ if isinstance(current.__cause__, BaseException) else None
+    return False
 
 
 def _build_llm_proxy_config(proxy_url: str | None) -> dict[str, str] | None:

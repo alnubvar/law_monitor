@@ -38,6 +38,30 @@ def safe_truncate_text(value: object, max_chars: int, *, ellipsis: str = ELLIPSI
     return f"{candidate}{ellipsis}" if candidate else ellipsis
 
 
+def truncate_complete_text(value: object, max_chars: int) -> str:
+    """Shorten full-report text at a readable boundary without adding ellipsis."""
+    normalized = normalize_visible_text(value)
+    if max_chars <= 0 or len(normalized) <= max_chars:
+        return strip_terminal_ellipsis(normalized)
+
+    candidate = normalized[:max_chars].rstrip()
+    sentence_cut = _last_sentence_boundary(candidate)
+    if sentence_cut >= max(max_chars // 2, 60):
+        candidate = candidate[:sentence_cut]
+    else:
+        whitespace_cut = candidate.rfind(" ")
+        if whitespace_cut >= max(max_chars // 3, 20):
+            candidate = candidate[:whitespace_cut]
+        else:
+            candidate = _trim_partial_word(candidate)
+    return strip_terminal_ellipsis(candidate.rstrip(" \t\r\n,;:-.!?"))
+
+
+def strip_terminal_ellipsis(value: object) -> str:
+    normalized = normalize_visible_text(value)
+    return re.sub(r"(?:\s*(?:\.\.\.|…))+\s*$", "", normalized).rstrip(" ,;:-")
+
+
 def _last_sentence_boundary(text: str) -> int:
     best = -1
     for match in re.finditer(r"[.!?](?:[\"')\]]|[»”])?(?=\s|$)", text):

@@ -27,7 +27,7 @@ from app.rules.deadline_truth import (
     today_utc,
 )
 from app.storage import list_document_enrichments
-from app.text_utils import safe_truncate_text
+from app.text_utils import strip_terminal_ellipsis, truncate_complete_text
 from app.user_facing import (
     build_executive_action,
     build_executive_reason,
@@ -1132,7 +1132,7 @@ def _clean_iso_timestamps(text: str) -> str:
 
 
 def _word_boundary_clip(text: str, max_chars: int) -> str:
-    return safe_truncate_text(text, max_chars)
+    return truncate_complete_text(text, max_chars)
 
 
 def _shorten_summary(text: str | None) -> str:
@@ -1140,7 +1140,7 @@ def _shorten_summary(text: str | None) -> str:
         return "Краткое пояснение пока не добавлено."
     normalized = re.sub(r"\s+", " ", _clean_iso_timestamps(text)).strip()
     if len(normalized) <= SHORT_SUMMARY_MAX_CHARS:
-        return normalized
+        return strip_terminal_ellipsis(normalized)
     return _word_boundary_clip(normalized, SHORT_SUMMARY_MAX_CHARS)
 
 
@@ -1168,6 +1168,7 @@ def _sanitize_report_display_text(
     normalized = re.sub(r"\s+", " ", normalized).strip()
     if dedupe_sentences:
         normalized = _dedupe_report_sentences(normalized)
+    normalized = strip_terminal_ellipsis(normalized)
     if max_chars is not None and len(normalized) > max_chars:
         return _word_boundary_clip(normalized, max_chars)
     return normalized

@@ -6,6 +6,7 @@ from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
+from app import config
 from app.config import DB_PATH, load_keyword_groups, load_keywords
 from app.llm.enrichment import (
     DOCUMENT_CARD_PROMPT_VERSION,
@@ -123,6 +124,11 @@ def _build_client() -> MockLLMClient:
 
 def _analyze_documents(documents: Iterable, *, client: MockLLMClient, db_path) -> int:
     analyzed_count = 0
+    enrichment_calls = 0
+    max_enrichment_calls = max(
+        1,
+        int(getattr(config, "LLM_MAX_DOCS_PER_BATCH", 20)),
+    )
     enricher = get_document_enricher()
     deadline_telemetry = _DeadlineExtractionTelemetry()
     for document in documents:
@@ -140,12 +146,24 @@ def _analyze_documents(documents: Iterable, *, client: MockLLMClient, db_path) -
             update_analysis(document.id, analysis, db_path=db_path)
             analyzed_count += 1
             deadline_telemetry.record(document=document, analysis=analysis)
-            _run_optional_enrichment(
+            if (
+                enricher.enabled
+                and is_enrichment_eligible(analysis.action_level)
+                and enrichment_calls >= max_enrichment_calls
+            ):
+                logger.info(
+                    "LLM enrichment batch limit reached (%s documents); skipping enrichment for document id=%s url=%s",
+                    max_enrichment_calls,
+                    document.id,
+                    document.url,
+                )
+            elif _run_optional_enrichment(
                 document=document,
                 analysis=analysis,
                 enricher=enricher,
                 db_path=db_path,
-            )
+            ):
+                enrichment_calls += 1
         except Exception as exc:
             logger.exception(
                 "Analysis failed for document id=%s url=%s: %s",
@@ -164,9 +182,9 @@ def _run_optional_enrichment(
     analysis,
     enricher: DocumentEnricher,
     db_path,
-) -> None:
+) -> bool:
     if not enricher.enabled or not is_enrichment_eligible(analysis.action_level):
-        return
+        return False
     prepared = build_document_card_input(
         title=document.title,
         raw_text=document.raw_text,
@@ -188,7 +206,7 @@ def _run_optional_enrichment(
         db_path=db_path,
     )
     if cached is not None:
-        return
+        return False
     enrichment = enricher.maybe_enrich_document(
         title=document.title,
         raw_text=document.raw_text,
@@ -201,7 +219,7 @@ def _run_optional_enrichment(
         document_type=document.document_type,
     )
     if enrichment is None:
-        return
+        return False
     if not enrichment.source_hash:
         enrichment.source_hash = source_hash
     try:
@@ -229,6 +247,7 @@ def _run_optional_enrichment(
             document.url,
             enrichment.error,
         )
+    return True
 
 
 def reanalyze_documents_by_url(

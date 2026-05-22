@@ -226,9 +226,12 @@ class ConfigSmokeTest(unittest.TestCase):
                 "LLM_BASE_URL": "",
                 "LLM_API_KEY": "",
                 "LLM_MODEL": "",
+                "LLM_MODEL_FALLBACKS": "",
                 "LLM_TIMEOUT_SECONDS": "",
                 "LLM_PROXY_URL": "",
                 "LLM_RESPONSE_FORMAT": "",
+                "LLM_MAX_DOCS_PER_BATCH": "",
+                "LLM_REQUEST_DELAY_SECONDS": "",
                 "LLM_MAX_RETRIES": "",
                 "LLM_RETRY_BACKOFF_SECONDS": "",
                 "LLM_RETRY_MAX_BACKOFF_SECONDS": "",
@@ -242,9 +245,12 @@ class ConfigSmokeTest(unittest.TestCase):
             self.assertFalse(reloaded.LLM_ENRICHMENT_ENABLED)
             self.assertEqual(reloaded.LLM_PROVIDER, "mock")
             self.assertEqual(reloaded.LLM_API_KEY, "")
+            self.assertEqual(reloaded.LLM_MODEL_FALLBACKS, ())
             self.assertEqual(reloaded.LLM_TIMEOUT_SECONDS, 60)
             self.assertEqual(reloaded.LLM_PROXY_URL, "")
             self.assertEqual(reloaded.LLM_RESPONSE_FORMAT, "auto")
+            self.assertEqual(reloaded.LLM_MAX_DOCS_PER_BATCH, 20)
+            self.assertEqual(reloaded.LLM_REQUEST_DELAY_SECONDS, 0.0)
             self.assertEqual(reloaded.LLM_MAX_RETRIES, 2)
             self.assertEqual(reloaded.LLM_RETRY_BACKOFF_SECONDS, 2)
             self.assertEqual(reloaded.LLM_RETRY_MAX_BACKOFF_SECONDS, 10)
@@ -268,6 +274,27 @@ class ConfigSmokeTest(unittest.TestCase):
             self.assertEqual(reloaded.LLM_MAX_RETRIES, 3)
             self.assertEqual(reloaded.LLM_RETRY_BACKOFF_SECONDS, 1)
             self.assertEqual(reloaded.LLM_RETRY_MAX_BACKOFF_SECONDS, 8)
+        importlib.reload(config_module)
+
+    def test_reads_llm_fallback_and_batch_settings_from_env(self) -> None:
+        import app.config as config_module
+
+        with patch.dict(
+            os.environ,
+            {
+                "LLM_MODEL_FALLBACKS": "google/gemma-4-26b-it, gemini-2.5-flash, google/gemma-4-26b-it",
+                "LLM_MAX_DOCS_PER_BATCH": "5",
+                "LLM_REQUEST_DELAY_SECONDS": "3.5",
+            },
+            clear=False,
+        ):
+            reloaded = importlib.reload(config_module)
+            self.assertEqual(
+                reloaded.LLM_MODEL_FALLBACKS,
+                ("google/gemma-4-26b-it", "gemini-2.5-flash"),
+            )
+            self.assertEqual(reloaded.LLM_MAX_DOCS_PER_BATCH, 5)
+            self.assertEqual(reloaded.LLM_REQUEST_DELAY_SECONDS, 3.5)
         importlib.reload(config_module)
 
     def test_reads_llm_proxy_url_from_env(self) -> None:

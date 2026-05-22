@@ -41,7 +41,8 @@ def run_enrich_docs(
         return EnrichDocsResult()
 
     selected_action_levels = action_levels or ["requires_attention", "watchlist"]
-    safe_limit = max(1, int(limit or config.LLM_ENRICHMENT_LIMIT))
+    batch_limit = max(1, int(getattr(config, "LLM_MAX_DOCS_PER_BATCH", 20)))
+    safe_limit = min(max(1, int(limit or config.LLM_ENRICHMENT_LIMIT)), batch_limit)
     recent_documents = list_recent_documents(
         db_path=db_path,
         days=max(1, int(days)),

@@ -189,6 +189,9 @@ python -m unittest -v
   - `LLM_PROVIDER=mock` для безопасного локального тестирования
   - `LLM_TIMEOUT_SECONDS=60`, `LLM_MAX_DOCUMENT_CHARS=12000`,
     `LLM_ENRICHMENT_LIMIT=20`
+  - для rate-limit safe запусков: `LLM_MAX_DOCS_PER_BATCH`,
+    `LLM_REQUEST_DELAY_SECONDS`, `LLM_MAX_RETRIES`,
+    `LLM_RETRY_BACKOFF_SECONDS`, `LLM_MODEL_FALLBACKS`
   - OpenAI-совместимый пример: `LLM_BASE_URL=http://127.0.0.1:1234/v1` для LM
     Studio или `http://127.0.0.1:11434/v1` для Ollama
 

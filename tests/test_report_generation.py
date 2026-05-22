@@ -17,6 +17,8 @@ from app.reports.docx_report import create_docx_from_markdown
 from docx import Document as DocxDocument
 from app.storage import init_db, save_document_enrichment
 from app.llm.enrichment import DocumentCardFacts, EnrichmentResult
+from app.text_utils import safe_truncate_text
+from app.visibility import effective_user_action_level, should_show_document
 
 
 class ReportGenerationSmokeTest(unittest.TestCase):
@@ -889,7 +891,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             db_path=db_path,
         )
 
-        self.assertIn("...", markdown)
+        self.assertNotIn("...", markdown)
         self.assertNotIn(long_text.strip(), markdown)
 
     def test_generic_mock_enrichment_does_not_override_specific_reason_and_action(
@@ -2788,9 +2790,11 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             action_levels=["requires_attention", "watchlist"],
         )
 
+        title_line = next(line for line in markdown.splitlines() if line.startswith("### "))
+        self.assertFalse(title_line.endswith("..."))
         self.assertNotIn("бир...", markdown)
         self.assertNotIn("экспортн...", markdown)
-        self.assertIn("стимулирования...", markdown)
+        self.assertIn("инструмент стимулирования", markdown)
 
     def test_report_summary_truncation_does_not_cut_mid_word(self) -> None:
         text = (
@@ -2801,7 +2805,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
 
         self.assertNotIn("бир...", clipped)
         self.assertNotIn("экспортн...", clipped)
-        self.assertTrue(clipped.endswith("..."))
+        self.assertFalse(clipped.endswith("..."))
 
     def test_docx_export_does_not_contain_mid_word_report_ellipsis(self) -> None:
         output_path = self._db_path("report_no_midword_ellipsis.docx")
@@ -2831,6 +2835,159 @@ class ReportGenerationSmokeTest(unittest.TestCase):
 
         self.assertNotIn("бир...", text)
         self.assertNotIn("экспортн...", text)
+        self.assertNotIn("...", text)
+
+    def test_report_strips_terminal_ellipsis_from_stale_enrichment(self) -> None:
+        db_path = self._db_path("report_terminal_ellipsis.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=1303,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Сигнал по экспортной пошлине на зерно",
+            url="https://www.zol.ru/n/stale-ellipsis",
+            action_level="requires_attention",
+            page_type="news_background",
+            summary="Базовая summary.",
+        )
+        save_document_enrichment(
+            document_id=document.id,
+            document_url=document.url,
+            provider="mock",
+            model="mock-enrichment",
+            enrichment=EnrichmentResult(
+                executive_summary="Минсельхоз рассматривает скидку для стимулирования биржевой торговли зерном...",
+                business_impact="Мера может повлиять на экономику экспорта зерна...",
+                recommended_action="Отследить публикацию официального НПА...",
+                confidence=0.8,
+            ),
+            db_path=db_path,
+        )
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-22",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+            db_path=db_path,
+        )
+
+        self.assertNotIn("...", markdown)
+        self.assertIn("биржевой торговли зерном", markdown)
+
+    def test_preview_truncation_keeps_word_boundary_with_ellipsis(self) -> None:
+        clipped = safe_truncate_text(
+            "Минсельхоз рассматривает скидку на экспортную пошлину как инструмент стимулирования биржевой торговли",
+            84,
+        )
+
+        self.assertTrue(clipped.endswith("..."))
+        self.assertNotIn("бир...", clipped)
+        self.assertNotIn("экспортн...", clipped)
+
+    def test_rosstat_old_census_repeal_is_not_visible_digest_item(self) -> None:
+        document = self._doc(
+            doc_id=1304,
+            source_name="Regulation.gov.ru",
+            region="federal",
+            title="О признании утратившими силу приказов Росстата по вопросам подготовки, проведения и подведения итогов Всероссийской сельскохозяйственной переписи 2016 года",
+            url="https://regulation.gov.ru/projects/old-census",
+            action_level="watchlist",
+            page_type="new_rule",
+            summary="Проект НПА об отмене устаревших приказов Росстата по сельскохозяйственной переписи 2016 года.",
+        )
+        document.raw_text = (
+            "Проект приказа о признании утратившими силу актов по вопросам подготовки, "
+            "проведения и подведения итогов Всероссийской сельскохозяйственной переписи 2016 года."
+        )
+
+        self.assertEqual(effective_user_action_level(document), "background")
+        self.assertFalse(
+            should_show_document(
+                document,
+                surface="report",
+                relevant_only=False,
+                action_levels=["requires_attention", "watchlist"],
+            )
+        )
+
+    def test_real_stats_reporting_change_remains_visible(self) -> None:
+        document = self._doc(
+            doc_id=1305,
+            source_name="Regulation.gov.ru",
+            region="federal",
+            title="Росстат утвердил новые формы отчетности для сельхозтоваропроизводителей",
+            url="https://regulation.gov.ru/projects/stats-reporting",
+            action_level="watchlist",
+            page_type="new_rule",
+            summary="Проект меняет формы отчетности и сроки представления сведений для сельхозтоваропроизводителей.",
+        )
+        document.raw_text = (
+            "Утверждаются новые формы отчетности, порядок представления сведений "
+            "и сроки подачи данных сельхозтоваропроизводителями."
+        )
+
+        self.assertEqual(effective_user_action_level(document), "watchlist")
+        self.assertTrue(
+            should_show_document(
+                document,
+                surface="report",
+                relevant_only=False,
+                action_levels=["requires_attention", "watchlist"],
+            )
+        )
+
+    def test_weak_bashgau_digital_selection_news_is_not_visible_digest_item(self) -> None:
+        document = self._doc(
+            doc_id=1306,
+            source_name="Минсельхоз России - новости",
+            region="federal",
+            title="В Минсельхозе обсудили проекты по развитию цифровой селекции на базе Башкирского ГАУ",
+            url="https://mcx.gov.ru/press-service/news/bashgau-digital-selection/",
+            action_level="watchlist",
+            page_type="news_background",
+            summary="Минсельхоз поддерживает разработку цифровых инструментов селекции на базе БашГАУ.",
+        )
+        document.raw_text = (
+            "В Минсельхозе обсудили проекты Башкирского государственного аграрного университета "
+            "по цифровизации селекции в свиноводстве и растениеводстве."
+        )
+
+        self.assertEqual(effective_user_action_level(document), "background")
+        self.assertFalse(
+            should_show_document(
+                document,
+                surface="report",
+                relevant_only=False,
+                action_levels=["requires_attention", "watchlist"],
+            )
+        )
+
+    def test_federal_export_grain_signal_still_visible_after_technical_cleanup(self) -> None:
+        document = self._doc(
+            doc_id=1307,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Минсельхоз рассматривает скидку на экспортную пошлину для зерна",
+            url="https://www.zol.ru/n/export-duty-visible",
+            action_level="requires_attention",
+            page_type="news_background",
+            summary="Минсельхоз рассматривает скидку на экспортную пошлину для участников биржевых торгов зерном.",
+        )
+        document.raw_text = (
+            "Минсельхоз России прорабатывает скидки на экспортную пошлину для зерна "
+            "и стимулирование биржевых торгов."
+        )
+
+        self.assertEqual(effective_user_action_level(document), "requires_attention")
+        self.assertTrue(
+            should_show_document(
+                document,
+                surface="report",
+                relevant_only=False,
+                action_levels=["requires_attention", "watchlist"],
+            )
+        )
 
     def test_report_compression_does_not_mutate_original_title(self) -> None:
         original_title = "О внесении изменений в порядок предоставления субсидий сельхозтоваропроизводителям"

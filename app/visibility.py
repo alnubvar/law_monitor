@@ -86,6 +86,28 @@ MACRO_STRATEGY_TITLE_NOISE_RE = re.compile(
     r"|финансирован\w*|бюджетн\w*\s+кредит|реконструкц|пассажирск\w*\s+железнодорож",
     re.IGNORECASE,
 )
+TECHNICAL_STATS_REPEAL_RE = re.compile(
+    r"признани\w*\s+утративш\w*\s+сил\w*.*"
+    r"(?:сельскохозяйственн\w*\s+перепис|микроперепис|росстат)",
+    re.IGNORECASE,
+)
+REAL_STATS_OBLIGATION_RE = re.compile(
+    r"(?:(?:нов\w*|измен\w*|утвержд\w*)\s+"
+    r"(?:форм\w*|отчет\w*|отчёт\w*|сведени\w*|поряд\w*\s+представлен\w*)"
+    r"|обязан\w*|представля\w*\s+сведени\w*|срок\w*\s+представлен\w*"
+    r"|провер\w*|инспекц\w*)",
+    re.IGNORECASE,
+)
+WEAK_DIGITAL_SELECTION_RE = re.compile(
+    r"(?:цифров\w*\s+селекц|сви\s?ген|свиген|башкирск\w*\s+гау|башгау)",
+    re.IGNORECASE,
+)
+PRACTICAL_NEWS_SIGNAL_RE = re.compile(
+    r"нпа|субсид|господдерж|пошлин|квот|льготн\w*\s+кредит|"
+    r"финансирован|\bотбор\b|при[её]м\s+заяв|срок\s+подач|обязан|"
+    r"требован|порядок\s+предоставлен|компенсац|возмещен",
+    re.IGNORECASE,
+)
 
 VisibilitySurface = Literal["report", "telegram_digest", "telegram_list"]
 
@@ -103,6 +125,11 @@ def effective_user_action_level(document: RawDocument) -> str | None:
         page_type=document.page_type,
     )
     if _is_ahstep_domain_excluded(document, action_level=guarded_action_level):
+        return "background"
+    if guarded_action_level in {"requires_attention", "watchlist"} and (
+        _is_low_value_statistical_repeal(document)
+        or _is_weak_digital_selection_news(document)
+    ):
         return "background"
     applicability = _support_measure_applicability(document)
     if (
@@ -258,6 +285,57 @@ def _is_executive_strategy_relevant(document: RawDocument) -> bool:
     ) and not has_ahstep_domain_relevance(title_summary_text):
         return False
     return True
+
+
+def _is_low_value_statistical_repeal(document: RawDocument) -> bool:
+    text = _source_visibility_text(document)
+    if not TECHNICAL_STATS_REPEAL_RE.search(text):
+        return False
+    return not REAL_STATS_OBLIGATION_RE.search(text)
+
+
+def _is_weak_digital_selection_news(document: RawDocument) -> bool:
+    if get_source_role(document.source_name) != "news_signals":
+        return False
+    text = " ".join(
+        part.lower()
+        for part in (
+            document.title,
+            document.summary,
+            (document.raw_text or "")[:3000],
+        )
+        if part
+    )
+    if not WEAK_DIGITAL_SELECTION_RE.search(text):
+        return False
+    return not PRACTICAL_NEWS_SIGNAL_RE.search(text)
+
+
+def _visibility_text(document: RawDocument) -> str:
+    return " ".join(
+        part.lower()
+        for part in (
+            document.title,
+            document.summary,
+            document.relevance_reason,
+            document.business_signal,
+            document.impact,
+            (document.raw_text or "")[:3000],
+        )
+        if part
+    )
+
+
+def _source_visibility_text(document: RawDocument) -> str:
+    return " ".join(
+        part.lower()
+        for part in (
+            document.title,
+            document.summary,
+            (document.raw_text or "")[:3000],
+        )
+        if part
+    )
 
 
 def _is_ahstep_domain_excluded(
