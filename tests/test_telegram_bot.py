@@ -10,17 +10,19 @@ import requests
 from app.models import RawDocument
 from app.notify import telegram_bot
 from app.run_lock import WriterLockHeldError
-from app.storage import init_db, save_document
+from app.storage import init_db, is_telegram_user_allowed, save_document, upsert_telegram_allowed_user
 
 
 class TelegramBotTest(unittest.TestCase):
     def setUp(self) -> None:
         telegram_bot._pending_search_chats.clear()
         telegram_bot._pending_report_period_chats.clear()
+        telegram_bot._synced_allowed_user_db_paths.clear()
 
     def tearDown(self) -> None:
         telegram_bot._pending_search_chats.clear()
         telegram_bot._pending_report_period_chats.clear()
+        telegram_bot._synced_allowed_user_db_paths.clear()
 
     def _offset_path(self, name: str) -> Path:
         path = Path("data/test_artifacts") / name
@@ -110,6 +112,7 @@ class TelegramBotTest(unittest.TestCase):
             {
                 "commands": [
                     {"command": "start", "description": "открыть меню"},
+                    {"command": "myid", "description": "мой Telegram ID"},
                     {"command": "help", "description": "помощь"},
                     {"command": "urgent", "description": "требует внимания"},
                     {"command": "report", "description": "последний отчет"},
@@ -214,6 +217,208 @@ class TelegramBotTest(unittest.TestCase):
                 telegram_bot._process_update(update, db_path=None, proxies=None)
 
         send_response.assert_not_called()
+
+    def test_unknown_private_user_receives_access_denied_with_user_id(self) -> None:
+        update = {
+            "update_id": 1,
+            "message": {
+                "from": {"id": 2001, "username": "unknown"},
+                "chat": {"id": 2001, "type": "private"},
+                "text": "/urgent",
+            },
+        }
+        db_path = self._offset_path("telegram_access_unknown.db")
+        with patch.multiple(
+            telegram_bot.config,
+            TELEGRAM_CHAT_ID="-100",
+            TELEGRAM_ADMIN_USER_IDS=frozenset(),
+            TELEGRAM_ALLOWED_USER_IDS=frozenset(),
+        ):
+            with patch("app.notify.telegram_bot.build_command_response") as build:
+                with patch("app.notify.telegram_bot._send_response", return_value=True) as send_response:
+                    telegram_bot._process_update(update, db_path=str(db_path), proxies=None)
+
+        build.assert_not_called()
+        self.assertIn("Доступ к AHSTEP GR Monitor пока не выдан", send_response.call_args.kwargs["text"])
+        self.assertIn("Ваш Telegram ID: 2001", send_response.call_args.kwargs["text"])
+        self.assertFalse(send_response.call_args.kwargs["include_default_keyboard"])
+
+    def test_unknown_user_in_legacy_chat_receives_access_denied_not_report(self) -> None:
+        update = {
+            "update_id": 1,
+            "message": {
+                "from": {"id": 2001, "username": "unknown"},
+                "chat": {"id": -100, "type": "group"},
+                "text": "/report",
+            },
+        }
+        db_path = self._offset_path("telegram_access_unknown_legacy.db")
+        with patch.multiple(
+            telegram_bot.config,
+            TELEGRAM_CHAT_ID="-100",
+            TELEGRAM_ADMIN_USER_IDS=frozenset(),
+            TELEGRAM_ALLOWED_USER_IDS=frozenset(),
+        ):
+            with patch("app.notify.telegram_bot.build_command_response") as build:
+                with patch("app.notify.telegram_bot._send_response", return_value=True) as send_response:
+                    telegram_bot._process_update(update, db_path=str(db_path), proxies=None)
+
+        build.assert_not_called()
+        self.assertIn("Доступ к AHSTEP GR Monitor пока не выдан", send_response.call_args.kwargs["text"])
+        self.assertIn("Ваш Telegram ID: 2001", send_response.call_args.kwargs["text"])
+
+    def test_myid_works_for_unknown_private_user(self) -> None:
+        update = {
+            "update_id": 1,
+            "message": {
+                "from": {"id": 2001, "username": "petrov"},
+                "chat": {"id": 2001, "type": "private"},
+                "text": "/myid",
+            },
+        }
+        db_path = self._offset_path("telegram_myid_unknown.db")
+        with patch.multiple(
+            telegram_bot.config,
+            TELEGRAM_CHAT_ID="-100",
+            TELEGRAM_ADMIN_USER_IDS=frozenset(),
+            TELEGRAM_ALLOWED_USER_IDS=frozenset(),
+        ):
+            with patch("app.notify.telegram_bot._send_response", return_value=True) as send_response:
+                telegram_bot._process_update(update, db_path=str(db_path), proxies=None)
+
+        text = send_response.call_args.kwargs["text"]
+        self.assertIn("User ID: 2001", text)
+        self.assertIn("Chat ID: 2001", text)
+        self.assertIn("Username: @petrov", text)
+        self.assertIn("доступ пока не выдан", text)
+
+    def test_allowed_private_user_can_access_normal_command(self) -> None:
+        db_path = self._offset_path("telegram_access_allowed.db")
+        init_db(db_path)
+        upsert_telegram_allowed_user(2001, db_path=db_path)
+        update = {
+            "update_id": 1,
+            "message": {
+                "from": {"id": 2001, "username": "allowed"},
+                "chat": {"id": 2001, "type": "private"},
+                "text": "/urgent",
+            },
+        }
+        with patch.multiple(
+            telegram_bot.config,
+            TELEGRAM_CHAT_ID="-100",
+            TELEGRAM_ADMIN_USER_IDS=frozenset(),
+            TELEGRAM_ALLOWED_USER_IDS=frozenset(),
+        ):
+            with patch("app.notify.telegram_bot.build_command_response", return_value="urgent ok") as build:
+                with patch("app.notify.telegram_bot._send_response", return_value=True) as send_response:
+                    telegram_bot._process_update(update, db_path=str(db_path), proxies=None)
+
+        build.assert_called_once()
+        self.assertEqual(build.call_args.args[0], "/urgent 7")
+        self.assertEqual(send_response.call_args.kwargs["text"], "urgent ok")
+
+    def test_admin_can_add_user(self) -> None:
+        db_path = self._offset_path("telegram_admin_add.db")
+        update = {
+            "update_id": 1,
+            "message": {
+                "from": {"id": 1001, "username": "admin"},
+                "chat": {"id": 1001, "type": "private"},
+                "text": "/admin_add_user 2002",
+            },
+        }
+        with patch.multiple(
+            telegram_bot.config,
+            TELEGRAM_CHAT_ID="-100",
+            TELEGRAM_ADMIN_USER_IDS=frozenset({1001}),
+            TELEGRAM_ALLOWED_USER_IDS=frozenset(),
+        ):
+            with patch("app.notify.telegram_bot._send_response", return_value=True) as send_response:
+                telegram_bot._process_update(update, db_path=str(db_path), proxies=None)
+
+        self.assertTrue(is_telegram_user_allowed(2002, db_path=db_path))
+        self.assertIn("2002", send_response.call_args.kwargs["text"])
+
+    def test_admin_can_remove_user_and_removed_user_loses_access(self) -> None:
+        db_path = self._offset_path("telegram_admin_remove.db")
+        init_db(db_path)
+        upsert_telegram_allowed_user(2002, db_path=db_path)
+        admin_update = {
+            "update_id": 1,
+            "message": {
+                "from": {"id": 1001, "username": "admin"},
+                "chat": {"id": 1001, "type": "private"},
+                "text": "/admin_remove_user 2002",
+            },
+        }
+        removed_user_update = {
+            "update_id": 2,
+            "message": {
+                "from": {"id": 2002, "username": "removed"},
+                "chat": {"id": 2002, "type": "private"},
+                "text": "/help",
+            },
+        }
+        with patch.multiple(
+            telegram_bot.config,
+            TELEGRAM_CHAT_ID="-100",
+            TELEGRAM_ADMIN_USER_IDS=frozenset({1001}),
+            TELEGRAM_ALLOWED_USER_IDS=frozenset(),
+        ):
+            with patch("app.notify.telegram_bot._send_response", return_value=True) as send_response:
+                telegram_bot._process_update(admin_update, db_path=str(db_path), proxies=None)
+                telegram_bot._process_update(removed_user_update, db_path=str(db_path), proxies=None)
+
+        self.assertFalse(is_telegram_user_allowed(2002, db_path=db_path))
+        self.assertIn("Доступ к AHSTEP GR Monitor пока не выдан", send_response.call_args.kwargs["text"])
+
+    def test_non_admin_cannot_add_or_remove_users(self) -> None:
+        db_path = self._offset_path("telegram_admin_non_admin.db")
+        init_db(db_path)
+        upsert_telegram_allowed_user(2001, db_path=db_path)
+        update = {
+            "update_id": 1,
+            "message": {
+                "from": {"id": 2001, "username": "allowed"},
+                "chat": {"id": 2001, "type": "private"},
+                "text": "/admin_add_user 2002",
+            },
+        }
+        with patch.multiple(
+            telegram_bot.config,
+            TELEGRAM_CHAT_ID="-100",
+            TELEGRAM_ADMIN_USER_IDS=frozenset({1001}),
+            TELEGRAM_ALLOWED_USER_IDS=frozenset(),
+        ):
+            with patch("app.notify.telegram_bot._send_response", return_value=True) as send_response:
+                telegram_bot._process_update(update, db_path=str(db_path), proxies=None)
+
+        self.assertFalse(is_telegram_user_allowed(2002, db_path=db_path))
+        self.assertEqual(send_response.call_args.kwargs["text"], telegram_bot.ADMIN_DENIED_MESSAGE)
+
+    def test_env_admin_always_has_private_access(self) -> None:
+        db_path = self._offset_path("telegram_env_admin_access.db")
+        update = {
+            "update_id": 1,
+            "message": {
+                "from": {"id": 1001, "username": "admin"},
+                "chat": {"id": 1001, "type": "private"},
+                "text": "/help",
+            },
+        }
+        with patch.multiple(
+            telegram_bot.config,
+            TELEGRAM_CHAT_ID="-100",
+            TELEGRAM_ADMIN_USER_IDS=frozenset({1001}),
+            TELEGRAM_ALLOWED_USER_IDS=frozenset(),
+        ):
+            with patch("app.notify.telegram_bot.build_command_response", return_value="help ok") as build:
+                with patch("app.notify.telegram_bot._send_response", return_value=True) as send_response:
+                    telegram_bot._process_update(update, db_path=str(db_path), proxies=None)
+
+        build.assert_called_once()
+        self.assertEqual(send_response.call_args.kwargs["text"], "help ok")
 
     def test_polling_updates_offset_after_processed_update(self) -> None:
         offset_path = self._offset_path("telegram_bot_offset.txt")

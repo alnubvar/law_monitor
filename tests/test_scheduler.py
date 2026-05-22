@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 from contextlib import nullcontext
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -257,6 +257,125 @@ class SchedulerAutonomyTest(unittest.TestCase):
                                 scheduler.run_hourly_cycle()
 
         self.assertTrue(heartbeat.exists())
+
+    def test_collection_cycle_suppresses_urgent_alerts_when_disabled(self) -> None:
+        heartbeat = Path("data/test_artifacts/last_success.cycle.quiet.test")
+        if heartbeat.exists():
+            heartbeat.unlink()
+        heartbeat.parent.mkdir(parents=True, exist_ok=True)
+
+        with patch.object(scheduler, "TELEGRAM_URGENT_ALERTS_ENABLED", False):
+            with patch.object(scheduler, "HEARTBEAT_HOURLY_PATH", heartbeat):
+                with patch.object(scheduler, "writer_lock", return_value=nullcontext()):
+                    with patch.object(scheduler, "run_collect", return_value=3) as collect:
+                        with patch.object(scheduler, "run_analyze", return_value=2) as analyze:
+                            with patch.object(scheduler, "notify_new_requires_attention") as notify:
+                                with patch.object(scheduler, "count_documents_by_action_level", return_value=1):
+                                    result = scheduler.run_hourly_cycle()
+
+        self.assertEqual(result, (3, 2, 0))
+        collect.assert_called_once()
+        analyze.assert_called_once()
+        notify.assert_not_called()
+        self.assertTrue(heartbeat.exists())
+
+    def test_scheduled_collection_due_supports_configured_times(self) -> None:
+        scheduler._completed_collection_slots.clear()
+        try:
+            with patch.object(
+                scheduler,
+                "SCHEDULER_COLLECTION_TIMES",
+                (time(8, 30), time(12, 0), time(18, 0)),
+            ):
+                self.assertTrue(
+                    scheduler._scheduled_collection_due(
+                        datetime(2026, 5, 18, 8, 30, tzinfo=scheduler.SCHEDULER_TIMEZONE)
+                    )
+                )
+                self.assertFalse(
+                    scheduler._scheduled_collection_due(
+                        datetime(2026, 5, 18, 8, 30, tzinfo=scheduler.SCHEDULER_TIMEZONE)
+                    )
+                )
+                self.assertFalse(
+                    scheduler._scheduled_collection_due(
+                        datetime(2026, 5, 18, 9, 0, tzinfo=scheduler.SCHEDULER_TIMEZONE)
+                    )
+                )
+                self.assertTrue(
+                    scheduler._scheduled_collection_due(
+                        datetime(2026, 5, 18, 12, 0, tzinfo=scheduler.SCHEDULER_TIMEZONE)
+                    )
+                )
+        finally:
+            scheduler._completed_collection_slots.clear()
+
+    def test_run_scheduler_uses_interval_when_collection_times_are_empty(self) -> None:
+        class FakeBlockingScheduler:
+            instances: list["FakeBlockingScheduler"] = []
+
+            def __init__(self, *, timezone):
+                self.timezone = timezone
+                self.jobs: list[dict[str, object]] = []
+                FakeBlockingScheduler.instances.append(self)
+
+            def add_job(self, func, trigger, **kwargs):
+                self.jobs.append({"func": func, "trigger": trigger, **kwargs})
+
+            def start(self):
+                raise RuntimeError("stop")
+
+            def shutdown(self, wait=False):
+                return None
+
+        with patch.object(scheduler, "BlockingScheduler", FakeBlockingScheduler):
+            with patch.object(scheduler, "SCHEDULER_COLLECTION_TIMES", ()):
+                with patch.object(scheduler, "init_db"):
+                    with self.assertRaises(RuntimeError):
+                        scheduler.run_scheduler()
+
+        jobs = FakeBlockingScheduler.instances[0].jobs
+        collection_jobs = [job for job in jobs if job["id"] == "hourly_collect_analyze"]
+        self.assertEqual(len(collection_jobs), 1)
+        self.assertEqual(collection_jobs[0]["trigger"], "interval")
+        self.assertEqual(collection_jobs[0]["minutes"], scheduler.SCHEDULER_HOURLY_INTERVAL_MINUTES)
+
+    def test_run_scheduler_uses_configured_collection_times(self) -> None:
+        class FakeBlockingScheduler:
+            instances: list["FakeBlockingScheduler"] = []
+
+            def __init__(self, *, timezone):
+                self.timezone = timezone
+                self.jobs: list[dict[str, object]] = []
+                FakeBlockingScheduler.instances.append(self)
+
+            def add_job(self, func, trigger, **kwargs):
+                self.jobs.append({"func": func, "trigger": trigger, **kwargs})
+
+            def start(self):
+                raise RuntimeError("stop")
+
+            def shutdown(self, wait=False):
+                return None
+
+        with patch.object(scheduler, "BlockingScheduler", FakeBlockingScheduler):
+            with patch.object(
+                scheduler,
+                "SCHEDULER_COLLECTION_TIMES",
+                (time(8, 30), time(12, 0), time(18, 0)),
+            ):
+                with patch.object(scheduler, "init_db"):
+                    with self.assertRaises(RuntimeError):
+                        scheduler.run_scheduler()
+
+        jobs = FakeBlockingScheduler.instances[0].jobs
+        collection_jobs = [
+            job for job in jobs if str(job["id"]).startswith("collect_analyze_")
+        ]
+        self.assertEqual(
+            [(job["trigger"], job["hour"], job["minute"]) for job in collection_jobs],
+            [("cron", 8, 30), ("cron", 12, 0), ("cron", 18, 0)],
+        )
 
     def test_hourly_cycle_does_not_touch_heartbeat_when_lock_held(self) -> None:
         from app.run_lock import WriterLockHeldError

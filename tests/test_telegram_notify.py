@@ -10,9 +10,11 @@ import requests
 from app.models import RawDocument
 from app.notify import telegram
 from app.storage import (
+    deactivate_telegram_allowed_user,
     init_db,
     list_active_tracking_items,
     save_document,
+    upsert_telegram_allowed_user,
     upsert_ocr_queue_item,
 )
 
@@ -134,17 +136,18 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         txt_path.unlink(missing_ok=True)
 
         with patch("app.notify.telegram.collect_operational_notices", return_value=[]):
-            with patch("app.notify.telegram.send_message", return_value=True) as send_message:
-                with patch("app.notify.telegram.send_document", return_value=True) as send_document:
-                    sent = telegram.send_daily_report_digest([], report_path=report_path)
+            with patch("app.notify.telegram.get_daily_digest_recipients", return_value=["chat-id"]):
+                with patch("app.notify.telegram.send_message_to_chat", return_value=True) as send_message:
+                    with patch("app.notify.telegram.send_document_to_chat", return_value=True) as send_document:
+                        sent = telegram.send_daily_report_digest([], report_path=report_path)
 
         self.assertTrue(sent)
-        message_text = send_message.call_args.args[0]
+        message_text = send_message.call_args.kwargs["text"]
         self.assertIn("Срочных изменений не найдено, источники проверены.", message_text)
         self.assertIn("Полная версия отчета — во вложении.", message_text)
         self.assertNotIn("сервер", message_text.lower())
         self.assertNotIn("data/test_artifacts", message_text)
-        send_document.assert_called_once_with(txt_path)
+        send_document.assert_called_once_with(chat_id="chat-id", path=txt_path)
         self.assertTrue(report_path.exists())
         self.assertTrue(txt_path.exists())
         self.assertTrue(txt_path.read_bytes().startswith(b"\xef\xbb\xbf"))
@@ -152,6 +155,112 @@ class TelegramNotifySmokeTest(unittest.TestCase):
             txt_path.read_text(encoding="utf-8-sig"),
             report_path.read_text(encoding="utf-8"),
         )
+        txt_path.unlink(missing_ok=True)
+
+    def test_daily_report_digest_recipients_include_admins_active_users_and_legacy_chat(self) -> None:
+        db_path = self._db_path("daily_digest_recipients.db")
+        init_db(db_path)
+        upsert_telegram_allowed_user(2001, db_path=db_path)
+        upsert_telegram_allowed_user(2002, db_path=db_path)
+        deactivate_telegram_allowed_user(2002, db_path=db_path)
+
+        with patch.multiple(
+            telegram.config,
+            TELEGRAM_ADMIN_USER_IDS=frozenset({1001}),
+            TELEGRAM_CHAT_ID="3001",
+        ):
+            recipients = telegram.get_daily_digest_recipients(db_path=db_path)
+
+        self.assertEqual(recipients, ["1001", "2001", "3001"])
+        self.assertNotIn("2002", recipients)
+        self.assertNotIn("9999", recipients)
+
+    def test_daily_report_digest_deduplicates_admin_and_legacy_chat_numerically(self) -> None:
+        with patch.multiple(
+            telegram.config,
+            TELEGRAM_ADMIN_USER_IDS=frozenset({123}),
+            TELEGRAM_CHAT_ID="00123",
+        ):
+            recipients = telegram.get_daily_digest_recipients(db_path=None)
+
+        self.assertEqual(recipients, ["123"])
+
+    def test_daily_report_digest_failure_for_one_recipient_does_not_stop_others(self) -> None:
+        with patch("app.notify.telegram.collect_operational_notices", return_value=[]):
+            with patch("app.notify.telegram.get_daily_digest_recipients", return_value=["1001", "2001"]):
+                with patch(
+                    "app.notify.telegram.send_message_to_chat",
+                    side_effect=[False, True],
+                ) as send_message:
+                    with patch("app.notify.telegram.send_document_to_chat") as send_document:
+                        sent = telegram.send_daily_report_digest([], report_path=None)
+
+        self.assertTrue(sent)
+        self.assertEqual(send_message.call_count, 2)
+        send_document.assert_not_called()
+
+    def test_daily_report_digest_backward_compatibility_with_only_telegram_chat_id(self) -> None:
+        with patch.multiple(
+            telegram.config,
+            TELEGRAM_ADMIN_USER_IDS=frozenset(),
+            TELEGRAM_CHAT_ID="legacy-chat",
+        ):
+            with patch("app.notify.telegram.collect_operational_notices", return_value=[]):
+                with patch("app.notify.telegram.send_message_to_chat", return_value=True) as send_message:
+                    with patch("app.notify.telegram.send_document_to_chat"):
+                        sent = telegram.send_daily_report_digest([], report_path=None)
+
+        self.assertTrue(sent)
+        send_message.assert_called_once()
+        self.assertEqual(send_message.call_args.kwargs["chat_id"], "legacy-chat")
+
+    def test_daily_report_digest_sends_to_env_admin_and_active_allowed_user(self) -> None:
+        db_path = self._db_path("daily_digest_private_delivery.db")
+        init_db(db_path)
+        upsert_telegram_allowed_user(2001, db_path=db_path)
+
+        with patch.multiple(
+            telegram.config,
+            TELEGRAM_ADMIN_USER_IDS=frozenset({1001}),
+            TELEGRAM_CHAT_ID="",
+        ):
+            with patch("app.notify.telegram.collect_operational_notices", return_value=[]):
+                with patch("app.notify.telegram.send_message_to_chat", return_value=True) as send_message:
+                    with patch("app.notify.telegram.send_document_to_chat"):
+                        sent = telegram.send_daily_report_digest([], report_path=None, db_path=db_path)
+
+        self.assertTrue(sent)
+        self.assertEqual(
+            [call.kwargs["chat_id"] for call in send_message.call_args_list],
+            ["1001", "2001"],
+        )
+
+    def test_daily_report_digest_uses_configured_chat_as_optional_recipient(self) -> None:
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"ok": True, "result": {"message_id": 1}}
+        report_path = Path("data/test_artifacts/gr_monitoring_digest_chat.md")
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text("# Отчет", encoding="utf-8")
+        txt_path = report_path.with_suffix(".txt")
+        txt_path.unlink(missing_ok=True)
+
+        with patch.multiple(
+            telegram.config,
+            TELEGRAM_BOT_TOKEN="token",
+            TELEGRAM_CHAT_ID="digest-chat",
+            TELEGRAM_ADMIN_USER_IDS=frozenset(),
+            TELEGRAM_PROXY_URL="",
+            TELEGRAM_API_TIMEOUT=10,
+        ):
+            with patch("app.notify.telegram.collect_operational_notices", return_value=[]):
+                with patch("app.notify.telegram.requests.post", return_value=response) as post:
+                    sent = telegram.send_daily_report_digest([], report_path=report_path)
+
+        self.assertTrue(sent)
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(post.call_args_list[0].kwargs["json"]["chat_id"], "digest-chat")
+        self.assertEqual(post.call_args_list[1].kwargs["data"]["chat_id"], "digest-chat")
         txt_path.unlink(missing_ok=True)
 
     def test_daily_report_digest_sends_visible_docs_as_daily_not_hourly(self) -> None:
@@ -166,12 +275,13 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         )
 
         with patch("app.notify.telegram.collect_operational_notices", return_value=[]):
-            with patch("app.notify.telegram.send_message", return_value=True) as send_message:
-                with patch("app.notify.telegram.send_document", return_value=True):
-                    sent = telegram.send_daily_report_digest([document], report_path=None)
+            with patch("app.notify.telegram.get_daily_digest_recipients", return_value=["chat-id"]):
+                with patch("app.notify.telegram.send_message_to_chat", return_value=True) as send_message:
+                    with patch("app.notify.telegram.send_document_to_chat", return_value=True):
+                        sent = telegram.send_daily_report_digest([document], report_path=None)
 
         self.assertTrue(sent)
-        message_text = send_message.call_args.args[0]
+        message_text = send_message.call_args.kwargs["text"]
         self.assertIn("Ежедневная GR-сводка", message_text)
         self.assertNotIn("Новые документы, требующие внимания", message_text)
 

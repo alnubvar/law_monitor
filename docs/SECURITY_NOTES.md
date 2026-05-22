@@ -41,7 +41,24 @@ Telegram bot token позволяет отправлять сообщения о
 секретом.
 
 - Rotate token при любом раскрытии.
-- Держите `TELEGRAM_CHAT_ID` ограниченным approved corporate destination.
+- `TELEGRAM_CHAT_ID` является optional legacy/fallback scheduled destination.
+  Общий групповой чат для нормальной корпоративной UX-модели не требуется.
+- Не используйте `TELEGRAM_CHAT_ID` как список личных пользователей: это
+  optional destination для scheduled daily digest.
+- Личный доступ к командам бота задавайте числовыми Telegram `user_id`.
+  `TELEGRAM_ADMIN_USER_IDS` хранится только в production env и служит
+  аварийным механизмом замены администратора. Обычные approved users хранятся
+  в SQLite allowlist и управляются admin-командами бота.
+- Daily digest отправляется privately env-администраторам и active allowlist
+  users; inactive/removed/unknown users не получают scheduled отчеты.
+- Unknown private users не получают отчеты, urgent/status/diagnostics или
+  кнопки. Бот показывает им только Telegram ID и просьбу передать его
+  администратору.
+- Не принимайте usernames как идентификаторы доступа: usernames могут меняться.
+- Для production используйте `TELEGRAM_URGENT_ALERTS_ENABLED=false`, чтобы
+  collect/analyze работал тихо, а urgent/requires_attention попадали в daily
+  digest и manual bot commands. Immediate alerts можно включить позднее по
+  решению business owner.
 - Используйте `TELEGRAM_PROXY_URL` только если это требуется corporate network policy.
 - Перезапускайте сервисы после изменения token, chat или proxy.
 

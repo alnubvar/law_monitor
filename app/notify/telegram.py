@@ -44,6 +44,7 @@ from app.storage import (
     create_tracking_item,
     deactivate_tracking_item,
     count_documents_by_action_level,
+    list_active_telegram_allowed_users,
     list_document_enrichments,
     get_active_tracking_item,
     get_document_by_url,
@@ -273,12 +274,84 @@ def send_daily_report_digest(
     if report_path is not None:
         text = f"{text}\n\nПолная версия отчета — во вложении."
 
-    if not send_message(text):
+    attachment_path = _prepare_daily_report_attachment(Path(report_path)) if report_path is not None else None
+    recipients = get_daily_digest_recipients(db_path=db_path)
+    if not recipients:
+        logger.info("No Telegram daily digest recipients configured. Skipping.")
         return False
 
-    if report_path is None:
+    success_count = 0
+    for recipient_index, recipient in enumerate(recipients, start=1):
+        if _send_daily_report_digest_to_recipient(
+            chat_id=recipient,
+            text=text,
+            attachment_path=attachment_path,
+        ):
+            success_count += 1
+        else:
+            logger.warning(
+                "Telegram daily digest delivery failed for recipient %s/%s.",
+                recipient_index,
+                len(recipients),
+            )
+
+    logger.info(
+        "Telegram daily digest delivery finished: recipients=%s succeeded=%s failed=%s.",
+        len(recipients),
+        success_count,
+        len(recipients) - success_count,
+    )
+    return success_count > 0
+
+
+def get_daily_digest_recipients(*, db_path: Path | str | None = None) -> list[str]:
+    recipients: list[str | int] = []
+    recipients.extend(sorted(config.TELEGRAM_ADMIN_USER_IDS))
+    if db_path is not None:
+        try:
+            init_db(db_path)
+            recipients.extend(
+                user["user_id"]
+                for user in list_active_telegram_allowed_users(db_path=db_path, limit=10000)
+                if user.get("user_id") is not None
+            )
+        except Exception:
+            logger.exception("Could not load Telegram allowed users for daily digest.")
+    if config.TELEGRAM_CHAT_ID:
+        recipients.append(config.TELEGRAM_CHAT_ID)
+    return _dedupe_telegram_recipients(recipients)
+
+
+def _dedupe_telegram_recipients(recipients: Sequence[str | int]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for recipient in recipients:
+        normalized = str(recipient).strip()
+        if not normalized:
+            continue
+        try:
+            dedupe_key = str(int(normalized))
+            normalized = dedupe_key
+        except ValueError:
+            dedupe_key = normalized
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        result.append(normalized)
+    return result
+
+
+def _send_daily_report_digest_to_recipient(
+    *,
+    chat_id: str,
+    text: str,
+    attachment_path: Path | None,
+) -> bool:
+    if not send_message_to_chat(chat_id=chat_id, text=text):
+        return False
+    if attachment_path is None:
         return True
-    return send_document(_prepare_daily_report_attachment(Path(report_path)))
+    return send_document_to_chat(chat_id=chat_id, path=attachment_path)
 
 
 def _prepare_daily_report_attachment(report_path: Path) -> Path:
@@ -291,8 +364,19 @@ def _prepare_daily_report_attachment(report_path: Path) -> Path:
 
 
 def send_document(path: Path | str) -> bool:
-    if not is_configured():
-        logger.info("Telegram is not configured. Skipping document send.")
+    if not config.TELEGRAM_CHAT_ID:
+        logger.info("Telegram chat is not configured. Skipping document send.")
+        return False
+    return send_document_to_chat(chat_id=config.TELEGRAM_CHAT_ID, path=path)
+
+
+def send_document_to_chat(*, chat_id: str | int, path: Path | str) -> bool:
+    if not config.TELEGRAM_BOT_TOKEN:
+        logger.info("Telegram token is not configured. Skipping document send.")
+        return False
+    normalized_chat_id = str(chat_id).strip()
+    if not normalized_chat_id:
+        logger.info("Telegram document recipient is not configured. Skipping document send.")
         return False
 
     document_path = Path(path)
@@ -308,7 +392,7 @@ def send_document(path: Path | str) -> bool:
             with document_path.open("rb") as document_file:
                 response = requests.post(
                     f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendDocument",
-                    data={"chat_id": config.TELEGRAM_CHAT_ID},
+                    data={"chat_id": normalized_chat_id},
                     files={"document": (document_path.name, document_file, mime_type)},
                     timeout=timeout,
                     proxies=proxies,

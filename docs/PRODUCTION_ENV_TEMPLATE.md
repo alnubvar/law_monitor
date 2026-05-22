@@ -31,11 +31,15 @@ LAW_MONITOR_LOG_FILE=/var/log/ahstep-law-monitor/app.log
 # Scheduler
 LAW_MONITOR_TIMEZONE=Europe/Moscow
 LAW_MONITOR_DAILY_REPORT_HOUR=9
+LAW_MONITOR_COLLECTION_TIMES=08:30,12:00,18:00
 LAW_MONITOR_HOURLY_INTERVAL_MINUTES=360
 
 # Telegram
 TELEGRAM_BOT_TOKEN=<set-by-IT>
-TELEGRAM_CHAT_ID=<set-by-IT>
+TELEGRAM_CHAT_ID=
+TELEGRAM_ADMIN_USER_IDS=<numeric-user-id>[,<numeric-user-id>]
+TELEGRAM_ALLOWED_USER_IDS=
+TELEGRAM_URGENT_ALERTS_ENABLED=false
 TELEGRAM_PROXY_URL=
 
 # LLM document enrichment
@@ -116,6 +120,41 @@ LLM_RETRY_MAX_BACKOFF_SECONDS=10
 рекомендуется выделить отдельный chat ID, чтобы оперативные алерты не смешивались
 с GR-сводками для пользователей.
 
+Рекомендуемый production schedule:
+
+```env
+LAW_MONITOR_COLLECTION_TIMES=08:30,12:00,18:00
+LAW_MONITOR_DAILY_REPORT_HOUR=9
+TELEGRAM_URGENT_ALERTS_ENABLED=false
+```
+
+При таком режиме scheduler выполняет тихий collect/analyze в 08:30, 12:00 и
+18:00, а основная ежедневная сводка уходит в 09:00. `LAW_MONITOR_HOURLY_INTERVAL_MINUTES`
+сохраняется как compatibility fallback, если `LAW_MONITOR_COLLECTION_TIMES`
+пустой. Срочные документы при этом не теряются: они классифицируются,
+сохраняются и попадают в ежедневный отчет и команды бота.
+
+`TELEGRAM_ADMIN_USER_IDS` — аварийный механизм замены администратора бота.
+Здесь задаются числовые Telegram user ID сотрудников, которые могут управлять
+allowlist личных пользователей. Если владелец проекта меняется, IT обновляет
+эту переменную в production env и перезапускает `ahstep-telegram-bot.service`.
+
+`TELEGRAM_ALLOWED_USER_IDS` — необязательный первичный seed allowlist для личных
+диалогов с ботом. После запуска активных пользователей следует добавлять и
+удалять командами администратора в Telegram, без изменения env и без рестарта.
+Нормальная корпоративная UX-модель — каждый approved user пишет боту в личном
+чате, пользуется `/report`, `/urgent`, кнопками и получает daily digest лично.
+Общий групповой чат не требуется.
+
+Daily digest отправляется всем env-администраторам из `TELEGRAM_ADMIN_USER_IDS`,
+всем активным пользователям из SQLite allowlist и, если задан, в legacy/fallback
+`TELEGRAM_CHAT_ID`. `TELEGRAM_CHAT_ID` оставлен для совместимости и опциональной
+дополнительной scheduled delivery; это не обязательный общий чат.
+
+`TELEGRAM_URGENT_ALERTS_ENABLED=false` отключает автоматические urgent-алерты
+на каждом collect/analyze цикле. Позднее их можно снова включить, если business
+owner попросит immediate notifications.
+
 ## Чеклист
 
 - [ ] Env-файл существует по пути `/etc/ahstep-law-monitor/law-monitor.env`.
@@ -124,9 +163,14 @@ LLM_RETRY_MAX_BACKOFF_SECONDS=10
 - [ ] `LAW_MONITOR_DB_PATH` указывает на `/var/lib/ahstep-law-monitor/data/law_monitor.db`.
 - [ ] `LAW_MONITOR_LOG_FILE` указывает на `/var/log/ahstep-law-monitor/app.log`.
 - [ ] `LAW_MONITOR_TIMEZONE` равен `Europe/Moscow`, если IT явно не выбрал другой timezone.
-- [ ] `LAW_MONITOR_DAILY_REPORT_HOUR` согласован с business owner.
-- [ ] `LAW_MONITOR_HOURLY_INTERVAL_MINUTES` согласован с business owner.
-- [ ] Telegram token и chat ID заданы только в production env-файле.
+- [ ] `LAW_MONITOR_COLLECTION_TIMES=08:30,12:00,18:00`.
+- [ ] `LAW_MONITOR_DAILY_REPORT_HOUR=9` или согласован с business owner.
+- [ ] `LAW_MONITOR_HOURLY_INTERVAL_MINUTES` оставлен как fallback, если collection times пустой.
+- [ ] Telegram token задан только в production env-файле.
+- [ ] `TELEGRAM_CHAT_ID` пустой или содержит legacy/fallback scheduled destination.
+- [ ] `TELEGRAM_ADMIN_USER_IDS` содержит хотя бы одного актуального администратора бота.
+- [ ] `TELEGRAM_ALLOWED_USER_IDS` пустой или содержит только первичных approved user IDs.
+- [ ] `TELEGRAM_URGENT_ALERTS_ENABLED=false` для тихого production schedule.
 - [ ] `TELEGRAM_PROXY_URL` пустой, если доступ к Telegram не требует proxy.
 - [ ] `TELEGRAM_OPERATOR_CHAT_ID` задан, если нужен отдельный канал для оперативных алертов (рекомендуется на production).
 - [ ] `LLM_ENRICHMENT_ENABLED=false` для первичного корпоративного handoff, если owner/IT явно не одобрили LLM enrichment.

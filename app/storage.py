@@ -385,6 +385,22 @@ def init_db(db_path: Path | str = DB_PATH) -> None:
         )
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS telegram_allowed_users (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                last_name TEXT,
+                added_by INTEGER,
+                added_at TEXT NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_telegram_allowed_users_active ON telegram_allowed_users(is_active)"
+        )
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS tracking_items (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 chat_id TEXT NOT NULL,
@@ -1753,6 +1769,134 @@ def get_user_default_period_days(
     except (TypeError, ValueError):
         return fallback
     return max(1, min(value, 365))
+
+
+def _normalize_telegram_user_id(user_id: int | str) -> int:
+    try:
+        normalized = int(str(user_id).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Telegram user_id must be a numeric value.") from exc
+    if normalized <= 0:
+        raise ValueError("Telegram user_id must be a positive numeric value.")
+    return normalized
+
+
+def upsert_telegram_allowed_user(
+    user_id: int | str,
+    *,
+    username: str | None = None,
+    first_name: str | None = None,
+    last_name: str | None = None,
+    added_by: int | str | None = None,
+    db_path: Path | str = DB_PATH,
+) -> None:
+    normalized_user_id = _normalize_telegram_user_id(user_id)
+    normalized_added_by = (
+        _normalize_telegram_user_id(added_by) if added_by is not None else None
+    )
+    with _connect_db(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO telegram_allowed_users(
+                user_id, username, first_name, last_name, added_by, added_at, is_active
+            )
+            VALUES (?, ?, ?, ?, ?, ?, 1)
+            ON CONFLICT(user_id) DO UPDATE SET
+                username=COALESCE(excluded.username, telegram_allowed_users.username),
+                first_name=COALESCE(excluded.first_name, telegram_allowed_users.first_name),
+                last_name=COALESCE(excluded.last_name, telegram_allowed_users.last_name),
+                added_by=COALESCE(excluded.added_by, telegram_allowed_users.added_by),
+                added_at=excluded.added_at,
+                is_active=1
+            """,
+            (
+                normalized_user_id,
+                (username or "").strip() or None,
+                (first_name or "").strip() or None,
+                (last_name or "").strip() or None,
+                normalized_added_by,
+                _serialize_dt(datetime.now(timezone.utc)),
+            ),
+        )
+        connection.commit()
+
+
+def deactivate_telegram_allowed_user(
+    user_id: int | str,
+    *,
+    db_path: Path | str = DB_PATH,
+) -> int:
+    normalized_user_id = _normalize_telegram_user_id(user_id)
+    with _connect_db(db_path) as connection:
+        cursor = connection.execute(
+            """
+            UPDATE telegram_allowed_users
+            SET is_active = 0
+            WHERE user_id = ? AND is_active = 1
+            """,
+            (normalized_user_id,),
+        )
+        connection.commit()
+        return int(cursor.rowcount or 0)
+
+
+def is_telegram_user_allowed(
+    user_id: int | str | None,
+    *,
+    db_path: Path | str = DB_PATH,
+) -> bool:
+    if user_id is None:
+        return False
+    try:
+        normalized_user_id = _normalize_telegram_user_id(user_id)
+    except ValueError:
+        return False
+    with _connect_db(db_path) as connection:
+        row = connection.execute(
+            """
+            SELECT is_active
+            FROM telegram_allowed_users
+            WHERE user_id = ?
+            LIMIT 1
+            """,
+            (normalized_user_id,),
+        ).fetchone()
+    return bool(row and int(row["is_active"] or 0) == 1)
+
+
+def list_active_telegram_allowed_users(
+    *,
+    db_path: Path | str = DB_PATH,
+    limit: int = 10000,
+) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(int(limit), 10000))
+    with _connect_db(db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT user_id, username, first_name, last_name, added_by, added_at, is_active
+            FROM telegram_allowed_users
+            WHERE is_active = 1
+            ORDER BY added_at DESC, user_id ASC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        payload = dict(row)
+        payload["is_active"] = bool(payload.get("is_active"))
+        payload["added_at"] = _parse_dt(payload.get("added_at"))
+        result.append(payload)
+    return result
+
+
+def sync_telegram_allowed_users_from_env(
+    user_ids: set[int] | frozenset[int] | list[int] | tuple[int, ...],
+    *,
+    db_path: Path | str = DB_PATH,
+) -> None:
+    for user_id in sorted(set(user_ids or [])):
+        upsert_telegram_allowed_user(user_id, db_path=db_path)
 
 
 def search_documents(

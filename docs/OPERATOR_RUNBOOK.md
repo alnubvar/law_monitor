@@ -26,7 +26,7 @@ sudo tail -n 100 /var/log/ahstep-law-monitor/app.log
 
 Бизнес-проверки:
 
-- Убедиться, что daily digest пришел в ожидаемый Telegram chat.
+- Убедиться, что daily digest пришел approved пользователям в личные Telegram-чаты.
 - Убедиться, что актуальный отчет есть в `/var/lib/ahstep-law-monitor/reports`.
 - Проверить Telegram `/status` и `/sources`, если bot включен.
 - Проверить, показывает ли diagnostics stale key sources или recent source errors.
@@ -102,7 +102,7 @@ stale source. Такое предупреждение означает, что �
 
 Первичные действия:
 
-1. Проверить `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` и `TELEGRAM_PROXY_URL` в production env-файле.
+1. Проверить `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ADMIN_USER_IDS`, active allowlist и `TELEGRAM_PROXY_URL` в production env-файле.
 2. Проверить proxy credentials и firewall rules.
 3. Перезапустить Telegram bot после изменений env.
 4. Запускать ручную проверку Telegram только когда owner/IT ожидают тестовое сообщение.
@@ -121,6 +121,77 @@ Manual-only проверки Telegram:
 sudo -u ahstep bash -lc 'cd /opt/ahstep/law_monitor && set -a && . /etc/ahstep-law-monitor/law-monitor.env && set +a && .venv/bin/python main.py telegram-check'
 sudo -u ahstep bash -lc 'cd /opt/ahstep/law_monitor && set -a && . /etc/ahstep-law-monitor/law-monitor.env && set +a && .venv/bin/python main.py notify-test'
 ```
+
+## Управление доступом к личному Telegram-боту
+
+Нормальная корпоративная модель — каждый approved сотрудник пишет боту в
+личный чат, пользуется `/report`, `/urgent`, кнопками и получает daily digest
+лично. Общий групповой чат не требуется.
+
+`TELEGRAM_CHAT_ID` остается optional legacy/fallback destination для scheduled
+delivery, если бизнесу нужен дополнительный общий адрес. Он не является списком
+личных пользователей. Личный доступ сотрудников к командам бота управляется по
+числовому Telegram `user_id`.
+
+Администраторы задаются в production env:
+
+```env
+TELEGRAM_ADMIN_USER_IDS=100000001,100000002
+TELEGRAM_ALLOWED_USER_IDS=
+TELEGRAM_URGENT_ALERTS_ENABLED=false
+```
+
+`TELEGRAM_ADMIN_USER_IDS` — аварийный механизм замены администратора. Если
+ответственный сотрудник ушел из компании, IT меняет эту переменную в
+`/etc/ahstep-law-monitor/law-monitor.env` и перезапускает только Telegram bot:
+
+```bash
+sudo systemctl restart ahstep-telegram-bot.service
+```
+
+Дальше администратор управляет пользователями из Telegram без изменения env:
+
+```text
+/admin_users
+/admin_add_user <user_id>
+/admin_remove_user <user_id>
+/admin_whoami
+```
+
+Сотрудник, у которого доступа еще нет, пишет боту в личный чат и получает
+профессиональное сообщение с Telegram ID. Этот ID нужно передать администратору
+бота внутри компании. Команда `/myid` работает даже без доступа и показывает
+`user_id`, `chat_id`, username и текущий статус доступа.
+
+Не используйте username как идентификатор доступа: usernames могут меняться.
+Добавлять нужно только числовой Telegram `user_id`.
+
+Daily digest отправляется всем env-администраторам из `TELEGRAM_ADMIN_USER_IDS`,
+всем активным пользователям allowlist и, если задан, в `TELEGRAM_CHAT_ID`.
+Inactive/removed users и unknown users не получают отчеты и scheduled digest.
+Если отправка одному получателю не прошла, scheduler логирует сбой безопасно и
+продолжает отправку остальным.
+
+## Production schedule и ночная тишина
+
+Рекомендуемый режим:
+
+```env
+LAW_MONITOR_COLLECTION_TIMES=08:30,12:00,18:00
+LAW_MONITOR_DAILY_REPORT_HOUR=9
+TELEGRAM_URGENT_ALERTS_ENABLED=false
+```
+
+Scheduler и Telegram bot остаются отдельными systemd-сервисами. Scheduler
+тихо собирает и анализирует данные в 08:30, 12:00 и 18:00; daily digest
+отправляется в 09:00. Автоматические urgent-алерты на каждом цикле выключены,
+но документы продолжают классифицироваться, сохраняться и попадать в daily
+digest, `/urgent` и `/report`.
+
+`LAW_MONITOR_HOURLY_INTERVAL_MINUTES` сохранен как compatibility fallback,
+если `LAW_MONITOR_COLLECTION_TIMES` пустой. Immediate urgent notifications
+можно включить позднее через `TELEGRAM_URGENT_ALERTS_ENABLED=true`, если
+business owner явно попросит такой режим.
 
 ## Обработка сбоев LLM
 

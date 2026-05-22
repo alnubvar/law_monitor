@@ -10,10 +10,12 @@ from pathlib import Path
 from app.config import (
     DATA_DIR,
     DB_PATH,
+    SCHEDULER_COLLECTION_TIMES,
     SCHEDULER_DAILY_REPORT_HOUR,
     SCHEDULER_HOURLY_INTERVAL_MINUTES,
     SCHEDULER_TIMEZONE,
     SCHEDULER_TIMEZONE_NAME,
+    TELEGRAM_URGENT_ALERTS_ENABLED,
 )
 from app.notify.telegram import (
     is_configured,
@@ -43,6 +45,7 @@ HEARTBEAT_HOURLY_PATH = DATA_DIR / "last_success.cycle"
 HEARTBEAT_DAILY_PATH = DATA_DIR / "last_success.daily"
 
 _shutdown_event = threading.Event()
+_completed_collection_slots: set[str] = set()
 
 try:
     from apscheduler.schedulers.blocking import BlockingScheduler
@@ -146,13 +149,17 @@ def notify_new_requires_attention() -> int:
 def run_hourly_cycle() -> tuple[int, int, int]:
     try:
         with writer_lock("scheduler-hourly-cycle"):
-            logger.info("Hourly cycle started.")
+            logger.info("Collection cycle started.")
             collected_count = run_collect()
             analyzed_count = run_analyze()
-            notified_count = notify_new_requires_attention()
+            if TELEGRAM_URGENT_ALERTS_ENABLED:
+                notified_count = notify_new_requires_attention()
+            else:
+                notified_count = 0
+                logger.info("Automatic urgent Telegram alerts are disabled for this collection cycle.")
             requires_attention_count = count_documents_by_action_level("requires_attention")
             logger.info(
-                "Hourly cycle finished: collected=%s analyzed=%s requires_attention=%s notified=%s",
+                "Collection cycle finished: collected=%s analyzed=%s requires_attention=%s notified=%s",
                 collected_count,
                 analyzed_count,
                 requires_attention_count,
@@ -222,13 +229,24 @@ def run_scheduler(*, once: bool = False, days: int = 7, force_daily_digest: bool
         return
 
     aps_scheduler = BlockingScheduler(timezone=SCHEDULER_TIMEZONE)
-    aps_scheduler.add_job(
-        run_hourly_cycle,
-        "interval",
-        minutes=SCHEDULER_HOURLY_INTERVAL_MINUTES,
-        id="hourly_collect_analyze",
-        replace_existing=True,
-    )
+    if SCHEDULER_COLLECTION_TIMES:
+        for collection_time in SCHEDULER_COLLECTION_TIMES:
+            aps_scheduler.add_job(
+                run_hourly_cycle,
+                "cron",
+                hour=collection_time.hour,
+                minute=collection_time.minute,
+                id=f"collect_analyze_{collection_time.hour:02d}_{collection_time.minute:02d}",
+                replace_existing=True,
+            )
+    else:
+        aps_scheduler.add_job(
+            run_hourly_cycle,
+            "interval",
+            minutes=SCHEDULER_HOURLY_INTERVAL_MINUTES,
+            id="hourly_collect_analyze",
+            replace_existing=True,
+        )
     aps_scheduler.add_job(
         run_daily_report_cycle,
         "cron",
@@ -255,10 +273,11 @@ def run_scheduler(*, once: bool = False, days: int = 7, force_daily_digest: bool
         logger.debug("Could not install SIGTERM handler for APScheduler (not in main thread).")
 
     logger.info(
-        "Scheduler started. Hourly interval=%s minutes, daily report at %02d:00 %s",
-        SCHEDULER_HOURLY_INTERVAL_MINUTES,
+        "Scheduler started. Collection schedule=%s, daily report at %02d:00 %s, urgent alerts enabled=%s",
+        _collection_schedule_description(),
         SCHEDULER_DAILY_REPORT_HOUR,
         SCHEDULER_TIMEZONE_NAME,
+        TELEGRAM_URGENT_ALERTS_ENABLED,
     )
     aps_scheduler.start()
     logger.info("Scheduler stopped cleanly.")
@@ -267,22 +286,30 @@ def run_scheduler(*, once: bool = False, days: int = 7, force_daily_digest: bool
 def _run_loop_scheduler(*, days: int = 7) -> None:
     _install_shutdown_handlers()
     logger.info(
-        "Loop scheduler started. Hourly interval=%s minutes, daily report at %02d:00 %s",
-        SCHEDULER_HOURLY_INTERVAL_MINUTES,
+        "Loop scheduler started. Collection schedule=%s, daily report at %02d:00 %s, urgent alerts enabled=%s",
+        _collection_schedule_description(),
         SCHEDULER_DAILY_REPORT_HOUR,
         SCHEDULER_TIMEZONE_NAME,
+        TELEGRAM_URGENT_ALERTS_ENABLED,
     )
     interval_seconds = max(SCHEDULER_HOURLY_INTERVAL_MINUTES, 1) * 60
     while not _shutdown_event.is_set():
-        run_hourly_cycle()
+        if SCHEDULER_COLLECTION_TIMES:
+            now = datetime.now(SCHEDULER_TIMEZONE)
+            if _scheduled_collection_due(now):
+                run_hourly_cycle()
+            sleep_seconds = 60
+        else:
+            run_hourly_cycle()
+            now = datetime.now(SCHEDULER_TIMEZONE)
+            sleep_seconds = interval_seconds
         if _shutdown_event.is_set():
             break
-        now = datetime.now(SCHEDULER_TIMEZONE)
         if _daily_digest_due(now):
             run_daily_report_cycle(days=days, now=now)
             if _shutdown_event.is_set():
                 break
-        if _interruptible_sleep(interval_seconds):
+        if _interruptible_sleep(sleep_seconds):
             break
     logger.info("Loop scheduler stopped cleanly.")
 
@@ -314,6 +341,32 @@ def _daily_digest_due(now: datetime | None = None) -> bool:
         current_time.hour >= SCHEDULER_DAILY_REPORT_HOUR
         and not _daily_digest_already_sent(digest_date)
     )
+
+
+def _scheduled_collection_due(now: datetime | None = None) -> bool:
+    if not SCHEDULER_COLLECTION_TIMES:
+        return True
+    current_time = _scheduler_now(now)
+    current_key = (current_time.hour, current_time.minute)
+    if current_key not in {
+        (collection_time.hour, collection_time.minute)
+        for collection_time in SCHEDULER_COLLECTION_TIMES
+    }:
+        return False
+    slot_key = f"{_scheduler_date(current_time)} {current_time.hour:02d}:{current_time.minute:02d}"
+    if slot_key in _completed_collection_slots:
+        return False
+    _completed_collection_slots.add(slot_key)
+    return True
+
+
+def _collection_schedule_description() -> str:
+    if SCHEDULER_COLLECTION_TIMES:
+        return ",".join(
+            f"{collection_time.hour:02d}:{collection_time.minute:02d}"
+            for collection_time in SCHEDULER_COLLECTION_TIMES
+        )
+    return f"every {SCHEDULER_HOURLY_INTERVAL_MINUTES} minutes"
 
 
 def _daily_digest_already_sent(digest_date: str) -> bool:

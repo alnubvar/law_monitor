@@ -40,14 +40,19 @@ from app.pipeline.digest import run_digest
 from app.storage import (
     backfill_missing_published_at,
     count_documents_by_action_level,
+    deactivate_telegram_allowed_user,
     get_user_default_period_days,
+    is_telegram_user_allowed,
     get_runtime_event,
     init_db,
+    list_active_telegram_allowed_users,
     list_recent_documents,
     list_recent_source_errors,
     list_latest_source_audit,
     mark_runtime_event,
     set_user_default_period_days,
+    sync_telegram_allowed_users_from_env,
+    upsert_telegram_allowed_user,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,6 +68,7 @@ MANUAL_REFRESH_COOLDOWN_SECONDS = 3 * 3600
 _refresh_lock = threading.Lock()
 _pending_search_chats: set[str] = set()
 _pending_report_period_chats: set[str] = set()
+_synced_allowed_user_db_paths: set[str] = set()
 
 START_MESSAGE = (
     "AHSTEP GR Monitor запущен ✅\n\n"
@@ -73,9 +79,22 @@ UNKNOWN_COMMAND_MESSAGE = (
     "Не понял команду 🤔\n\n"
     "Используй кнопки ниже или введи /help"
 )
+ACCESS_DENIED_TEMPLATE = (
+    "Доступ к AHSTEP GR Monitor пока не выдан.\n"
+    "Ваш Telegram ID: {user_id}\n"
+    "Передайте этот ID администратору бота."
+)
+ADMIN_DENIED_MESSAGE = "Эта команда доступна только администраторам бота."
+ADMIN_COMMANDS = {
+    "/admin_users",
+    "/admin_add_user",
+    "/admin_remove_user",
+    "/admin_whoami",
+}
 
 BOT_COMMANDS: tuple[tuple[str, str], ...] = (
     ("start", "открыть меню"),
+    ("myid", "мой Telegram ID"),
     ("help", "помощь"),
     ("urgent", "требует внимания"),
     ("report", "последний отчет"),
@@ -310,6 +329,182 @@ def save_offset(offset: int, path: Path | None = None) -> None:
     offset_path.write_text(str(offset), encoding="utf-8")
 
 
+def _extract_user_id(
+    *,
+    message: Mapping[str, Any],
+    chat: Mapping[str, Any] | None,
+) -> int | None:
+    sender = message.get("from")
+    if isinstance(sender, Mapping):
+        sender_id = sender.get("id")
+        if isinstance(sender_id, int):
+            return sender_id
+        if isinstance(sender_id, str) and sender_id.strip().isdigit():
+            return int(sender_id.strip())
+    chat_id = chat.get("id") if isinstance(chat, Mapping) else None
+    chat_type = str(chat.get("type") or "").lower() if isinstance(chat, Mapping) else ""
+    if chat_type == "private" and isinstance(chat_id, int):
+        return chat_id
+    return None
+
+
+def _extract_sender_field(message: Mapping[str, Any], field_name: str) -> str | None:
+    sender = message.get("from")
+    if not isinstance(sender, Mapping):
+        return None
+    value = sender.get(field_name)
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def _is_private_chat(
+    *,
+    chat: Mapping[str, Any] | None,
+    chat_id: int | str,
+    user_id: int | None,
+) -> bool:
+    chat_type = str(chat.get("type") or "").lower() if isinstance(chat, Mapping) else ""
+    if chat_type == "private":
+        return True
+    return bool(user_id is not None and str(chat_id) == str(user_id) and not chat_type)
+
+
+def _is_configured_legacy_chat(chat_id: int | str) -> bool:
+    allowed_chat_id = str(config.TELEGRAM_CHAT_ID).strip()
+    return bool(allowed_chat_id and str(chat_id) == allowed_chat_id)
+
+
+def _is_env_admin(user_id: int | None) -> bool:
+    return bool(user_id is not None and user_id in config.TELEGRAM_ADMIN_USER_IDS)
+
+
+def _has_user_access(user_id: int | None, *, db_path: Path | str) -> bool:
+    if _is_env_admin(user_id):
+        return True
+    if user_id is None:
+        return False
+    init_db(db_path)
+    return is_telegram_user_allowed(user_id, db_path=db_path)
+
+
+def _sync_initial_allowed_users(db_path: Path | str) -> None:
+    if not config.TELEGRAM_ALLOWED_USER_IDS:
+        return
+    key = str(Path(db_path))
+    if key in _synced_allowed_user_db_paths:
+        return
+    init_db(db_path)
+    sync_telegram_allowed_users_from_env(
+        config.TELEGRAM_ALLOWED_USER_IDS,
+        db_path=db_path,
+    )
+    _synced_allowed_user_db_paths.add(key)
+
+
+def _build_access_denied_message(user_id: int | None) -> str:
+    display_id = str(user_id) if user_id is not None else "не определен"
+    return ACCESS_DENIED_TEMPLATE.format(user_id=display_id)
+
+
+def _format_access_status(*, has_access: bool, is_admin: bool) -> str:
+    if is_admin:
+        return "администратор, доступ выдан"
+    if has_access:
+        return "доступ выдан"
+    return "доступ пока не выдан"
+
+
+def _build_myid_message(
+    *,
+    user_id: int | None,
+    chat_id: int | str,
+    username: str | None,
+    has_access: bool,
+    is_admin: bool,
+) -> str:
+    username_label = f"@{username}" if username else "не указан"
+    return "\n".join(
+        [
+            "Ваши данные Telegram:",
+            f"User ID: {user_id if user_id is not None else 'не определен'}",
+            f"Chat ID: {chat_id}",
+            f"Username: {username_label}",
+            f"Статус доступа: {_format_access_status(has_access=has_access, is_admin=is_admin)}.",
+        ]
+    )
+
+
+def _handle_admin_command(
+    *,
+    text: str,
+    command: str,
+    db_path: Path | str,
+    user_id: int | None,
+    chat_id: int | str,
+    username: str | None,
+    private_chat: bool,
+) -> str:
+    init_db(db_path)
+    if command == "/admin_whoami":
+        username_label = f"@{username}" if username else "не указан"
+        return "\n".join(
+            [
+                "Диагностика администратора:",
+                f"User ID: {user_id if user_id is not None else 'не определен'}",
+                f"Chat ID: {chat_id}",
+                f"Username: {username_label}",
+                f"Личный чат: {'да' if private_chat else 'нет'}",
+                "Права администратора: да",
+            ]
+        )
+    if command == "/admin_users":
+        users = list_active_telegram_allowed_users(db_path=db_path)
+        if not users:
+            return "Активных пользователей в allowlist пока нет."
+        lines = ["Активные пользователи allowlist:"]
+        for user in users:
+            label_parts = [str(user["user_id"])]
+            if user.get("username"):
+                label_parts.append(f"@{user['username']}")
+            full_name = " ".join(
+                part for part in [user.get("first_name"), user.get("last_name")] if part
+            )
+            if full_name:
+                label_parts.append(full_name)
+            lines.append("- " + " | ".join(label_parts))
+        return "\n".join(lines)
+    if command == "/admin_add_user":
+        parsed_user_id = _parse_admin_user_id_arg(text)
+        if parsed_user_id is None:
+            return "Укажите числовой Telegram user_id: /admin_add_user <user_id>"
+        upsert_telegram_allowed_user(parsed_user_id, added_by=user_id, db_path=db_path)
+        return f"Пользователь {parsed_user_id} добавлен в allowlist."
+    if command == "/admin_remove_user":
+        parsed_user_id = _parse_admin_user_id_arg(text)
+        if parsed_user_id is None:
+            return "Укажите числовой Telegram user_id: /admin_remove_user <user_id>"
+        changed = deactivate_telegram_allowed_user(parsed_user_id, db_path=db_path)
+        if changed:
+            return f"Пользователь {parsed_user_id} удален из allowlist."
+        return f"Пользователь {parsed_user_id} уже не активен в allowlist."
+    return UNKNOWN_COMMAND_MESSAGE
+
+
+def _parse_admin_user_id_arg(text: str) -> int | None:
+    parts = (text or "").strip().split()
+    if len(parts) != 2:
+        return None
+    candidate = parts[1].strip()
+    if not candidate.isdigit():
+        return None
+    value = int(candidate)
+    if value <= 0:
+        return None
+    return value
+
+
 def _process_update(
     update: Mapping[str, Any],
     *,
@@ -325,13 +520,67 @@ def _process_update(
     if chat_id is None:
         return
 
-    allowed_chat_id = str(config.TELEGRAM_CHAT_ID).strip()
-    if str(chat_id) != allowed_chat_id:
+    text = str(message.get("text") or "")
+    incoming_command = normalize_incoming_command(text)
+    resolved_db_path = db_path or config.DB_PATH
+    _sync_initial_allowed_users(resolved_db_path)
+    user_id = _extract_user_id(message=message, chat=chat)
+    username = _extract_sender_field(message, "username")
+    private_chat = _is_private_chat(chat=chat, chat_id=chat_id, user_id=user_id)
+    legacy_chat = _is_configured_legacy_chat(chat_id)
+    can_reply_to_chat = private_chat or legacy_chat
+    user_has_access = _has_user_access(user_id, db_path=resolved_db_path)
+    user_is_admin = _is_env_admin(user_id)
+
+    if not can_reply_to_chat:
         logger.info("Ignoring update from unauthorized chat_id=%s", chat_id)
         return
 
-    text = str(message.get("text") or "")
-    incoming_command = normalize_incoming_command(text)
+    if incoming_command == "/myid":
+        _send_response(
+            chat_id=chat_id,
+            text=_build_myid_message(
+                user_id=user_id,
+                chat_id=chat_id,
+                username=username,
+                has_access=user_has_access or legacy_chat,
+                is_admin=user_is_admin,
+            ),
+            proxies=proxies,
+            include_default_keyboard=user_has_access or legacy_chat,
+        )
+        return
+
+    if incoming_command in ADMIN_COMMANDS:
+        if not user_is_admin:
+            _send_response(
+                chat_id=chat_id,
+                text=ADMIN_DENIED_MESSAGE,
+                proxies=proxies,
+                include_default_keyboard=user_has_access or legacy_chat,
+            )
+            return
+        response_text = _handle_admin_command(
+            text=text,
+            command=incoming_command,
+            db_path=resolved_db_path,
+            user_id=user_id,
+            chat_id=chat_id,
+            username=username,
+            private_chat=private_chat,
+        )
+        _send_response(chat_id=chat_id, text=response_text, proxies=proxies)
+        return
+
+    if not user_has_access and (private_chat or (legacy_chat and user_id is not None)):
+        _send_response(
+            chat_id=chat_id,
+            text=_build_access_denied_message(user_id),
+            proxies=proxies,
+            include_default_keyboard=False,
+        )
+        return
+
     chat_key = str(chat_id)
     if incoming_command is None and chat_key in _pending_search_chats:
         _pending_search_chats.discard(chat_key)

@@ -34,6 +34,7 @@ class StorageSmokeTest(unittest.TestCase):
         self.assertIn("document_extraction_audit", tables)
         self.assertIn("ocr_queue", tables)
         self.assertIn("document_enrichments", tables)
+        self.assertIn("telegram_allowed_users", tables)
 
         with closing(sqlite3.connect(db_path)) as connection:
             columns = {
@@ -57,6 +58,52 @@ class StorageSmokeTest(unittest.TestCase):
         self.assertIn("facts_json", enrichment_columns)
         self.assertIn("source_hash", enrichment_columns)
         self.assertIn("enriched_at", enrichment_columns)
+
+        init_db(db_path)
+        with closing(sqlite3.connect(db_path)) as connection:
+            allowlist_columns = {
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA table_info(telegram_allowed_users)"
+                ).fetchall()
+            }
+        self.assertEqual(
+            allowlist_columns,
+            {
+                "user_id",
+                "username",
+                "first_name",
+                "last_name",
+                "added_by",
+                "added_at",
+                "is_active",
+            },
+        )
+
+    def test_telegram_allowed_users_can_be_added_removed_and_reactivated(self) -> None:
+        db_path = Path("data/test_artifacts/test_telegram_allowed_users.db")
+        if db_path.exists():
+            db_path.unlink()
+        init_db(db_path)
+
+        storage.upsert_telegram_allowed_user(
+            2001,
+            username="ivanov",
+            first_name="Ivan",
+            added_by=1001,
+            db_path=db_path,
+        )
+        self.assertTrue(storage.is_telegram_user_allowed(2001, db_path=db_path))
+
+        changed = storage.deactivate_telegram_allowed_user(2001, db_path=db_path)
+        self.assertEqual(changed, 1)
+        self.assertFalse(storage.is_telegram_user_allowed(2001, db_path=db_path))
+
+        storage.upsert_telegram_allowed_user(2001, db_path=db_path)
+        users = storage.list_active_telegram_allowed_users(db_path=db_path)
+        self.assertEqual(len(users), 1)
+        self.assertEqual(users[0]["user_id"], 2001)
+        self.assertEqual(users[0]["username"], "ivanov")
 
     def test_ocr_queue_upsert_and_status_update(self) -> None:
         db_path = Path("data/test_artifacts/test_ocr_queue.db")

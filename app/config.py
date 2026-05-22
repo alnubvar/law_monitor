@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Mapping
-from datetime import timedelta, timezone
+from datetime import time, timedelta, timezone
 from functools import lru_cache
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -107,6 +107,69 @@ def _get_env_bool(name: str, default: bool) -> bool:
     return raw in {"1", "true", "yes", "y", "on"}
 
 
+def _get_env_int_set(name: str) -> frozenset[int]:
+    raw_value = _get_env_str(name)
+    if not raw_value:
+        return frozenset()
+    values: set[int] = set()
+    for chunk in raw_value.split(","):
+        candidate = chunk.strip()
+        if not candidate:
+            continue
+        try:
+            values.add(int(candidate))
+        except ValueError:
+            logging.getLogger(__name__).warning(
+                "Invalid Telegram user ID in %s=%r. Skipping value.",
+                name,
+                candidate,
+            )
+    return frozenset(values)
+
+
+def _get_env_time_list(name: str) -> tuple[time, ...]:
+    raw_value = _get_env_str(name)
+    if not raw_value:
+        return ()
+    values: list[time] = []
+    seen: set[tuple[int, int]] = set()
+    for chunk in raw_value.split(","):
+        candidate = chunk.strip()
+        if not candidate:
+            continue
+        parts = candidate.split(":")
+        if len(parts) != 2:
+            logging.getLogger(__name__).warning(
+                "Invalid scheduler time in %s=%r. Expected HH:MM.",
+                name,
+                candidate,
+            )
+            continue
+        try:
+            hour = int(parts[0])
+            minute = int(parts[1])
+        except ValueError:
+            logging.getLogger(__name__).warning(
+                "Invalid scheduler time in %s=%r. Expected HH:MM.",
+                name,
+                candidate,
+            )
+            continue
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            logging.getLogger(__name__).warning(
+                "Scheduler time in %s=%r is out of range. Skipping value.",
+                name,
+                candidate,
+            )
+            continue
+        key = (hour, minute)
+        if key in seen:
+            continue
+        seen.add(key)
+        values.append(time(hour=hour, minute=minute))
+    return tuple(values)
+
+
 DATA_DIR = _get_env_path(
     "LAW_MONITOR_DATA_DIR",
     BASE_DIR / "data",
@@ -144,6 +207,9 @@ TELEGRAM_OPERATOR_CHAT_ID = _get_env_str("TELEGRAM_OPERATOR_CHAT_ID")
 TELEGRAM_PROXY_URL = _get_env_str("TELEGRAM_PROXY_URL")
 TELEGRAM_API_TIMEOUT = _get_env_int("TELEGRAM_API_TIMEOUT", 30, min_value=1)
 TELEGRAM_PROXY_ENABLED = bool(TELEGRAM_PROXY_URL)
+TELEGRAM_ADMIN_USER_IDS = _get_env_int_set("TELEGRAM_ADMIN_USER_IDS")
+TELEGRAM_ALLOWED_USER_IDS = _get_env_int_set("TELEGRAM_ALLOWED_USER_IDS")
+TELEGRAM_URGENT_ALERTS_ENABLED = _get_env_bool("TELEGRAM_URGENT_ALERTS_ENABLED", True)
 OCR_ENABLED = _get_env_bool("LAW_MONITOR_OCR_ENABLED", False)
 OCR_LANGUAGE = _get_env_str("LAW_MONITOR_OCR_LANGUAGE", "rus+eng")
 OCR_MAX_PAGES = max(1, _get_env_int("LAW_MONITOR_OCR_MAX_PAGES", 5, min_value=1))
@@ -194,6 +260,7 @@ SCHEDULER_HOURLY_INTERVAL_MINUTES = _get_env_int(
     aliases=("SCHEDULER_INTERVAL_MINUTES",),
     min_value=1,
 )
+SCHEDULER_COLLECTION_TIMES = _get_env_time_list("LAW_MONITOR_COLLECTION_TIMES")
 DEFAULT_REQUEST_HEADERS = {"User-Agent": USER_AGENT}
 
 

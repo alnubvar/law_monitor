@@ -14,7 +14,7 @@ AHSTEP `law_monitor` — backend-система GR-мониторинга для
 - классифицирует документы по бизнес-приоритету (`requires_attention`,
   `watchlist`, `background`, `irrelevant`);
 - генерирует ежедневный markdown-отчёт для GR-команды;
-- отправляет ежедневную сводку в корпоративный Telegram-чат
+- отправляет ежедневную сводку approved пользователям в личные Telegram-чаты
   (короткое сообщение + полный отчёт во вложении `.txt`);
 - хранит историю в локальной SQLite БД.
 
@@ -110,11 +110,15 @@ LAW_MONITOR_LOG_FILE=/var/log/ahstep-law-monitor/app.log
 # Scheduler
 LAW_MONITOR_TIMEZONE=Europe/Moscow
 LAW_MONITOR_DAILY_REPORT_HOUR=9
+LAW_MONITOR_COLLECTION_TIMES=08:30,12:00,18:00
 LAW_MONITOR_HOURLY_INTERVAL_MINUTES=360
 
 # Telegram
 TELEGRAM_BOT_TOKEN=<выдаёт владелец проекта>
-TELEGRAM_CHAT_ID=<согласован с GR-командой>
+TELEGRAM_CHAT_ID=
+TELEGRAM_ADMIN_USER_IDS=<числовой Telegram user_id администратора>
+TELEGRAM_ALLOWED_USER_IDS=
+TELEGRAM_URGENT_ALERTS_ENABLED=false
 TELEGRAM_PROXY_URL=
 
 # LLM (стартовое значение — выключен)
@@ -135,6 +139,24 @@ LLM_ENRICHMENT_LIMIT=20
 ```
 
 Полная таблица переменных — [PRODUCTION_ENV_TEMPLATE.md](PRODUCTION_ENV_TEMPLATE.md).
+
+Нормальная корпоративная UX-модель — approved сотрудники общаются с ботом в
+личном чате. Общий групповой чат не требуется. Daily digest отправляется всем
+env-администраторам из `TELEGRAM_ADMIN_USER_IDS`, всем активным пользователям
+SQLite allowlist и, если задан, в optional legacy/fallback `TELEGRAM_CHAT_ID`.
+
+`TELEGRAM_CHAT_ID` не является списком пользователей и может оставаться пустым,
+если доставка нужна только в личные чаты. Администраторы задаются в
+`TELEGRAM_ADMIN_USER_IDS`; это аварийный механизм замены администратора, который
+IT меняет в env с перезапуском `ahstep-telegram-bot.service`. Обычных
+пользователей администратор добавляет и удаляет в Telegram командами
+`/admin_add_user <user_id>` и `/admin_remove_user <user_id>`. Unknown users в
+личном чате получают свой Telegram ID и передают его администратору.
+
+Рекомендуемый production schedule: тихий collect/analyze в 08:30, 12:00 и
+18:00, daily digest в 09:00, без автоматических urgent-алертов ночью или на
+каждом цикле. `LAW_MONITOR_HOURLY_INTERVAL_MINUTES` остается fallback, если
+`LAW_MONITOR_COLLECTION_TIMES` пустой.
 
 ## 7. Рекомендованные production-значения для LLM (Google/Gemma)
 
@@ -214,9 +236,11 @@ sudo -u ahstep bash -lc '... .venv/bin/python main.py notify-test'
 sudo -u ahstep bash -lc '... .venv/bin/python main.py run-scheduler --once --force-daily-digest'
 ```
 
-`run-scheduler --once` — это один полный цикл (collect → analyze → notify →
-daily digest). Используется для go-live теста и для разовой реактивации
-digest, если он не ушёл в назначенный час.
+`run-scheduler --once` — это один ручной цикл (collect → analyze → optional
+urgent notify → daily digest). При `TELEGRAM_URGENT_ALERTS_ENABLED=false`
+urgent notify пропускается, но collect/analyze и daily digest выполняются.
+Команда используется для go-live теста и для разовой реактивации digest, если
+он не ушёл в назначенный час.
 
 ## 11. Backup и restore
 
@@ -262,15 +286,15 @@ Restore-скрипт сам блокируется, если сервисы ак
 10. IT/владелец вручную запустили `telegram-check` — пришло тестовое сообщение.
 11. IT/владелец вручную запустили `run-scheduler --once` — успешно.
 12. Включены systemd сервисы.
-13. На следующее утро в `LAW_MONITOR_DAILY_REPORT_HOUR` пришёл daily digest.
+13. На следующее утро в `LAW_MONITOR_DAILY_REPORT_HOUR` daily digest пришёл в личные чаты approved users/admins.
 14. Создан первый production backup БД.
 
 ## 13. Что делать при сбоях
 
 ### Telegram не отправляется
 
-1. Проверить переменные `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`,
-   `TELEGRAM_PROXY_URL` в env-файле.
+1. Проверить переменные `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ADMIN_USER_IDS`,
+   active allowlist, optional `TELEGRAM_CHAT_ID` и `TELEGRAM_PROXY_URL` в env-файле.
 2. Проверить proxy credentials и доступ до `api.telegram.org` с сервера.
 3. Перезапустить Telegram-бот: `sudo systemctl restart ahstep-telegram-bot.service`.
 4. Запустить вручную `python main.py telegram-check` и посмотреть результат.
@@ -316,7 +340,7 @@ API-ключ и proxy credentials в логах редактируются — �
    ```bash
    sudo -u ahstep bash -lc '... .venv/bin/python main.py run-scheduler --once --force-daily-digest'
    ```
-5. Если digest был отправлен, но в чат не пришёл — см. раздел про сбои
+5. Если digest был отправлен, но получатель не получил его — см. раздел про сбои
    Telegram.
 
 ## 14. Важное напоминание
@@ -325,6 +349,11 @@ API-ключ и proxy credentials в логах редактируются — �
 сервиса.** Не запускать оба в одном process group. Не запускать сторонним cron
 или tmux/screen параллельно: применяется writer-lock, лишний процесс упадёт
 или подождёт.
+
+Автоматические urgent-алерты можно включить позднее через
+`TELEGRAM_URGENT_ALERTS_ENABLED=true`, если business owner попросит immediate
+notifications. По умолчанию production schedule тихий: urgent/requires_attention
+остаются в daily digest, `/urgent` и `/report`.
 
 Полная инструкция корпоративного развёртывания —
 [CORPORATE_DEPLOYMENT.md](CORPORATE_DEPLOYMENT.md). Операторская рутина —

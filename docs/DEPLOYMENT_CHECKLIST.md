@@ -24,8 +24,14 @@
 - [ ] `LAW_MONITOR_DB_PATH=/var/lib/ahstep-law-monitor/data/law_monitor.db`.
 - [ ] `LAW_MONITOR_LOG_FILE=/var/log/ahstep-law-monitor/app.log`.
 - [ ] `LAW_MONITOR_TIMEZONE=Europe/Moscow`.
-- [ ] Scheduler hour и interval согласованы.
-- [ ] Telegram token и chat ID заданы только в env-файле.
+- [ ] `LAW_MONITOR_COLLECTION_TIMES=08:30,12:00,18:00`.
+- [ ] `LAW_MONITOR_DAILY_REPORT_HOUR=9`.
+- [ ] `LAW_MONITOR_HOURLY_INTERVAL_MINUTES` оставлен как fallback, если collection times пустой.
+- [ ] Telegram token задан только в env-файле.
+- [ ] `TELEGRAM_CHAT_ID` пустой или задан как optional legacy/fallback scheduled destination.
+- [ ] `TELEGRAM_ADMIN_USER_IDS` содержит актуального env-администратора.
+- [ ] Approved users добавлены в личный allowlist; общий групповой чат не требуется.
+- [ ] `TELEGRAM_URGENT_ALERTS_ENABLED=false`.
 - [ ] Telegram proxy задан только если он требуется.
 - [ ] LLM enrichment выключен, если owner/IT явно не согласовали включение.
 
@@ -57,7 +63,7 @@ messages или запускать live scheduled behavior:
 - [ ] `python main.py telegram-check` проходит успешно, тестовое сообщение видно.
 - [ ] `python main.py notify-test` проходит успешно, если owner хочет отдельный notification test.
 - [ ] Первый `python main.py run-scheduler --once` выполнен owner/IT.
-- [ ] Первый daily digest пришел в целевой Telegram chat.
+- [ ] Первый daily digest пришел в личные Telegram-чаты approved users/admins.
 - [ ] Telegram `/status` работает.
 - [ ] Telegram `/sources` работает.
 - [ ] Telegram `/report` работает.
@@ -109,6 +115,7 @@ python main.py ocr-queue --status pending
 python main.py telegram-check
 python main.py notify-test
 python main.py run-scheduler --once
+python main.py run-scheduler --once --force-daily-digest
 python main.py analyze --force
 python main.py collect
 python main.py enrich-docs

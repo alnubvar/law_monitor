@@ -4,7 +4,7 @@ import logging
 import importlib
 import os
 import unittest
-from datetime import datetime
+from datetime import datetime, time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -92,6 +92,51 @@ class ConfigSmokeTest(unittest.TestCase):
                 datetime(2026, 5, 18).replace(tzinfo=reloaded.SCHEDULER_TIMEZONE).utcoffset().total_seconds(),
                 3 * 3600,
             )
+        importlib.reload(config_module)
+
+    def test_collection_times_env_is_parsed(self) -> None:
+        import app.config as config_module
+
+        with patch.dict(
+            os.environ,
+            {
+                "LAW_MONITOR_COLLECTION_TIMES": "08:30,12:00,18:00",
+            },
+            clear=False,
+        ):
+            reloaded = importlib.reload(config_module)
+            self.assertEqual(
+                reloaded.SCHEDULER_COLLECTION_TIMES,
+                (time(8, 30), time(12, 0), time(18, 0)),
+            )
+        importlib.reload(config_module)
+
+    def test_empty_collection_times_keeps_interval_scheduler_available(self) -> None:
+        import app.config as config_module
+
+        with patch.dict(
+            os.environ,
+            {
+                "LAW_MONITOR_COLLECTION_TIMES": "",
+                "LAW_MONITOR_HOURLY_INTERVAL_MINUTES": "45",
+            },
+            clear=False,
+        ):
+            reloaded = importlib.reload(config_module)
+            self.assertEqual(reloaded.SCHEDULER_COLLECTION_TIMES, ())
+            self.assertEqual(reloaded.SCHEDULER_HOURLY_INTERVAL_MINUTES, 45)
+        importlib.reload(config_module)
+
+    def test_telegram_urgent_alerts_flag_is_loaded(self) -> None:
+        import app.config as config_module
+
+        with patch.dict(
+            os.environ,
+            {"TELEGRAM_URGENT_ALERTS_ENABLED": "false"},
+            clear=False,
+        ):
+            reloaded = importlib.reload(config_module)
+            self.assertFalse(reloaded.TELEGRAM_URGENT_ALERTS_ENABLED)
         importlib.reload(config_module)
 
     def test_persistent_path_env_vars_are_loaded(self) -> None:
@@ -233,6 +278,22 @@ class ConfigSmokeTest(unittest.TestCase):
                 reloaded.LLM_PROXY_URL,
                 "http://user:secret@proxy.local:8080",
             )
+        importlib.reload(config_module)
+
+    def test_reads_telegram_user_allowlist_env_vars(self) -> None:
+        import app.config as config_module
+
+        with patch.dict(
+            os.environ,
+            {
+                "TELEGRAM_ADMIN_USER_IDS": "1001, 1002",
+                "TELEGRAM_ALLOWED_USER_IDS": "2001,2002, bad-value",
+            },
+            clear=False,
+        ):
+            reloaded = importlib.reload(config_module)
+            self.assertEqual(reloaded.TELEGRAM_ADMIN_USER_IDS, frozenset({1001, 1002}))
+            self.assertEqual(reloaded.TELEGRAM_ALLOWED_USER_IDS, frozenset({2001, 2002}))
         importlib.reload(config_module)
 
 
