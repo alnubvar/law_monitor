@@ -17,6 +17,7 @@ from app.rules.ahstep_domain_rules import (
     is_non_ahstep_domain_document,
     should_apply_ahstep_domain_gate,
 )
+from app.rules.ahstep_applicability import evaluate_support_measure_applicability
 from app.rules.news_rules import has_news_signal
 from app.rules.noise_rules import looks_anti_corruption_noise, looks_cultural_heritage_npa_noise, looks_irrelevant, looks_mcx_off_domain_measure
 from app.rules.page_type_rules import (
@@ -412,6 +413,16 @@ def detect_action_level(
     is_important_permanent_measure = any(
         marker in title_text for marker in IMPORTANT_FEDERAL_PERMANENT_MEASURE_MARKERS
     )
+    support_applicability = evaluate_support_measure_applicability(
+        title=title,
+        raw_text=raw_text,
+        source_name=source_name,
+        url=url,
+        level=level,
+        region=region,
+        source_role=source_role,
+        page_type=page_type,
+    )
     has_project_discussion_signal = any(
         signal in title_text or signal in lead_text
         for signal in PROJECT_DISCUSSION_SIGNALS
@@ -591,6 +602,8 @@ def detect_action_level(
             return "watchlist"
         return "background"
     if is_support_context_value and page_type in ACTIONABLE_PAGE_TYPES:
+        if not support_applicability.is_applicable:
+            return support_applicability.recommended_action_level or "background"
         if (
             source_role == "support_documents"
             and domain == "npa.krasnodar.ru"
@@ -908,6 +921,16 @@ def build_business_signal(
         marker in title.lower()
         for marker in IMPORTANT_FEDERAL_PERMANENT_MEASURE_MARKERS
     )
+    support_applicability = evaluate_support_measure_applicability(
+        title=title,
+        raw_text=raw_text,
+        source_name=source_name,
+        url=url,
+        level=level,
+        region=region,
+        source_role=source_role,
+        page_type=page_type,
+    )
     title_text = title.lower()
     combined_text = f"{title_text} {(url or '').lower()}"
     lead_text = raw_text.lower()[:1500]
@@ -949,6 +972,8 @@ def build_business_signal(
         return "Региональный НПА по профильной теме: держать на наблюдении."
     if source_role == "support_documents" and page_type in {"reference_page", "section_page", "category_page"}:
         return "Общий раздел/список документов; прямой GR-сигнал не выявлен."
+    if is_support_context_value and not support_applicability.is_applicable:
+        return support_applicability.reason or "Регион вне фокуса AHSTEP; документ сохранён справочно."
     if _has_krasnodar_support_order_signal(
         source_name=source_name,
         url=url,

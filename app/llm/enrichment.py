@@ -30,6 +30,7 @@ from app.rules.deadline_truth import (
     is_deadline_today,
     parse_deadline_date,
 )
+from app.rules.ahstep_applicability import evaluate_support_measure_applicability
 
 LOGGER = logging.getLogger(__name__)
 
@@ -41,6 +42,7 @@ TARGET_REGIONS = {
     "rostov": "Ростовская область",
     "krasnodar": "Краснодарский край",
     "stavropol": "Ставропольский край",
+    "moscow_oblast": "Московская область",
 }
 LLM_PROVIDER_ERROR_SNIPPET_CHARS = 600
 LLM_RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
@@ -1338,6 +1340,9 @@ def get_display_enrichment(
     if error and status != "fallback":
         return None
     facts = _parse_facts_from_row(enrichment_row)
+    row_prompt_version = str(enrichment_row.get("prompt_version") or "").strip()
+    if facts and row_prompt_version and row_prompt_version != DOCUMENT_CARD_PROMPT_VERSION:
+        return None
     confidence = enrichment_row.get("confidence")
     confidence_score = (
         CONFIDENCE_TO_SCORE.get(str(facts.get("confidence") or "").strip().lower(), 0.0)
@@ -1862,6 +1867,27 @@ def _harden_facts(
         hardened.region = TARGET_REGIONS.get(region.lower(), region)
     if not hardened.authority and source_name:
         hardened.authority = source_name
+    applicability = evaluate_support_measure_applicability(
+        title=getattr(analysis, "normalized_title", None) or "",
+        raw_text=raw_text,
+        source_name=source_name,
+        url=url,
+        level=None,
+        region=region,
+        source_role=get_source_role(source_name),
+        page_type=analysis.page_type,
+    )
+    if not applicability.is_applicable:
+        if applicability.detected_region:
+            hardened.region = applicability.detected_region
+        hardened.applicability_note = (
+            "Регион вне фокуса AHSTEP; документ сохранён справочно."
+        )
+        if applicability.has_low_relevance_signal:
+            hardened.why_matters = (
+                "Мера относится к региональной или тематически нерелевантной поддержке "
+                "вне текущего фокуса AHSTEP."
+            )
     if not hardened.applicability_note:
         hardened.applicability_note = fallback_provider._build_applicability_note(
             region=region

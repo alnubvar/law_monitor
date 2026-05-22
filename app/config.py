@@ -127,6 +127,22 @@ def _get_env_int_set(name: str) -> frozenset[int]:
     return frozenset(values)
 
 
+def _get_env_str_tuple(name: str, default: str) -> tuple[str, ...]:
+    raw_value = _get_env_str(name, default)
+    values: list[str] = []
+    seen: set[str] = set()
+    for chunk in raw_value.split(","):
+        candidate = " ".join(chunk.split()).strip()
+        if not candidate:
+            continue
+        key = candidate.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        values.append(candidate)
+    return tuple(values)
+
+
 def _get_env_time_list(name: str) -> tuple[time, ...]:
     raw_value = _get_env_str(name)
     if not raw_value:
@@ -261,6 +277,10 @@ SCHEDULER_HOURLY_INTERVAL_MINUTES = _get_env_int(
     min_value=1,
 )
 SCHEDULER_COLLECTION_TIMES = _get_env_time_list("LAW_MONITOR_COLLECTION_TIMES")
+AHSTEP_TARGET_REGIONS = _get_env_str_tuple(
+    "AHSTEP_TARGET_REGIONS",
+    "Россия,РФ,федеральный,Ростовская область,Краснодарский край,Ставропольский край,Московская область",
+)
 DEFAULT_REQUEST_HEADERS = {"User-Agent": USER_AGENT}
 
 

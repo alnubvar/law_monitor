@@ -1,0 +1,14 @@
+{
+  "id": "promote_generic_all_russia_noise",
+  "source_name": "promote.budget.gov.ru / Минфин - отборы и меры поддержки",
+  "source_role": "active_support_measures",
+  "expected_source_role": "active_support_measures",
+  "level": "support_measures",
+  "region": "federal",
+  "title": "Субсидия на проведение сельского праздника",
+  "url": "https://promote.budget.gov.ru/public/minfin/selection/view/generic-noise",
+  "raw_text": "title: Субсидия на проведение сельского праздника\npppItemName: Администрация сельского поселения Калужской области\nАктивная мера поддержки.\nПрием заявок открыт до 23.05.2026.",
+  "expected_action_level": "background",
+  "expected_not_action_level": "requires_attention",
+  "expected_page_type": "selection_announcement"
+}

@@ -1,0 +1,14 @@
+{
+  "id": "promote_nao_reindeer_subsidy",
+  "source_name": "promote.budget.gov.ru / Минфин - отборы и меры поддержки",
+  "source_role": "active_support_measures",
+  "expected_source_role": "active_support_measures",
+  "level": "support_measures",
+  "region": "federal",
+  "title": "Отбор получателей субсидий производителям продукции сельского хозяйства в целях возмещения части затрат по сохранению поголовья северных оленей",
+  "url": "https://promote.budget.gov.ru/public/minfin/selection/view/reindeer",
+  "raw_text": "title: Отбор получателей субсидий производителям продукции сельского хозяйства в целях возмещения части затрат по сохранению поголовья северных оленей\npppItemName: Департамент природных ресурсов, экологии и агропромышленного комплекса Ненецкого автономного округа\nАктивная мера поддержки.\nПрием заявок открыт до 23.05.2026.",
+  "expected_action_level": "irrelevant",
+  "expected_not_action_level": "requires_attention",
+  "expected_page_type": "selection_announcement"
+}

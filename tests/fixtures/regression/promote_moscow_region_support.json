@@ -1,0 +1,13 @@
+{
+  "id": "promote_moscow_region_support",
+  "source_name": "promote.budget.gov.ru / Минфин - отборы и меры поддержки",
+  "source_role": "active_support_measures",
+  "expected_source_role": "active_support_measures",
+  "level": "support_measures",
+  "region": "federal",
+  "title": "Субсидии на возмещение части затрат сельхозтоваропроизводителям",
+  "url": "https://promote.budget.gov.ru/public/minfin/selection/view/moscow-region-support",
+  "raw_text": "title: Субсидии на возмещение части затрат сельхозтоваропроизводителям\npppItemName: Министерство сельского хозяйства и продовольствия Московской области\nАктивная мера поддержки.\nПрием заявок открыт до 23.05.2026.",
+  "expected_action_level": "requires_attention",
+  "expected_page_type": "selection_announcement"
+}

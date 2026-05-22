@@ -1,0 +1,13 @@
+{
+  "id": "promote_stavropol_support",
+  "source_name": "promote.budget.gov.ru / Минфин - отборы и меры поддержки",
+  "source_role": "active_support_measures",
+  "expected_source_role": "active_support_measures",
+  "level": "support_measures",
+  "region": "federal",
+  "title": "Отбор на предоставление субсидий на развитие сельского хозяйства",
+  "url": "https://promote.budget.gov.ru/public/minfin/selection/view/stavropol-support",
+  "raw_text": "title: Отбор на предоставление субсидий на развитие сельского хозяйства\npppItemName: Министерство сельского хозяйства Ставропольского края\nАктивная мера поддержки.\nПрием заявок открыт до 23.05.2026.",
+  "expected_action_level": "requires_attention",
+  "expected_page_type": "selection_announcement"
+}

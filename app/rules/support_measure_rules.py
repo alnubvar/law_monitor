@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.rules.ahstep_applicability import TARGET_REGION_CODES
 from app.models import SourceRole
 
 GENERIC_SUPPORT_TITLES = {
@@ -39,7 +40,7 @@ SUPPORT_LISTING_URL_MARKERS = (
     "/gospodderzhka/",
     "/subsidii/",
 )
-TARGET_REGIONS = {"federal", "rostov", "krasnodar", "stavropol"}
+TARGET_REGIONS = set(TARGET_REGION_CODES)
 IMPORTANT_FEDERAL_PERMANENT_MEASURE_MARKERS = (
     "льготное кредитование",
     "транспортировка товаров апк",
@@ -162,13 +163,9 @@ def is_target_region(
     combined = f"{title} {source_name or ''} {url or ''}".lower()
     return any(
         marker in combined
-        for marker in (
-            "ростов",
-            "краснодар",
-            "ставрополь",
-            "донланд",
-            "кубан",
-        )
+        for code, markers in TARGET_REGION_CODES.items()
+        if code != "federal"
+        for marker in markers
     )
 
 

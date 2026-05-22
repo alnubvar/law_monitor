@@ -11,6 +11,7 @@ from app.rules.ahstep_domain_rules import (
     has_ahstep_domain_relevance,
     should_apply_ahstep_domain_gate,
 )
+from app.rules.ahstep_applicability import evaluate_support_measure_applicability
 from app.rules.news_background_guard import guard_news_signal_action_level
 from app.user_facing import is_weak_ocr_placeholder_document
 
@@ -30,6 +31,7 @@ TARGET_REGION_MARKERS: dict[str, tuple[str, ...]] = {
     "rostov": ("ростов", "донланд", "ростовской области"),
     "krasnodar": ("краснодар", "кубани", "кубан", "краснодарского края"),
     "stavropol": ("ставрополь", "ставропольского края"),
+    "moscow_oblast": ("московская область", "московской области", "подмосковье"),
 }
 GLOBAL_MARKERS = (
     "мексик",
@@ -102,6 +104,12 @@ def effective_user_action_level(document: RawDocument) -> str | None:
     )
     if _is_ahstep_domain_excluded(document, action_level=guarded_action_level):
         return "background"
+    applicability = _support_measure_applicability(document)
+    if (
+        guarded_action_level in {"requires_attention", "watchlist"}
+        and not applicability.is_applicable
+    ):
+        return applicability.recommended_action_level or "background"
     if (
         guarded_action_level == "requires_attention"
         and is_weak_ocr_placeholder_document(document)
@@ -330,6 +338,9 @@ def _is_support_reference_document(document: RawDocument) -> bool:
 
 
 def _detect_geo_scope(document: RawDocument) -> str:
+    applicability = _support_measure_applicability(document)
+    if not applicability.is_applicable:
+        return "non_target_rf"
     target_text = " ".join(
         part
         for part in (
@@ -349,7 +360,7 @@ def _detect_geo_scope(document: RawDocument) -> str:
         if part
     )
 
-    if document.region in {"rostov", "krasnodar", "stavropol"}:
+    if document.region in {"rostov", "krasnodar", "stavropol", "moscow_oblast"}:
         return "target_region"
     for markers in TARGET_REGION_MARKERS.values():
         if any(marker in target_text for marker in markers):
@@ -361,6 +372,19 @@ def _detect_geo_scope(document: RawDocument) -> str:
     if document.region == "federal":
         return "federal_rf"
     return "non_target_rf"
+
+
+def _support_measure_applicability(document: RawDocument):
+    return evaluate_support_measure_applicability(
+        title=document.title,
+        raw_text=document.raw_text or "",
+        source_name=document.source_name,
+        url=document.url,
+        level=document.level,
+        region=document.region,
+        source_role=get_source_role(document.source_name),
+        page_type=document.page_type,
+    )
 
 
 def _user_facing_dedup_key(document: RawDocument) -> str:
