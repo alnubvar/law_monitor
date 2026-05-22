@@ -15,7 +15,8 @@ AHSTEP `law_monitor` — backend-система GR-мониторинга для
   `watchlist`, `background`, `irrelevant`);
 - генерирует ежедневный markdown-отчёт для GR-команды;
 - отправляет ежедневную сводку approved пользователям в личные Telegram-чаты
-  (короткое сообщение + полный отчёт во вложении `.txt`);
+  (короткое сообщение + полный отчёт во вложении `.docx` для удобного
+  редактирования);
 - хранит историю в локальной SQLite БД.
 
 Классификация документов выполняется детерминированными правилами.
@@ -286,7 +287,7 @@ Restore-скрипт сам блокируется, если сервисы ак
 10. IT/владелец вручную запустили `telegram-check` — пришло тестовое сообщение.
 11. IT/владелец вручную запустили `run-scheduler --once` — успешно.
 12. Включены systemd сервисы.
-13. На следующее утро в `LAW_MONITOR_DAILY_REPORT_HOUR` daily digest пришёл в личные чаты approved users/admins.
+13. На следующее утро в `LAW_MONITOR_DAILY_REPORT_HOUR` daily digest пришёл в личные чаты approved users/admins с `.docx`-вложением.
 14. Создан первый production backup БД.
 
 ## 13. Что делать при сбоях
@@ -353,7 +354,13 @@ API-ключ и proxy credentials в логах редактируются — �
 Автоматические urgent-алерты можно включить позднее через
 `TELEGRAM_URGENT_ALERTS_ENABLED=true`, если business owner попросит immediate
 notifications. По умолчанию production schedule тихий: urgent/requires_attention
-остаются в daily digest, `/urgent` и `/report`.
+остаются в daily digest и `/report`. Отдельная кнопка «Срочное» не показывается.
+
+Markdown `.md` остаётся серверным и архивным форматом отчёта. Telegram-вложения
+для daily digest и ручного `/report` отправляются как `.docx`; `.txt` больше не
+является основным форматом вложения. Видимое меню команд Telegram содержит
+только `/start`, `/myid`, `/help`, `/report`, `/refresh`; поиск доступен через
+нижнюю кнопку «🔎 Поиск».
 
 Полная инструкция корпоративного развёртывания —
 [CORPORATE_DEPLOYMENT.md](CORPORATE_DEPLOYMENT.md). Операторская рутина —

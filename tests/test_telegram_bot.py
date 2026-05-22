@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 from datetime import datetime, timedelta, timezone
 
 import requests
+from docx import Document as DocxDocument
 
 from app.models import RawDocument
 from app.notify import telegram_bot
@@ -114,9 +115,7 @@ class TelegramBotTest(unittest.TestCase):
                     {"command": "start", "description": "открыть меню"},
                     {"command": "myid", "description": "мой Telegram ID"},
                     {"command": "help", "description": "помощь"},
-                    {"command": "urgent", "description": "требует внимания"},
                     {"command": "report", "description": "последний отчет"},
-                    {"command": "search", "description": "поиск по архиву"},
                     {"command": "refresh", "description": "обновить данные"},
                 ]
             },
@@ -126,12 +125,16 @@ class TelegramBotTest(unittest.TestCase):
         payload = telegram_bot.build_reply_keyboard_payload()
 
         keyboard = payload["keyboard"]
-        self.assertEqual(keyboard[0][0]["text"], "🚨 Срочное")
-        self.assertEqual(keyboard[0][1]["text"], "📄 Отчёт")
+        self.assertEqual([[button["text"] for button in row] for row in keyboard], [
+            ["📄 Отчёт"],
+            ["🔎 Поиск", "🔄 Обновить"],
+            ["ℹ️ Помощь"],
+        ])
         self.assertEqual(keyboard[1][0]["text"], "🔎 Поиск")
         self.assertEqual(keyboard[1][1]["text"], "🔄 Обновить")
         self.assertEqual(keyboard[2][0]["text"], "ℹ️ Помощь")
         flattened = [button["text"] for row in keyboard for button in row]
+        self.assertNotIn("🚨 Срочное", flattened)
         self.assertNotIn("📊 Статус", flattened)
         self.assertNotIn("👀 Наблюдение", flattened)
         self.assertNotIn("📅 Сегодня", flattened)
@@ -184,7 +187,6 @@ class TelegramBotTest(unittest.TestCase):
 
     def test_all_reply_keyboard_buttons_dispatch_to_slash_handlers(self) -> None:
         cases = {
-            "🚨 Срочное": "/urgent",
             "📄 Отчёт": "/report",
             "ℹ️ Помощь": "/help",
         }
@@ -197,6 +199,10 @@ class TelegramBotTest(unittest.TestCase):
                 build.assert_called_once_with(expected_command, db_path=None, default_days=7, chat_id=None)
         self.assertEqual(telegram_bot.dispatch_input_text("🔎 Поиск").command, "/search")
         self.assertEqual(telegram_bot.dispatch_input_text("🔄 Обновить").command, "/refresh")
+        self.assertEqual(
+            telegram_bot.dispatch_input_text("/urgent").response_text,
+            telegram_bot.HIDDEN_URGENT_COMMAND_MESSAGE,
+        )
 
     def test_unknown_command_returns_help_hint(self) -> None:
         result = telegram_bot.dispatch_input_text("/unknown")
@@ -292,7 +298,7 @@ class TelegramBotTest(unittest.TestCase):
         self.assertIn("Username: @petrov", text)
         self.assertIn("доступ пока не выдан", text)
 
-    def test_allowed_private_user_can_access_normal_command(self) -> None:
+    def test_allowed_private_user_gets_hidden_urgent_redirect(self) -> None:
         db_path = self._offset_path("telegram_access_allowed.db")
         init_db(db_path)
         upsert_telegram_allowed_user(2001, db_path=db_path)
@@ -310,13 +316,12 @@ class TelegramBotTest(unittest.TestCase):
             TELEGRAM_ADMIN_USER_IDS=frozenset(),
             TELEGRAM_ALLOWED_USER_IDS=frozenset(),
         ):
-            with patch("app.notify.telegram_bot.build_command_response", return_value="urgent ok") as build:
+            with patch("app.notify.telegram_bot.build_command_response") as build:
                 with patch("app.notify.telegram_bot._send_response", return_value=True) as send_response:
                     telegram_bot._process_update(update, db_path=str(db_path), proxies=None)
 
-        build.assert_called_once()
-        self.assertEqual(build.call_args.args[0], "/urgent 7")
-        self.assertEqual(send_response.call_args.kwargs["text"], "urgent ok")
+        build.assert_not_called()
+        self.assertEqual(send_response.call_args.kwargs["text"], telegram_bot.HIDDEN_URGENT_COMMAND_MESSAGE)
 
     def test_admin_can_add_user(self) -> None:
         db_path = self._offset_path("telegram_admin_add.db")
@@ -502,8 +507,8 @@ class TelegramBotTest(unittest.TestCase):
         response = Mock()
         response.raise_for_status.return_value = None
         response.json.return_value = {"ok": True, "result": {"message_id": 1}}
-        report_path = self._offset_path("gr_monitoring_2026-05-05_7d.txt")
-        report_path.write_text("report", encoding="utf-8")
+        report_path = self._offset_path("gr_monitoring_2026-05-05_7d.docx")
+        report_path.write_bytes(b"docx")
 
         update = {"update_id": 1, "message": {"chat": {"id": 123}, "text": "/report"}}
         with patch.multiple(telegram_bot.config, TELEGRAM_CHAT_ID="123", TELEGRAM_BOT_TOKEN="token"):
@@ -517,11 +522,12 @@ class TelegramBotTest(unittest.TestCase):
         post.assert_called_once()
         self.assertIn("/sendDocument", post.call_args.args[0])
         sent_document = post.call_args.kwargs["files"]["document"]
-        self.assertTrue(sent_document[0].endswith(".txt"))
+        self.assertTrue(sent_document[0].endswith(".docx"))
+        self.assertEqual(sent_document[2], telegram_bot.DOCX_MIME_TYPE)
 
     def test_service_attachment_notice_is_sent_without_default_keyboard(self) -> None:
-        report_path = self._offset_path("gr_monitoring_attachment_notice.txt")
-        report_path.write_text("report", encoding="utf-8")
+        report_path = self._offset_path("gr_monitoring_attachment_notice.docx")
+        report_path.write_bytes(b"docx")
         response = Mock()
         response.raise_for_status.return_value = None
         response.json.return_value = {"ok": True, "result": {"message_id": 1}}
@@ -558,13 +564,18 @@ class TelegramBotTest(unittest.TestCase):
             str(send_response.call_args_list[-1]),
         )
 
-    def test_markdown_to_plain_text_removes_headings(self) -> None:
-        markdown = "# Заголовок\n\n## Блок\n### Пункт\n- строка\n"
-        plain = telegram_bot._markdown_to_plain_text(markdown)
-        self.assertNotIn("#", plain)
-        self.assertIn("Заголовок", plain)
-        self.assertIn("Блок", plain)
-        self.assertIn("Пункт", plain)
+    def test_manual_report_attachment_is_docx_with_readable_content(self) -> None:
+        markdown = "# Заголовок\n\n## Блок\n### Пункт\n- строка\nИсточник: https://example.com\n"
+        path = self._offset_path("manual_report_readable.docx")
+        created = telegram_bot.create_docx_from_markdown(markdown, path)
+
+        self.assertEqual(created.suffix, ".docx")
+        text = "\n".join(paragraph.text for paragraph in DocxDocument(created).paragraphs)
+        self.assertIn("Заголовок", text)
+        self.assertIn("Блок", text)
+        self.assertIn("Пункт", text)
+        self.assertIn("строка", text)
+        self.assertIn("https://example.com", text)
 
     def test_refresh_starts_pipeline_if_allowed(self) -> None:
         mock_lock = Mock()
@@ -653,18 +664,13 @@ class TelegramBotTest(unittest.TestCase):
 
     def test_period_reply_buttons_resolve_before_default_period_lookup(self) -> None:
         db_path = self._offset_path("telegram_period_buttons.db")
-        cases = {
-            "🚨 Срочное": "/urgent 7",
-        }
+        update = {"update_id": 1, "message": {"chat": {"id": 123}, "text": "🚨 Срочное"}}
         with patch.multiple(telegram_bot.config, TELEGRAM_CHAT_ID="123"):
-            for button_text, expected_text in cases.items():
-                with self.subTest(button=button_text):
-                    update = {"update_id": 1, "message": {"chat": {"id": 123}, "text": button_text}}
-                    with patch("app.notify.telegram_bot._send_response", return_value=True):
-                        with patch("app.notify.telegram_bot._send_report_attachment", return_value=True):
-                            with patch("app.notify.telegram_bot.build_command_response", return_value="ok") as build:
-                                telegram_bot._process_update(update, db_path=str(db_path), proxies=None)
-                    self.assertEqual(build.call_args.args[0], expected_text)
+            with patch("app.notify.telegram_bot._send_response", return_value=True) as send_response:
+                with patch("app.notify.telegram_bot.build_command_response") as build:
+                    telegram_bot._process_update(update, db_path=str(db_path), proxies=None)
+        build.assert_not_called()
+        self.assertEqual(send_response.call_args.kwargs["text"], telegram_bot.HIDDEN_URGENT_COMMAND_MESSAGE)
 
     def test_search_button_prompts_and_next_message_searches_archive(self) -> None:
         telegram_bot._pending_search_chats.clear()
@@ -762,7 +768,8 @@ class TelegramBotTest(unittest.TestCase):
         path = telegram_bot._build_period_report_attachment(days=30, db_path=str(db_path))
         self.assertIsNotNone(path)
         assert path is not None
-        content = path.read_text(encoding="utf-8")
+        self.assertEqual(path.suffix, ".docx")
+        content = "\n".join(paragraph.text for paragraph in DocxDocument(path).paragraphs)
         self.assertIn("Период: последние 30 дней", content)
         path.unlink(missing_ok=True)
 
@@ -773,7 +780,8 @@ class TelegramBotTest(unittest.TestCase):
         path = telegram_bot._build_period_report_attachment(days=7, db_path=str(db_path))
         self.assertIsNotNone(path)
         assert path is not None
-        content = path.read_text(encoding="utf-8")
+        self.assertEqual(path.suffix, ".docx")
+        content = "\n".join(paragraph.text for paragraph in DocxDocument(path).paragraphs)
         self.assertIn("Период: последние 7 дней", content)
         path.unlink(missing_ok=True)
 
@@ -791,6 +799,8 @@ class TelegramBotTest(unittest.TestCase):
         self.assertNotEqual(first, second)
         self.assertTrue(first.exists())
         self.assertTrue(second.exists())
+        self.assertEqual(first.suffix, ".docx")
+        self.assertEqual(second.suffix, ".docx")
         first.unlink(missing_ok=True)
         second.unlink(missing_ok=True)
 
@@ -815,7 +825,7 @@ class TelegramBotTest(unittest.TestCase):
         path = telegram_bot._build_period_report_attachment(command_text="/report yesterday", db_path=str(db_path))
         self.assertIsNotNone(path)
         assert path is not None
-        content = path.read_text(encoding="utf-8")
+        content = "\n".join(paragraph.text for paragraph in DocxDocument(path).paragraphs)
         yesterday_label = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%d.%m.%Y")
         self.assertIn(f"Период: вчера, {yesterday_label}", content)
         path.unlink(missing_ok=True)

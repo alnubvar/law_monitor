@@ -125,8 +125,11 @@ sudo -u ahstep bash -lc 'cd /opt/ahstep/law_monitor && set -a && . /etc/ahstep-l
 ## Управление доступом к личному Telegram-боту
 
 Нормальная корпоративная модель — каждый approved сотрудник пишет боту в
-личный чат, пользуется `/report`, `/urgent`, кнопками и получает daily digest
-лично. Общий групповой чат не требуется.
+личный чат, пользуется `/report`, `/refresh`, кнопками и получает daily digest
+лично. Видимое меню команд содержит только `/start`, `/myid`, `/help`,
+`/report`, `/refresh`; поиск доступен через нижнюю кнопку «🔎 Поиск». Срочные
+пункты включены в основной отчёт, отдельная кнопка «Срочное» не показывается.
+Общий групповой чат не требуется.
 
 `TELEGRAM_CHAT_ID` остается optional legacy/fallback destination для scheduled
 delivery, если бизнесу нужен дополнительный общий адрес. Он не является списком
@@ -172,6 +175,10 @@ Inactive/removed users и unknown users не получают отчеты и sc
 Если отправка одному получателю не прошла, scheduler логирует сбой безопасно и
 продолжает отправку остальным.
 
+Серверный отчёт сохраняется в `.md` как архивный формат. Telegram daily digest
+и ручной `/report` отправляют редактируемый `.docx`-файл для business users;
+`.txt` больше не является основным форматом Telegram-вложения.
+
 ## Production schedule и ночная тишина
 
 Рекомендуемый режим:
@@ -186,7 +193,7 @@ Scheduler и Telegram bot остаются отдельными systemd-серв
 тихо собирает и анализирует данные в 08:30, 12:00 и 18:00; daily digest
 отправляется в 09:00. Автоматические urgent-алерты на каждом цикле выключены,
 но документы продолжают классифицироваться, сохраняться и попадать в daily
-digest, `/urgent` и `/report`.
+digest и `/report`.
 
 `LAW_MONITOR_HOURLY_INTERVAL_MINUTES` сохранен как compatibility fallback,
 если `LAW_MONITOR_COLLECTION_TIMES` пустой. Immediate urgent notifications

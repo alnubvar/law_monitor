@@ -12,6 +12,8 @@ from app.reports.markdown_report import (
     classify_document_bucket,
     generate_markdown_report,
 )
+from app.reports.docx_report import create_docx_from_markdown
+from docx import Document as DocxDocument
 from app.storage import init_db, save_document_enrichment
 from app.llm.enrichment import DocumentCardFacts, EnrichmentResult
 
@@ -178,6 +180,26 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         )
         self.assertIn("Почему важно:", markdown)
         self.assertNotIn("Action level", markdown)
+
+    def test_docx_export_keeps_markdown_content_readable(self) -> None:
+        output_path = self._db_path("report_export.docx")
+        markdown = (
+            "# Главный отчет\n\n"
+            "## Раздел\n\n"
+            "### Подраздел\n\n"
+            "- Пункт для GR\n"
+            "Источник: [пример](https://example.com/report)\n"
+        )
+
+        created = create_docx_from_markdown(markdown, output_path)
+
+        self.assertTrue(created.exists())
+        text = "\n".join(paragraph.text for paragraph in DocxDocument(created).paragraphs)
+        self.assertIn("Главный отчет", text)
+        self.assertIn("Раздел", text)
+        self.assertIn("Подраздел", text)
+        self.assertIn("Пункт для GR", text)
+        self.assertIn("https://example.com/report", text)
 
     def test_report_uses_enrichment_when_available(self) -> None:
         db_path = self._db_path("report_enrichment.db")

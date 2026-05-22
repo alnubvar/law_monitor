@@ -222,14 +222,15 @@ class SchedulerAutonomyTest(unittest.TestCase):
         try:
             with patch.object(scheduler, "_install_shutdown_handlers"):
                 with patch.object(scheduler, "run_hourly_cycle") as hourly:
-                    with patch.object(scheduler, "_daily_digest_due", return_value=False):
-                        with patch.object(scheduler, "_interruptible_sleep") as interruptible:
-                            def _stop(*_args, **_kwargs):
-                                scheduler._shutdown_event.set()
-                                return True
+                    with patch.object(scheduler, "SCHEDULER_COLLECTION_TIMES", ()):
+                        with patch.object(scheduler, "_daily_digest_due", return_value=False):
+                            with patch.object(scheduler, "_interruptible_sleep") as interruptible:
+                                def _stop(*_args, **_kwargs):
+                                    scheduler._shutdown_event.set()
+                                    return True
 
-                            interruptible.side_effect = _stop
-                            scheduler._run_loop_scheduler(days=3)
+                                interruptible.side_effect = _stop
+                                scheduler._run_loop_scheduler(days=3)
         finally:
             scheduler._shutdown_event.clear()
 

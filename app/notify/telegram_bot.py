@@ -16,6 +16,7 @@ import requests
 
 from app import config
 from app.notify.telegram import (
+    DOCX_MIME_TYPE,
     SEARCH_PROMPT_MESSAGE,
     TELEGRAM_COMMANDS,
     build_command_response,
@@ -33,6 +34,7 @@ from app.periods import (
     parse_period_spec,
 )
 from app.reports.markdown_report import generate_markdown_report
+from app.reports.docx_report import create_docx_from_markdown
 from app.run_lock import WriterLockHeldError, writer_lock
 from app.pipeline.analyze import run_analyze
 from app.pipeline.collect import run_collect
@@ -79,6 +81,7 @@ UNKNOWN_COMMAND_MESSAGE = (
     "Не понял команду 🤔\n\n"
     "Используй кнопки ниже или введи /help"
 )
+HIDDEN_URGENT_COMMAND_MESSAGE = "Срочные пункты включены в общий отчёт. Используйте /report."
 ACCESS_DENIED_TEMPLATE = (
     "Доступ к AHSTEP GR Monitor пока не выдан.\n"
     "Ваш Telegram ID: {user_id}\n"
@@ -96,13 +99,11 @@ BOT_COMMANDS: tuple[tuple[str, str], ...] = (
     ("start", "открыть меню"),
     ("myid", "мой Telegram ID"),
     ("help", "помощь"),
-    ("urgent", "требует внимания"),
     ("report", "последний отчет"),
-    ("search", "поиск по архиву"),
     ("refresh", "обновить данные"),
 )
 REPLY_KEYBOARD_LAYOUT: tuple[tuple[str, ...], ...] = (
-    ("🚨 Срочное", "📄 Отчёт"),
+    ("📄 Отчёт",),
     ("🔎 Поиск", "🔄 Обновить"),
     ("ℹ️ Помощь",),
 )
@@ -295,6 +296,8 @@ def dispatch_input_text(
         return DispatchResult(command=command, response_text=START_MESSAGE)
     if command == "/refresh":
         return DispatchResult(command=command, response_text="⏳ Обновление запущено...")
+    if command == "/urgent":
+        return DispatchResult(command=command, response_text=HIDDEN_URGENT_COMMAND_MESSAGE)
     if command == "/search" and not _has_command_arguments(text):
         return DispatchResult(command=command, response_text=SEARCH_PROMPT_MESSAGE)
     if command in TELEGRAM_COMMANDS:
@@ -797,12 +800,12 @@ def _send_report_attachment(
     prepared_path: Path | None = None,
 ) -> bool:
     resolved_command_text = command_text or f"/report {max(1, min(int(days or 7), 365))}"
-    txt_report_path = prepared_path or _build_period_report_attachment(
+    docx_report_path = prepared_path or _build_period_report_attachment(
         command_text=resolved_command_text,
         days=days,
         db_path=db_path,
     )
-    if txt_report_path is None or not txt_report_path.exists():
+    if docx_report_path is None or not docx_report_path.exists():
         return _send_response(
             chat_id=chat_id,
             text="Полный отчет временно недоступен, используйте краткую сводку выше",
@@ -824,11 +827,11 @@ def _send_report_attachment(
     try:
         for attempt in range(1, TELEGRAM_SEND_ATTEMPTS + 1):
             try:
-                with txt_report_path.open("rb") as document_file:
+                with docx_report_path.open("rb") as document_file:
                     response = requests.post(
                         url,
                         data={"chat_id": str(chat_id)},
-                        files={"document": (txt_report_path.name, document_file, "text/plain")},
+                        files={"document": (docx_report_path.name, document_file, DOCX_MIME_TYPE)},
                         timeout=timeout,
                         proxies=proxies,
                     )
@@ -855,23 +858,9 @@ def _send_report_attachment(
         )
     finally:
         try:
-            txt_report_path.unlink(missing_ok=True)
+            docx_report_path.unlink(missing_ok=True)
         except Exception:
-            logger.warning("Failed to remove temporary txt report: %s", txt_report_path)
-
-
-def _markdown_to_plain_text(text: str) -> str:
-    lines: list[str] = []
-    for raw_line in text.splitlines():
-        line = re.sub(r"^\s*#{1,6}\s*", "", raw_line)
-        line = line.replace("### ", "")
-        line = line.replace("**", "")
-        line = line.replace("__", "")
-        line = re.sub(r"^\s*-\s+", "- ", line)
-        lines.append(line.rstrip())
-    normalized = "\n".join(lines)
-    normalized = re.sub(r"\n{3,}", "\n\n", normalized).strip()
-    return normalized + "\n"
+            logger.warning("Failed to remove temporary docx report: %s", docx_report_path)
 
 
 def _resolve_period_command_text(
@@ -974,7 +963,7 @@ def _build_period_report_attachment(
                     period_context_lines.append("Сегодня новых срочных документов нет.")
                     if summary["requires_attention"] > 0:
                         period_context_lines.append(
-                            f"Активные срочные вопросы за последние 14 дней: {summary['requires_attention']}. Откройте 🚨 Срочное."
+                            f"Активные срочные вопросы за последние 14 дней: {summary['requires_attention']}. Используйте 📄 Отчёт."
                         )
             markdown = generate_markdown_report(
                 documents,
@@ -986,14 +975,12 @@ def _build_period_report_attachment(
                 source_errors=source_errors,
                 db_path=resolved_db_path,
             )
-            txt_content = _markdown_to_plain_text(markdown)
             timestamp = datetime.now(config.SCHEDULER_TIMEZONE).strftime("%Y-%m-%d")
             suffix = uuid.uuid4().hex[:8]
             attachment_dir = config.TMP_DIR / "telegram_attachments"
             attachment_dir.mkdir(parents=True, exist_ok=True)
-            txt_path = attachment_dir / f"gr_monitoring_{timestamp}_{period.kind}_{period.days}d_{suffix}.txt"
-            txt_path.write_text(txt_content, encoding="utf-8")
-            return txt_path
+            docx_path = attachment_dir / f"gr_monitoring_{timestamp}_{period.kind}_{period.days}d_{suffix}.docx"
+            return create_docx_from_markdown(markdown, docx_path)
     except WriterLockHeldError:
         logger.info("Report attachment skipped because another write operation is running.")
         return None

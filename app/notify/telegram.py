@@ -39,6 +39,7 @@ from app.user_facing import (
     user_facing_title,
 )
 from app.pipeline.diagnostics import build_diagnostics_snapshot
+from app.reports.docx_report import create_docx_from_markdown_file
 from app.reports.markdown_report import select_visible_report_documents
 from app.storage import (
     create_tracking_item,
@@ -67,6 +68,7 @@ TELEGRAM_URL_TOKEN_RE = re.compile(r"(https://api\.telegram\.org/bot)[^/\s]+", r
 
 TELEGRAM_SEND_ATTEMPTS = 3
 TELEGRAM_RETRY_BACKOFF_SECONDS = 1.0
+DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 TELEGRAM_COMMANDS = (
     "/status",
     "/today",
@@ -271,10 +273,12 @@ def send_daily_report_digest(
             lines.extend(format_operational_notices_telegram(notices))
         text = "\n".join(lines)
 
-    if report_path is not None:
-        text = f"{text}\n\nПолная версия отчета — во вложении."
-
     attachment_path = _prepare_daily_report_attachment(Path(report_path)) if report_path is not None else None
+    if attachment_path is not None:
+        text = f"{text}\n\nПолная версия отчета — во вложении."
+    elif report_path is not None:
+        text = f"{text}\n\nПолный отчет временно недоступен, используйте краткую сводку выше."
+
     recipients = get_daily_digest_recipients(db_path=db_path)
     if not recipients:
         logger.info("No Telegram daily digest recipients configured. Skipping.")
@@ -354,13 +358,16 @@ def _send_daily_report_digest_to_recipient(
     return send_document_to_chat(chat_id=chat_id, path=attachment_path)
 
 
-def _prepare_daily_report_attachment(report_path: Path) -> Path:
-    txt_path = report_path.with_suffix(".txt")
+def _prepare_daily_report_attachment(report_path: Path) -> Path | None:
     if not report_path.exists():
-        return txt_path
-    content = report_path.read_text(encoding="utf-8-sig")
-    txt_path.write_text(content, encoding="utf-8-sig")
-    return txt_path
+        logger.warning("Daily report markdown path does not exist: %s", report_path.name)
+        return None
+    docx_path = report_path.with_suffix(".docx")
+    try:
+        return create_docx_from_markdown_file(report_path, docx_path)
+    except Exception:
+        logger.exception("Failed to prepare DOCX report attachment: %s", docx_path.name)
+        return report_path
 
 
 def send_document(path: Path | str) -> bool:
@@ -385,7 +392,7 @@ def send_document_to_chat(*, chat_id: str | int, path: Path | str) -> bool:
         return False
 
     proxies = _build_proxies()
-    mime_type = mimetypes.guess_type(document_path.name)[0] or "text/plain"
+    mime_type = _guess_document_mime_type(document_path)
     timeout = max(config.TELEGRAM_API_TIMEOUT + 5, 10)
     for attempt in range(1, TELEGRAM_SEND_ATTEMPTS + 1):
         try:
@@ -416,6 +423,12 @@ def send_document_to_chat(*, chat_id: str | int, path: Path | str) -> bool:
 
     logger.error("Telegram document send failed after %s attempts.", TELEGRAM_SEND_ATTEMPTS)
     return False
+
+
+def _guess_document_mime_type(document_path: Path) -> str:
+    if document_path.suffix.lower() == ".docx":
+        return DOCX_MIME_TYPE
+    return mimetypes.guess_type(document_path.name)[0] or "text/plain"
 
 
 def build_command_response(
@@ -564,7 +577,7 @@ def _build_today_message(db_path: Path | str) -> str:
         lines = ["Новых срочных документов сегодня нет."]
         if active_urgent_last_14_days > 0:
             lines.append(
-                f"Активные срочные вопросы за последние 14 дней: {active_urgent_last_14_days}. Откройте 🚨 Срочное."
+                f"Активные срочные вопросы за последние 14 дней: {active_urgent_last_14_days}. Используйте 📄 Отчёт."
             )
         return "\n".join(lines)
     enrichment_by_url = list_document_enrichments([document.url for document in today_documents], db_path=db_path)
@@ -578,7 +591,7 @@ def _build_today_message(db_path: Path | str) -> str:
         lines.append("Новых срочных документов сегодня нет.")
         if active_urgent_last_14_days > 0:
             lines.append(
-                f"Активные срочные вопросы за последние 14 дней: {active_urgent_last_14_days}. Откройте 🚨 Срочное."
+                f"Активные срочные вопросы за последние 14 дней: {active_urgent_last_14_days}. Используйте 📄 Отчёт."
             )
     else:
         lines.append(f"Требует внимания GR: {urgent_count}")
@@ -759,7 +772,7 @@ def _build_short_report_text(
             active_urgent_last_14_days = get_interface_summary(db_path=db_path, days=14)["requires_attention"]
             if active_urgent_last_14_days > 0:
                 lines.append(
-                    f"Активные срочные вопросы за последние 14 дней: {active_urgent_last_14_days}. Откройте 🚨 Срочное."
+                    f"Активные срочные вопросы за последние 14 дней: {active_urgent_last_14_days}. Используйте 📄 Отчёт."
                 )
         lines.append("")
     if operational_notices:
@@ -802,7 +815,7 @@ def _build_short_report_text(
             lines.append(f"  Источник: {document.url}")
         lines.append("")
 
-    lines.append("Полная версия отчета — во вложении .txt")
+    lines.append("Полная версия отчета — во вложении .docx")
     return "\n".join(lines).strip()
 
 
@@ -894,12 +907,15 @@ def _build_help_message() -> str:
                 "• отборы и субсидии",
                 "• отраслевые GR-сигналы",
                 "",
-                "Основные разделы:",
+                "Команды:",
                 "",
-                "🚨 Срочное — документы, требующие внимания",
-                "📄 Отчёт — ежедневная сводка и новые сигналы",
-                "🔎 Поиск — поиск по документам и мерам поддержки",
-                "🔄 Обновить — запустить проверку новых данных",
+                "/start — открыть меню",
+                "/myid — показать ваш Telegram ID",
+                "/report — ежедневная сводка и новые сигналы",
+                "/refresh — запустить проверку новых данных",
+                "",
+                "Поиск доступен через кнопку «🔎 Поиск».",
+                "Срочные пункты включены в общий отчет.",
                 "",
                 "Рекомендация:",
                 "начинайте работу с раздела «📄 Отчёт».",
@@ -973,7 +989,7 @@ def _build_track_message(
 
     document = get_document_by_url(normalized_url, db_path=db_path)
     if document is None:
-        return "⭐ Документ не найден в базе. Сначала запусти /refresh или найди его через /search."
+        return "⭐ Документ не найден в базе. Сначала запусти /refresh или найди его через кнопку «🔎 Поиск»."
 
     tracking_item_id = create_tracking_item(
         chat_id=chat_id,

@@ -51,13 +51,18 @@ Telegram bot token позволяет отправлять сообщения о
   в SQLite allowlist и управляются admin-командами бота.
 - Daily digest отправляется privately env-администраторам и active allowlist
   users; inactive/removed/unknown users не получают scheduled отчеты.
+- Telegram-вложения отчётов отправляются как редактируемые `.docx`; исходный
+  `.md` остаётся серверным/архивным форматом. `.txt` больше не является
+  основным Telegram-форматом вложения.
 - Unknown private users не получают отчеты, urgent/status/diagnostics или
   кнопки. Бот показывает им только Telegram ID и просьбу передать его
   администратору.
 - Не принимайте usernames как идентификаторы доступа: usernames могут меняться.
 - Для production используйте `TELEGRAM_URGENT_ALERTS_ENABLED=false`, чтобы
   collect/analyze работал тихо, а urgent/requires_attention попадали в daily
-  digest и manual bot commands. Immediate alerts можно включить позднее по
+  digest и `/report`. В видимом меню команд остаются только `/start`, `/myid`,
+  `/help`, `/report`, `/refresh`; поиск доступен через нижнюю кнопку «🔎 Поиск»,
+  отдельная кнопка «Срочное» не показывается. Immediate alerts можно включить позднее по
   решению business owner.
 - Используйте `TELEGRAM_PROXY_URL` только если это требуется corporate network policy.
 - Перезапускайте сервисы после изменения token, chat или proxy.

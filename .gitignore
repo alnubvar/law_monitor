@@ -27,6 +27,7 @@ node_modules/
 
 reports/*.md
 reports/*.txt
+reports/*.docx
 !reports/.gitkeep
 reports/review_exports/
 docs/demo_report.md

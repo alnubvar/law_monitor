@@ -32,6 +32,8 @@
 - [ ] `TELEGRAM_ADMIN_USER_IDS` содержит актуального env-администратора.
 - [ ] Approved users добавлены в личный allowlist; общий групповой чат не требуется.
 - [ ] `TELEGRAM_URGENT_ALERTS_ENABLED=false`.
+- [ ] Видимое меню Telegram содержит только `/start`, `/myid`, `/help`, `/report`, `/refresh`.
+- [ ] Нижняя клавиатура: `📄 Отчёт`; `🔎 Поиск` + `🔄 Обновить`; `ℹ️ Помощь`.
 - [ ] Telegram proxy задан только если он требуется.
 - [ ] LLM enrichment выключен, если owner/IT явно не согласовали включение.
 
@@ -51,6 +53,7 @@ sudo -u ahstep bash -lc 'cd /opt/ahstep/law_monitor && set -a && . /etc/ahstep-l
 - [ ] Unit tests проходят.
 - [ ] Smoke-check завершается успешно.
 - [ ] Report generation создает отчет в `/var/lib/ahstep-law-monitor/reports`.
+- [ ] Серверный отчёт остаётся `.md`; Telegram daily digest и ручной `/report` отправляют `.docx`, не `.txt`.
 - [ ] Diagnostics output просмотрен.
 - [ ] Source errors отсутствуют или объяснены.
 - [ ] Stale sources отсутствуют, ожидаемы или назначены IT/dev на follow-up.
@@ -64,9 +67,11 @@ messages или запускать live scheduled behavior:
 - [ ] `python main.py notify-test` проходит успешно, если owner хочет отдельный notification test.
 - [ ] Первый `python main.py run-scheduler --once` выполнен owner/IT.
 - [ ] Первый daily digest пришел в личные Telegram-чаты approved users/admins.
+- [ ] Вложение daily digest открывается как редактируемый Word `.docx`.
 - [ ] Telegram `/status` работает.
 - [ ] Telegram `/sources` работает.
 - [ ] Telegram `/report` работает.
+- [ ] Telegram search доступен через кнопку «🔎 Поиск»; отдельной кнопки «Срочное» нет.
 
 ## Backup и rollback
 

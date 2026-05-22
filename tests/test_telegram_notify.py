@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import requests
+from docx import Document as DocxDocument
 
 from app.models import RawDocument
 from app.notify import telegram
@@ -131,8 +132,10 @@ class TelegramNotifySmokeTest(unittest.TestCase):
     def test_daily_report_digest_sends_empty_state_and_attachment(self) -> None:
         report_path = Path("data/test_artifacts/gr_monitoring_2026-05-18.md")
         report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text("# Отчет\n\nКириллический текст отчета.", encoding="utf-8")
+        report_path.write_text("# Отчет\n\n## Раздел\n- Кириллический текст отчета.\nИсточник: https://example.com", encoding="utf-8")
+        docx_path = report_path.with_suffix(".docx")
         txt_path = report_path.with_suffix(".txt")
+        docx_path.unlink(missing_ok=True)
         txt_path.unlink(missing_ok=True)
 
         with patch("app.notify.telegram.collect_operational_notices", return_value=[]):
@@ -147,15 +150,37 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         self.assertIn("Полная версия отчета — во вложении.", message_text)
         self.assertNotIn("сервер", message_text.lower())
         self.assertNotIn("data/test_artifacts", message_text)
-        send_document.assert_called_once_with(chat_id="chat-id", path=txt_path)
+        send_document.assert_called_once_with(chat_id="chat-id", path=docx_path)
         self.assertTrue(report_path.exists())
-        self.assertTrue(txt_path.exists())
-        self.assertTrue(txt_path.read_bytes().startswith(b"\xef\xbb\xbf"))
-        self.assertEqual(
-            txt_path.read_text(encoding="utf-8-sig"),
-            report_path.read_text(encoding="utf-8"),
-        )
+        self.assertTrue(docx_path.exists())
+        self.assertFalse(txt_path.exists())
+        docx_text = "\n".join(paragraph.text for paragraph in DocxDocument(docx_path).paragraphs)
+        self.assertIn("Отчет", docx_text)
+        self.assertIn("Раздел", docx_text)
+        self.assertIn("Кириллический текст отчета.", docx_text)
+        self.assertIn("https://example.com", docx_text)
+        docx_path.unlink(missing_ok=True)
         txt_path.unlink(missing_ok=True)
+
+    def test_daily_report_digest_falls_back_to_markdown_if_docx_generation_fails(self) -> None:
+        report_path = Path("data/test_artifacts/gr_monitoring_docx_fallback.md")
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text("# Отчет\n\nТекст.", encoding="utf-8")
+        docx_path = report_path.with_suffix(".docx")
+        docx_path.unlink(missing_ok=True)
+
+        with patch("app.notify.telegram.collect_operational_notices", return_value=[]):
+            with patch("app.notify.telegram.create_docx_from_markdown_file", side_effect=RuntimeError("boom")):
+                with patch("app.notify.telegram.get_daily_digest_recipients", return_value=["chat-id"]):
+                    with patch("app.notify.telegram.send_message_to_chat", return_value=True):
+                        with patch("app.notify.telegram.send_document_to_chat", return_value=True) as send_document:
+                            with self.assertLogs("app.notify.telegram", level="ERROR"):
+                                sent = telegram.send_daily_report_digest([], report_path=report_path)
+
+        self.assertTrue(sent)
+        send_document.assert_called_once_with(chat_id="chat-id", path=report_path)
+        self.assertTrue(report_path.exists())
+        self.assertFalse(docx_path.exists())
 
     def test_daily_report_digest_recipients_include_admins_active_users_and_legacy_chat(self) -> None:
         db_path = self._db_path("daily_digest_recipients.db")
@@ -242,7 +267,9 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         report_path = Path("data/test_artifacts/gr_monitoring_digest_chat.md")
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text("# Отчет", encoding="utf-8")
+        docx_path = report_path.with_suffix(".docx")
         txt_path = report_path.with_suffix(".txt")
+        docx_path.unlink(missing_ok=True)
         txt_path.unlink(missing_ok=True)
 
         with patch.multiple(
@@ -261,6 +288,12 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         self.assertEqual(post.call_count, 2)
         self.assertEqual(post.call_args_list[0].kwargs["json"]["chat_id"], "digest-chat")
         self.assertEqual(post.call_args_list[1].kwargs["data"]["chat_id"], "digest-chat")
+        sent_document = post.call_args_list[1].kwargs["files"]["document"]
+        self.assertTrue(sent_document[0].endswith(".docx"))
+        self.assertEqual(sent_document[2], telegram.DOCX_MIME_TYPE)
+        self.assertTrue(docx_path.exists())
+        self.assertFalse(txt_path.exists())
+        docx_path.unlink(missing_ok=True)
         txt_path.unlink(missing_ok=True)
 
     def test_daily_report_digest_sends_visible_docs_as_daily_not_hourly(self) -> None:
@@ -288,17 +321,18 @@ class TelegramNotifySmokeTest(unittest.TestCase):
     def test_help_command_lists_supported_commands(self) -> None:
         text = telegram.build_command_response("/help")
 
-        self.assertIn("🚨 Срочное — документы, требующие внимания", text)
-        self.assertIn("📄 Отчёт — ежедневная сводка и новые сигналы", text)
-        self.assertIn("🔎 Поиск — поиск по документам и мерам поддержки", text)
-        self.assertIn("🔄 Обновить — запустить проверку новых данных", text)
+        self.assertIn("/start — открыть меню", text)
+        self.assertIn("/myid — показать ваш Telegram ID", text)
+        self.assertIn("/report — ежедневная сводка и новые сигналы", text)
+        self.assertIn("/refresh — запустить проверку новых данных", text)
+        self.assertIn("Поиск доступен через кнопку «🔎 Поиск».", text)
+        self.assertIn("Срочные пункты включены в общий отчет.", text)
         self.assertNotIn("/status", text)
         self.assertNotIn("/today", text)
         self.assertNotIn("/urgent", text)
         self.assertNotIn("/watchlist", text)
-        self.assertNotIn("/report", text)
         self.assertNotIn("/sources", text)
-        self.assertNotIn("/refresh", text)
+        self.assertNotIn("/search", text)
         self.assertNotIn("/ocr", text)
         self.assertNotIn("/track", text)
         self.assertNotIn("/untrack", text)
@@ -486,7 +520,7 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         text = telegram.build_command_response("/today", db_path=db_path)
 
         self.assertIn("Новых срочных документов сегодня нет.", text)
-        self.assertIn("Активные срочные вопросы за последние 14 дней: 1. Откройте 🚨 Срочное.", text)
+        self.assertIn("Активные срочные вопросы за последние 14 дней: 1. Используйте 📄 Отчёт.", text)
 
     def test_today_deduplicates_government_news_and_docs_pair(self) -> None:
         db_path = self._db_path("telegram_today_government_dedup.db")
@@ -919,7 +953,7 @@ class TelegramNotifySmokeTest(unittest.TestCase):
 
         self.assertIn("Период: сегодня,", text)
         self.assertIn("Сегодня новых срочных документов нет.", text)
-        self.assertIn("Активные срочные вопросы за последние 14 дней: 1. Откройте 🚨 Срочное.", text)
+        self.assertIn("Активные срочные вопросы за последние 14 дней: 1. Используйте 📄 Отчёт.", text)
 
     def test_watchlist_is_limited_for_user_and_has_tail_hint(self) -> None:
         db_path = self._db_path("telegram_watchlist_limit.db")

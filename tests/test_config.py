@@ -139,6 +139,11 @@ class ConfigSmokeTest(unittest.TestCase):
             self.assertFalse(reloaded.TELEGRAM_URGENT_ALERTS_ENABLED)
         importlib.reload(config_module)
 
+    def test_generated_report_docx_files_are_gitignored(self) -> None:
+        ignore_text = Path(".gitignore").read_text(encoding="utf-8")
+
+        self.assertIn("reports/*.docx", ignore_text)
+
     def test_persistent_path_env_vars_are_loaded(self) -> None:
         import app.config as config_module
 

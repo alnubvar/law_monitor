@@ -143,8 +143,15 @@ allowlist личных пользователей. Если владелец п�
 диалогов с ботом. После запуска активных пользователей следует добавлять и
 удалять командами администратора в Telegram, без изменения env и без рестарта.
 Нормальная корпоративная UX-модель — каждый approved user пишет боту в личном
-чате, пользуется `/report`, `/urgent`, кнопками и получает daily digest лично.
-Общий групповой чат не требуется.
+чате, пользуется `/report`, `/refresh`, кнопками и получает daily digest лично.
+Видимое меню команд содержит только `/start`, `/myid`, `/help`, `/report`,
+`/refresh`; поиск доступен через нижнюю кнопку «🔎 Поиск». Срочные пункты
+включены в основной отчёт, отдельная кнопка «Срочное» не показывается. Общий
+групповой чат не требуется.
+
+Отчёт на сервере сохраняется как `.md` — это архивный формат. Telegram daily
+digest и ручной `/report` отправляют редактируемое вложение `.docx` для
+business users; `.txt` больше не является основным Telegram-форматом.
 
 Daily digest отправляется всем env-администраторам из `TELEGRAM_ADMIN_USER_IDS`,
 всем активным пользователям из SQLite allowlist и, если задан, в legacy/fallback
@@ -171,6 +178,8 @@ owner попросит immediate notifications.
 - [ ] `TELEGRAM_ADMIN_USER_IDS` содержит хотя бы одного актуального администратора бота.
 - [ ] `TELEGRAM_ALLOWED_USER_IDS` пустой или содержит только первичных approved user IDs.
 - [ ] `TELEGRAM_URGENT_ALERTS_ENABLED=false` для тихого production schedule.
+- [ ] Видимое меню Telegram: `/start`, `/myid`, `/help`, `/report`, `/refresh`; поиск только через кнопку.
+- [ ] Telegram report attachments приходят как `.docx`, а серверный архив отчётов остаётся `.md`.
 - [ ] `TELEGRAM_PROXY_URL` пустой, если доступ к Telegram не требует proxy.
 - [ ] `TELEGRAM_OPERATOR_CHAT_ID` задан, если нужен отдельный канал для оперативных алертов (рекомендуется на production).
 - [ ] `LLM_ENRICHMENT_ENABLED=false` для первичного корпоративного handoff, если owner/IT явно не одобрили LLM enrichment.
