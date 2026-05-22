@@ -255,6 +255,19 @@ LLM failures должны деградировать только детализ
 deterministic `action_level`, report generation и Telegram sending должны
 продолжать работать через fallback.
 
+В нормальном production flow ручной `enrich-docs` не нужен. Если
+`LLM_DOCUMENT_ENRICHMENT_ENABLED=true`, enrichment запускается автоматически
+внутри `analyze` для новых документов, которые уже прошли deterministic rules
+и имеют `requires_attention` / `watchlist`. Ручной `python main.py enrich-docs`
+используется только как maintenance/debug operation:
+
+- после изменения prompt version;
+- после изменения схемы facts/cache;
+- для точечной проверки owner/debug-сценариев.
+
+Он не должен быть ежедневным production-шагом и не должен использоваться для
+исправления `action_level`: видимость и срочность определяются rules/gates.
+
 Отключение enrichment:
 
 ```bash

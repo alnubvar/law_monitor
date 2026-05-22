@@ -34,25 +34,38 @@ NON_TARGET_REGION_MARKERS = (
     "республики бурятия",
     "бурятия",
     "бурятии",
+    "орловская область",
+    "орловской области",
+    "орел",
+    "орле",
     "калужская область",
     "калужской области",
     "калуга",
 )
-LOW_RELEVANCE_SUPPORT_MARKERS = (
-    "северные олени",
-    "северных оленей",
-    "оленеводство",
-    "оленеводства",
-    "коренные малочисленные народы",
-    "коренных малочисленных народов",
-    "кмнс",
-    "семейные родовые общины",
-    "семейным родовым общинам",
-    "семейные (родовые) общины",
-    "семейным (родовым) общинам",
-    "ненецкий автономный округ",
-    "ненецкого автономного округа",
+SUPPORT_MEASURE_TEXT_MARKERS = (
+    "субсид",
+    "грант",
+    "компенсац",
+    "возмещен",
+    "возмещение",
+    "господдерж",
+    "мера поддержки",
+    "меры поддержки",
+    "отбор",
+    "прием заявок",
+    "приём заявок",
+    "порядок предоставления",
 )
+EXCLUDED_TOPIC_ALIASES = {
+    "рыбохозяйственный": ("рыбохозяйствен",),
+    "рыбохозяйственный комплекс": ("рыбохозяйствен",),
+    "рыболовство": ("рыболов",),
+    "рыбоводство": ("рыбовод",),
+    "северные олени": ("северн олен", "северных олен"),
+    "оленеводство": ("оленевод",),
+    "коренные малочисленные народы": ("коренных малочисленных народ", "малочисленн народ"),
+    "родовые общины": ("родовых общин", "родовые общин", "родовым общин"),
+}
 REGIONAL_AUTHORITY_RE = re.compile(
     r"\b(?:министерство|департамент|комитет|управление|администрация)\b.{0,260}?"
     r"\b(?:области|края|республики|автономного округа)\b",
@@ -60,6 +73,15 @@ REGIONAL_AUTHORITY_RE = re.compile(
 )
 FEDERAL_AUTHORITY_RE = re.compile(
     r"\b(?:российской федерации|рф|минсельхоз россии|правительство россии)\b",
+    re.IGNORECASE,
+)
+REGION_PHRASE_RE = re.compile(
+    r"\b(?:"
+    r"республик[аи]\s+[а-я]+"
+    r"|[а-я]+(?:ская|ской|цкая|цкой)\s+област[ьи]"
+    r"|[а-я]+(?:ский|ского|цкий|цкого)\s+кра[йя]"
+    r"|[а-я]+(?:ский|ского)\s+автономн(?:ый|ого)\s+округ(?:а)?"
+    r")\b",
     re.IGNORECASE,
 )
 
@@ -72,6 +94,7 @@ class ApplicabilityDecision:
     detected_region: str = ""
     is_non_target_region: bool = False
     has_low_relevance_signal: bool = False
+    has_excluded_topic: bool = False
     has_federal_scope: bool = False
 
 
@@ -100,15 +123,6 @@ def evaluate_support_measure_applicability(
     source_role: SourceRole | None,
     page_type: str | None,
 ) -> ApplicabilityDecision:
-    if not is_support_measure_surface(
-        source_name=source_name,
-        url=url,
-        level=level,
-        source_role=source_role,
-        page_type=page_type,
-    ):
-        return ApplicabilityDecision(is_applicable=True)
-
     combined = normalize_region_text(
         " ".join(
             part
@@ -123,12 +137,34 @@ def evaluate_support_measure_applicability(
             if part
         )
     )
+    excluded_topic = _detect_excluded_topic(combined)
+    if excluded_topic:
+        return ApplicabilityDecision(
+            is_applicable=False,
+            recommended_action_level="irrelevant",
+            reason="Непрофильная для AHSTEP тема; документ сохранён только для архива.",
+            detected_region="",
+            is_non_target_region=False,
+            has_low_relevance_signal=True,
+            has_excluded_topic=True,
+        )
+
+    if not is_support_measure_surface(
+        source_name=source_name,
+        url=url,
+        level=level,
+        source_role=source_role,
+        page_type=page_type,
+        combined_text=combined,
+    ):
+        return ApplicabilityDecision(is_applicable=True)
+
     non_target_region = _detect_non_target_region(combined)
     target_match = _target_region_match(combined, region=region)
     if non_target_region and target_match == "federal":
         target_match = ""
     federal_scope = _has_federal_scope(combined, region=region)
-    has_low_signal = any(marker in combined for marker in LOW_RELEVANCE_SUPPORT_MARKERS)
+    has_low_signal = any(marker in combined for marker in _excluded_topic_markers())
 
     if non_target_region and not target_match:
         return ApplicabilityDecision(
@@ -176,6 +212,7 @@ def is_support_measure_surface(
     level: str | None,
     source_role: SourceRole | None,
     page_type: str | None,
+    combined_text: str | None = None,
 ) -> bool:
     combined = f"{source_name or ''} {url or ''} {level or ''}".lower()
     if source_role in {"active_support_measures", "support_documents"}:
@@ -183,6 +220,10 @@ def is_support_measure_surface(
     if "promote.budget.gov.ru" in combined:
         return True
     if level == "support_measures":
+        return True
+    if source_role == "regional_npa" and any(
+        marker in (combined_text or "") for marker in SUPPORT_MEASURE_TEXT_MARKERS
+    ):
         return True
     return (page_type or "") in {
         "measure_card",
@@ -204,6 +245,7 @@ def _target_region_marker_set() -> frozenset[str]:
         if not normalized:
             continue
         values.add(normalized)
+        values.update(_region_aliases(normalized))
         for code, markers in TARGET_REGION_CODES.items():
             if normalized == code:
                 values.update(markers)
@@ -241,6 +283,9 @@ def _detect_non_target_region(combined: str) -> str:
     for marker in NON_TARGET_REGION_MARKERS:
         if marker in combined:
             return marker
+    for marker in _detected_region_phrases(combined):
+        if marker not in _target_region_marker_set() and not _is_federal_region_phrase(marker):
+            return marker
     if _looks_like_regional_authority(combined):
         return "региональная мера вне целевой географии"
     return ""
@@ -250,3 +295,51 @@ def _looks_like_regional_authority(combined: str) -> bool:
     if FEDERAL_AUTHORITY_RE.search(combined):
         return False
     return bool(REGIONAL_AUTHORITY_RE.search(combined))
+
+
+def _excluded_topic_markers() -> frozenset[str]:
+    markers: set[str] = set()
+    for value in config.AHSTEP_EXCLUDED_TOPICS:
+        normalized = normalize_region_text(value)
+        if normalized:
+            markers.add(normalized)
+            markers.update(EXCLUDED_TOPIC_ALIASES.get(normalized, ()))
+    return frozenset(markers)
+
+
+def _detect_excluded_topic(combined: str) -> str:
+    for marker in sorted(_excluded_topic_markers(), key=len, reverse=True):
+        if marker and marker in combined:
+            return marker
+    return ""
+
+
+def _detected_region_phrases(combined: str) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(match.group(0).strip() for match in REGION_PHRASE_RE.finditer(combined)))
+
+
+def _is_federal_region_phrase(marker: str) -> bool:
+    return marker in {
+        "российская федерация",
+        "российской федерации",
+    }
+
+
+def _region_aliases(normalized: str) -> set[str]:
+    aliases = {normalized}
+    if normalized.startswith("республика "):
+        subject = normalized.removeprefix("республика ").strip()
+        if subject:
+            aliases.add(f"республики {subject}")
+            aliases.add(subject)
+            if subject.endswith("я"):
+                aliases.add(subject[:-1] + "и")
+    if normalized.endswith("ская область"):
+        aliases.add(normalized[: -len("ская область")] + "ской области")
+    if normalized.endswith("цкая область"):
+        aliases.add(normalized[: -len("цкая область")] + "цкой области")
+    if normalized.endswith("ский край"):
+        aliases.add(normalized[: -len("ский край")] + "ского края")
+    if normalized.endswith("цкий край"):
+        aliases.add(normalized[: -len("цкий край")] + "цкого края")
+    return aliases

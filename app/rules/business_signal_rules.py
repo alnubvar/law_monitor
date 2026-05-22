@@ -423,6 +423,8 @@ def detect_action_level(
         source_role=source_role,
         page_type=page_type,
     )
+    if not support_applicability.is_applicable:
+        return support_applicability.recommended_action_level or "background"
     has_project_discussion_signal = any(
         signal in title_text or signal in lead_text
         for signal in PROJECT_DISCUSSION_SIGNALS
@@ -931,6 +933,8 @@ def build_business_signal(
         source_role=source_role,
         page_type=page_type,
     )
+    if not support_applicability.is_applicable:
+        return support_applicability.reason or "Документ не входит в профиль AHSTEP; сохранён справочно."
     title_text = title.lower()
     combined_text = f"{title_text} {(url or '').lower()}"
     lead_text = raw_text.lower()[:1500]

@@ -27,6 +27,7 @@ from app.rules.deadline_truth import (
     today_utc,
 )
 from app.storage import list_document_enrichments
+from app.text_utils import safe_truncate_text
 from app.user_facing import (
     build_executive_action,
     build_executive_reason,
@@ -1131,13 +1132,7 @@ def _clean_iso_timestamps(text: str) -> str:
 
 
 def _word_boundary_clip(text: str, max_chars: int) -> str:
-    if len(text) <= max_chars:
-        return text
-    clipped = text[: max_chars - 3]
-    last_space = clipped.rfind(" ")
-    if last_space > max_chars // 2:
-        clipped = clipped[:last_space]
-    return f"{clipped.rstrip(' ,.;:-')}..."
+    return safe_truncate_text(text, max_chars)
 
 
 def _shorten_summary(text: str | None) -> str:

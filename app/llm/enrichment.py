@@ -31,6 +31,7 @@ from app.rules.deadline_truth import (
     parse_deadline_date,
 )
 from app.rules.ahstep_applicability import evaluate_support_measure_applicability
+from app.text_utils import safe_truncate_text
 
 LOGGER = logging.getLogger(__name__)
 
@@ -716,10 +717,7 @@ class MockEnrichmentProvider(BaseEnrichmentProvider):
         return TARGET_REGIONS.get(normalized.lower(), normalized)
 
     def _clip_text(self, value: str, *, max_chars: int) -> str:
-        normalized = " ".join(value.split()).strip()
-        if len(normalized) <= max_chars:
-            return normalized
-        return f"{normalized[: max_chars - 3].rstrip(' ,.;:-')}..."
+        return safe_truncate_text(value, max_chars)
 
 
 class OpenAICompatibleEnrichmentProvider(BaseEnrichmentProvider):
@@ -2090,11 +2088,4 @@ def _extract_source_quotes(
 
 
 def _clip_quote(text: str, max_chars: int = 180) -> str:
-    normalized = " ".join(text.split()).strip()
-    if len(normalized) <= max_chars:
-        return normalized
-    clipped = normalized[: max_chars - 3]
-    last_space = clipped.rfind(" ")
-    if last_space > max_chars // 2:
-        clipped = clipped[:last_space]
-    return f"{clipped.rstrip(' ,.;:-')}..."
+    return safe_truncate_text(text, max_chars)

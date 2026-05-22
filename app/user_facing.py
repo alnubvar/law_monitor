@@ -10,6 +10,7 @@ from app.llm.enrichment import is_generic_enrichment_text
 from app.models import DigestItem, RawDocument
 from app.rules.deadline_truth import is_deadline_expired
 from app.rules.gr_topic_ontology import GRTopicMatch, detect_gr_topic
+from app.text_utils import normalize_visible_text, safe_truncate_text
 
 OCR_FALLBACK_KRASNODAR_TITLE = "НПА Краснодарского края: документ после OCR"
 OCR_FALLBACK_GENERIC_TITLE = "Документ после OCR: требуется ручная проверка"
@@ -1432,11 +1433,8 @@ def _get_value(document: PresentationDocument, field_name: str) -> str:
 
 
 def _normalize_text(value: Any) -> str:
-    return re.sub(r"\s+", " ", str(value or "")).strip()
+    return normalize_visible_text(value)
 
 
 def _clip_text(text: str, max_chars: int) -> str:
-    normalized = _normalize_text(text)
-    if len(normalized) <= max_chars:
-        return normalized
-    return f"{normalized[: max_chars - 3].rstrip(' ,.;:-')}..."
+    return safe_truncate_text(text, max_chars)

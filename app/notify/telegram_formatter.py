@@ -9,6 +9,7 @@ from app.llm.enrichment import get_display_enrichment
 from app.models import RawDocument
 from app.operational_health import OperationalNotice, format_operational_notices_telegram
 from app.storage import list_document_enrichments
+from app.text_utils import safe_truncate_text
 from app.user_facing import (
     build_executive_action,
     build_executive_reason,
@@ -294,10 +295,7 @@ def _is_inactive_or_closed(document: RawDocument) -> bool:
 
 
 def _truncate_text(text: str, max_chars: int) -> str:
-    normalized = re.sub(r"\s+", " ", text).strip()
-    if len(normalized) <= max_chars:
-        return normalized
-    return f"{normalized[: max_chars - 3].rstrip(' ,.;:-')}..."
+    return safe_truncate_text(text, max_chars)
 
 
 def _build_digest_action_hint(

@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from app.models import ActionLevel, PageType, RawDocument
 from app.reports.markdown_report import (
+    _sanitize_report_display_text,
     build_report_view,
     classify_document_bucket,
     generate_markdown_report,
@@ -2763,6 +2764,73 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertIn("### Изменены субсидии в Ростовской области", markdown)
         self.assertIn("https://pravo.donland.ru/doc/view/id/very-long-title", markdown)
         self.assertNotIn(long_title, markdown)
+
+    def test_report_title_truncation_does_not_cut_mid_word(self) -> None:
+        long_title = (
+            "Минсельхоз рассматривает скидку на экспортную пошлину как инструмент "
+            "стимулирования биржевой торговли зерном и расширения поставок"
+        )
+        document = self._doc(
+            doc_id=1301,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title=long_title,
+            url="https://www.zol.ru/n/title-clip",
+            action_level="requires_attention",
+            page_type="news_background",
+            summary="Изменения экспортного регулирования зерна.",
+        )
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-22",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertNotIn("бир...", markdown)
+        self.assertNotIn("экспортн...", markdown)
+        self.assertIn("стимулирования...", markdown)
+
+    def test_report_summary_truncation_does_not_cut_mid_word(self) -> None:
+        text = (
+            "Минсельхоз рассматривает скидку на экспортную пошлину как инструмент "
+            "стимулирования биржевой торговли зерном и расширения поставок."
+        )
+        clipped = _sanitize_report_display_text(text, max_chars=88)
+
+        self.assertNotIn("бир...", clipped)
+        self.assertNotIn("экспортн...", clipped)
+        self.assertTrue(clipped.endswith("..."))
+
+    def test_docx_export_does_not_contain_mid_word_report_ellipsis(self) -> None:
+        output_path = self._db_path("report_no_midword_ellipsis.docx")
+        long_title = (
+            "Минсельхоз рассматривает скидку на экспортную пошлину как инструмент "
+            "стимулирования биржевой торговли зерном и расширения поставок"
+        )
+        document = self._doc(
+            doc_id=1302,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title=long_title,
+            url="https://www.zol.ru/n/docx-title-clip",
+            action_level="requires_attention",
+            page_type="news_background",
+            summary="Изменения экспортного регулирования зерна.",
+        )
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-22",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        created = create_docx_from_markdown(markdown, output_path)
+        text = "\n".join(paragraph.text for paragraph in DocxDocument(created).paragraphs)
+
+        self.assertNotIn("бир...", text)
+        self.assertNotIn("экспортн...", text)
 
     def test_report_compression_does_not_mutate_original_title(self) -> None:
         original_title = "О внесении изменений в порядок предоставления субсидий сельхозтоваропроизводителям"
