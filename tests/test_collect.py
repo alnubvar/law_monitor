@@ -145,6 +145,59 @@ class CollectAuditTest(unittest.TestCase):
         self.assertEqual(len(audit_rows), 1)
         self.assertIn("source access blocked (HTTP 403)", audit_rows[0].get("error_message") or "")
 
+    def test_empty_pdf_extraction_result_is_saved_as_warning_not_success(self) -> None:
+        db_path = self._db_path("collect_empty_pdf_warning.db")
+        init_db(db_path)
+        source_config = SourceConfig(
+            name="Минсельхоз Краснодарского края - субсидирование и финансирование",
+            url="https://msh.krasnodar.ru/documents/subsidirovanie-i-finansirovanie1",
+            level="regional",
+            region="krasnodar",
+            source_role="support_documents",
+            parser="krasnodar",
+            description="test",
+        )
+        item = CollectedItem(
+            source_name=source_config.name,
+            source_url=source_config.url,
+            level=source_config.level,
+            region=source_config.region,
+            title="Порядок предоставления субсидий",
+            url="https://npa.krasnodar.ru/rest/files/1233855",
+            document_type="pdf",
+        )
+
+        class FakeSource:
+            last_fetch_stats = {"links_found_count": 1, "pdf_links_count": 1}
+
+            def fetch_items(self) -> list[CollectedItem]:
+                return [item]
+
+        with patch("app.pipeline.collect.load_sources", return_value=[source_config]):
+            with patch("app.pipeline.collect.create_source", return_value=FakeSource()):
+                with patch(
+                    "app.pipeline.collect.extract_document",
+                    return_value=ExtractionResult(
+                        raw_text="",
+                        document_type="pdf",
+                        error="PDF download returned an empty response body",
+                        extracted_text_length=0,
+                    ),
+                ):
+                    saved_count = run_collect_with_options(
+                        source_name=source_config.name,
+                        audit_existing=False,
+                        db_path=str(db_path),
+                    )
+
+        self.assertEqual(saved_count, 1)
+        document = get_document_by_url(item.url, db_path=db_path)
+        self.assertIsNotNone(document)
+        assert document is not None
+        self.assertEqual(document.status, "collected_with_warning")
+        self.assertEqual(document.error, "PDF download returned an empty response body")
+        self.assertEqual(document.raw_text, "")
+
     def test_scan_candidate_creates_ocr_queue_item(self) -> None:
         db_path = self._db_path("collect_scan_candidate_ocr_queue.db")
         init_db(db_path)

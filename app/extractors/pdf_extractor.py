@@ -28,6 +28,8 @@ from app.models import ExtractionResult
 logger = logging.getLogger(__name__)
 
 MAX_PDF_DOWNLOAD_BYTES = 50 * 1024 * 1024
+PDF_EMPTY_RESPONSE_ERROR = "PDF download returned an empty response body"
+PDF_INVALID_HEADER_ERROR = "PDF download did not return a PDF body"
 
 
 def _read_limited_bytes(
@@ -85,14 +87,45 @@ def extract_text_from_pdf(
     finally:
         response.close()
 
+    if not content:
+        logger.warning("PDF extraction skipped for %s: empty response body", url)
+        return ExtractionResult(
+            raw_text="",
+            document_type="pdf",
+            error=PDF_EMPTY_RESPONSE_ERROR,
+            extracted_text_length=0,
+            needs_ocr=False,
+        )
+
+    if not content.lstrip().startswith(b"%PDF"):
+        logger.warning("PDF extraction skipped for %s: response is not a PDF", url)
+        return ExtractionResult(
+            raw_text="",
+            document_type="pdf",
+            error=PDF_INVALID_HEADER_ERROR,
+            extracted_text_length=0,
+            needs_ocr=False,
+        )
+
     file_path = _safe_filename(url)
     file_path.write_bytes(content)
 
     text_parts: list[str] = []
-    with fitz.open(stream=content, filetype="pdf") as pdf:
-        page_count = len(pdf)
-        for page in pdf:
-            text_parts.append(page.get_text("text"))
+    try:
+        with fitz.open(stream=content, filetype="pdf") as pdf:
+            page_count = len(pdf)
+            for page in pdf:
+                text_parts.append(page.get_text("text"))
+    except Exception as exc:
+        logger.warning("PDF extraction failed for %s: %s", url, exc)
+        return ExtractionResult(
+            raw_text="",
+            local_file_path=str(file_path),
+            document_type="pdf",
+            error=f"PDF extraction failed: {exc}",
+            extracted_text_length=0,
+            needs_ocr=False,
+        )
     text = "\n".join(part.strip() for part in text_parts if part.strip()).strip()
     text_length = len(text)
     needs_ocr = text_length < 500

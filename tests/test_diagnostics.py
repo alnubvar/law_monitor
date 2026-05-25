@@ -602,7 +602,7 @@ class DiagnosticsSmokeTest(unittest.TestCase):
         output = run_diagnostics(db_path=db_path, days=7)
         self.assertIn("Source depth audit", output)
 
-    def test_existing_pdf_without_extraction_audit_is_reported_as_gap(self) -> None:
+    def test_existing_pdf_without_extraction_audit_is_reported_cautiously(self) -> None:
         db_path = self._db_path("diagnostics_pdf_gap.db")
         init_db(db_path)
         save_document(
@@ -617,9 +617,9 @@ class DiagnosticsSmokeTest(unittest.TestCase):
             db_path,
         )
         output = run_diagnostics(db_path=db_path, days=7)
-        self.assertIn("PDF existing without extraction audit: 1", output)
+        self.assertIn("Existing PDF documents without any extraction audit record: 1", output)
 
-    def test_pdf_link_found_but_not_extracted_is_reported(self) -> None:
+    def test_pdf_link_found_with_no_recent_extraction_audit_is_reported(self) -> None:
         db_path = self._db_path("diagnostics_pdf_links_gap.db")
         init_db(db_path)
         now = datetime.now(timezone.utc)
@@ -642,8 +642,62 @@ class DiagnosticsSmokeTest(unittest.TestCase):
             db_path=db_path,
         )
         output = run_diagnostics(db_path=db_path, days=7)
-        self.assertIn("PDF links found but not extracted", output)
+        self.assertIn("Attachment links found with no recent extraction audit", output)
         self.assertIn("Нормативные акты Краснодарского края", output)
+
+    def test_attachment_link_gap_for_existing_documents_is_labeled_not_reaudited(self) -> None:
+        db_path = self._db_path("diagnostics_attachment_existing_not_reaudited.db")
+        init_db(db_path)
+        now = datetime.now(timezone.utc)
+        save_source_audit_record(
+            source_name="Минсельхоз Ростовской области - господдержка",
+            source_url="https://mcx.donland.ru/activity/35217/",
+            enabled=True,
+            attempted_at=now,
+            success_at=now,
+            error_at=None,
+            error_message=None,
+            fetched_count=5,
+            saved_count=0,
+            existing_count=5,
+            duplicates_count=0,
+            item_errors_count=0,
+            pdf_links_count=4,
+            db_path=db_path,
+        )
+
+        output = run_diagnostics(db_path=db_path, days=7)
+
+        self.assertIn("Attachment links found but likely existing/not re-audited in this window:", output)
+        self.assertIn("Минсельхоз Ростовской области - господдержка: PDF links found in latest listing but likely existing/not re-audited", output)
+        self.assertIn("Attachment links found with no recent extraction audit: none", output)
+
+    def test_intentionally_filtered_attachment_links_are_reported_separately(self) -> None:
+        db_path = self._db_path("diagnostics_attachment_filtered.db")
+        init_db(db_path)
+        now = datetime.now(timezone.utc)
+        save_source_audit_record(
+            source_name="Право Ростовской области",
+            source_url="https://pravo.donland.ru/doc/list/level/1/",
+            enabled=True,
+            attempted_at=now,
+            success_at=now,
+            error_at=None,
+            error_message=None,
+            fetched_count=25,
+            saved_count=0,
+            existing_count=25,
+            duplicates_count=0,
+            item_errors_count=0,
+            pdf_filtered_count=24,
+            docx_filtered_count=24,
+            db_path=db_path,
+        )
+
+        output = run_diagnostics(db_path=db_path, days=7)
+
+        self.assertIn("Attachment links intentionally filtered by source parser:", output)
+        self.assertIn("Право Ростовской области: pdf_filtered=24; docx_filtered=24", output)
 
     def test_source_depth_uses_updated_listing_wording(self) -> None:
         db_path = self._db_path("diagnostics_listing_wording.db")

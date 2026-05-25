@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from http.client import IncompleteRead
 import unittest
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
+
+import requests
 
 from app.models import SourceConfig
 from app.sources.pravo_stavregion_api_source import (
@@ -133,6 +136,33 @@ class PravoStavregionApiSourceTest(unittest.TestCase):
         with patch.object(source.session, "get", return_value=bad_response):
             items = source.fetch_items()
         self.assertEqual(items, [])
+
+    def test_incomplete_read_is_retried_once(self) -> None:
+        source = _make_source()
+        good_response = _mock_response([_AGRO_ROW])
+
+        with patch.object(
+            source.session,
+            "get",
+            side_effect=[IncompleteRead(b"{}", 10), good_response],
+        ) as mock_get:
+            items = source.fetch_items()
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(mock_get.call_count, 2)
+
+    def test_repeated_incomplete_read_raises_connection_error(self) -> None:
+        source = _make_source()
+
+        with patch.object(
+            source.session,
+            "get",
+            side_effect=[IncompleteRead(b"{", 10), IncompleteRead(b"{", 10)],
+        ):
+            with self.assertRaises(requests.exceptions.ConnectionError) as ctx:
+                source.fetch_items()
+
+        self.assertIn("incomplete/connection-broken", str(ctx.exception))
 
     def test_irrelevant_row_filtered(self) -> None:
         source = _make_source()

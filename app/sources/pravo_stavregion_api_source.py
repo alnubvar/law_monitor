@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from http.client import IncompleteRead
 import re
 from collections.abc import Mapping
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urljoin
+
+import requests
+from urllib3.exceptions import ProtocolError
 
 from app.config import REQUEST_TIMEOUT
 from app.models import CollectedItem
@@ -11,6 +15,7 @@ from app.sources.base import BaseSource
 
 _API_ENDPOINT = "https://pravo.stavregion.ru/api/law/legalact/byFilter/"
 _DATE_FLOOR_DAYS = 365
+_READ_RETRY_ATTEMPTS = 2
 _STRONG_MARKERS = (
     "апк",
     "агро",
@@ -142,22 +147,52 @@ def _build_raw_text(item: Mapping[str, object]) -> str:
 class PravoStavregionApiSource(BaseSource):
     """Fetches Stavropol regional NPAs from the public pravo.stavregion.ru listing API."""
 
+    def _fetch_payload(self, params: Mapping[str, object]) -> object:
+        last_exc: BaseException | None = None
+        for attempt in range(1, _READ_RETRY_ATTEMPTS + 1):
+            try:
+                response = self.session.get(
+                    _API_ENDPOINT,
+                    params=params,
+                    timeout=self.config.request_timeout or REQUEST_TIMEOUT,
+                    verify=self.config.verify_ssl,
+                )
+                response.raise_for_status()
+                return response.json()
+            except ValueError:
+                raise
+            except (
+                requests.exceptions.ChunkedEncodingError,
+                requests.exceptions.ConnectionError,
+                requests.exceptions.RetryError,
+                ProtocolError,
+                IncompleteRead,
+            ) as exc:
+                last_exc = exc
+                if attempt < _READ_RETRY_ATTEMPTS:
+                    self.logger.warning(
+                        "pravo.stavregion API read failed on attempt %s/%s; retrying: %s",
+                        attempt,
+                        _READ_RETRY_ATTEMPTS,
+                        exc,
+                    )
+                    continue
+                break
+
+        message = "pravo.stavregion API incomplete/connection-broken response"
+        if last_exc is not None:
+            message = f"{message}: {last_exc}"
+        raise requests.exceptions.ConnectionError(message) from last_exc
+
     def fetch_items(self) -> list[CollectedItem]:
         params = {
             "first": _build_first_date_floor(),
             "loggingWith": "id",
             "timestamp": str(int(datetime.now(timezone.utc).timestamp() * 1000)),
         }
-        response = self.session.get(
-            _API_ENDPOINT,
-            params=params,
-            timeout=self.config.request_timeout or REQUEST_TIMEOUT,
-            verify=self.config.verify_ssl,
-        )
-        response.raise_for_status()
 
         try:
-            payload = response.json()
+            payload = self._fetch_payload(params)
         except ValueError as exc:
             self.logger.warning("pravo.stavregion API returned invalid JSON: %s", exc)
             return []

@@ -1041,25 +1041,51 @@ def format_pdf_docx_audit_gaps(*, db_path: Path | str, days: int = 7) -> str:
     documents = list_documents(db_path=db_path, days=days)
     lines = [f"PDF/DOCX audit gaps (last {days} days):"]
 
-    extracted_by_source_pdf: dict[str, int] = {}
+    extracted_by_source_type: dict[tuple[str, str], int] = {}
     for row in extraction_rows:
-        file_type = str(row.get("file_type") or row.get("extracted_type") or "")
-        if file_type != "pdf":
+        file_type = str(row.get("file_type") or row.get("extracted_type") or "").lower()
+        if file_type not in {"pdf", "docx"}:
             continue
         source_name = str(row.get("source_name") or "unknown")
-        extracted_by_source_pdf[source_name] = extracted_by_source_pdf.get(source_name, 0) + 1
+        key = (source_name, file_type)
+        extracted_by_source_type[key] = extracted_by_source_type.get(key, 0) + 1
 
-    pdf_link_gaps: list[str] = []
+    intentionally_filtered: list[str] = []
+    not_reaudited: list[str] = []
+    unexplained_gaps: list[str] = []
     for source_row in source_rows:
         source_name = str(source_row.get("source_name") or "unknown")
-        pdf_links = int(source_row.get("pdf_links_count", 0))
-        if pdf_links <= 0:
-            continue
-        extracted_count = extracted_by_source_pdf.get(source_name, 0)
-        if extracted_count < pdf_links:
-            pdf_link_gaps.append(
-                f"{source_name}: PDF links found but not extracted ({pdf_links - extracted_count} gap, found={pdf_links}, extracted={extracted_count})"
-            )
+        existing_count = int(source_row.get("existing_count", 0))
+        filtered_parts: list[str] = []
+        for file_type, link_key, filter_key in (
+            ("pdf", "pdf_links_count", "pdf_filtered_count"),
+            ("docx", "docx_links_count", "docx_filtered_count"),
+        ):
+            filtered_count = int(source_row.get(filter_key, 0))
+            if filtered_count > 0:
+                filtered_parts.append(f"{file_type}_filtered={filtered_count}")
+
+            links_found = int(source_row.get(link_key, 0))
+            if links_found <= 0:
+                continue
+            extracted_count = extracted_by_source_type.get((source_name, file_type), 0)
+            gap = max(0, links_found - extracted_count)
+            if gap <= 0:
+                continue
+            likely_existing_not_reaudited = min(gap, existing_count)
+            if likely_existing_not_reaudited > 0:
+                not_reaudited.append(
+                    f"{source_name}: {file_type.upper()} links found in latest listing but likely existing/not re-audited "
+                    f"({likely_existing_not_reaudited}; found={links_found}, recent_audits={extracted_count}, existing={existing_count})"
+                )
+            unexplained_count = gap - likely_existing_not_reaudited
+            if unexplained_count > 0:
+                unexplained_gaps.append(
+                    f"{source_name}: {file_type.upper()} links found with no recent extraction audit "
+                    f"({unexplained_count}; found={links_found}, recent_audits={extracted_count})"
+                )
+        if filtered_parts:
+            intentionally_filtered.append(f"{source_name}: " + "; ".join(filtered_parts))
 
     audit_urls_all = {
         str(row.get("document_url"))
@@ -1077,21 +1103,35 @@ def format_pdf_docx_audit_gaps(*, db_path: Path | str, days: int = 7) -> str:
         if (document.document_type or "").lower() == "docx" and document.url not in audit_urls_all
     ]
 
-    if pdf_link_gaps:
-        lines.append("- PDF links found but not extracted:")
-        for entry in pdf_link_gaps[:10]:
+    if intentionally_filtered:
+        lines.append("- Attachment links intentionally filtered by source parser:")
+        for entry in intentionally_filtered[:10]:
             lines.append(f"  - {entry}")
     else:
-        lines.append("- PDF links found but not extracted: none")
+        lines.append("- Attachment links intentionally filtered by source parser: none")
+
+    if not_reaudited:
+        lines.append("- Attachment links found but likely existing/not re-audited in this window:")
+        for entry in not_reaudited[:10]:
+            lines.append(f"  - {entry}")
+    else:
+        lines.append("- Attachment links found but likely existing/not re-audited in this window: none")
+
+    if unexplained_gaps:
+        lines.append("- Attachment links found with no recent extraction audit:")
+        for entry in unexplained_gaps[:10]:
+            lines.append(f"  - {entry}")
+    else:
+        lines.append("- Attachment links found with no recent extraction audit: none")
 
     if pdf_existing_without_audit:
-        lines.append(f"- PDF existing without extraction audit: {len(pdf_existing_without_audit)}")
+        lines.append(f"- Existing PDF documents without any extraction audit record: {len(pdf_existing_without_audit)}")
     else:
-        lines.append("- PDF existing without extraction audit: 0")
+        lines.append("- Existing PDF documents without any extraction audit record: 0")
     if docx_existing_without_audit:
-        lines.append(f"- DOCX existing without extraction audit: {len(docx_existing_without_audit)}")
+        lines.append(f"- Existing DOCX documents without any extraction audit record: {len(docx_existing_without_audit)}")
     else:
-        lines.append("- DOCX existing without extraction audit: 0")
+        lines.append("- Existing DOCX documents without any extraction audit record: 0")
     return "\n".join(lines)
 
 
