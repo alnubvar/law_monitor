@@ -11,6 +11,12 @@ from app.config import DB_PATH, OCR_ENABLED, get_source_role, load_sources
 from app.extractors.ocr_extractor import get_ocr_runtime_status
 from app.models import RawDocument
 from app.operational_health import build_source_health_summary
+from app.reports.markdown_report import (
+    _build_display_sections,
+    _flatten_display_sections,
+    build_report_view,
+    select_best_report_documents,
+)
 from app.storage import (
     get_runtime_event,
     get_sqlite_runtime_settings,
@@ -20,6 +26,11 @@ from app.storage import (
     list_recent_document_extraction_audit,
     list_unresolved_scan_candidate_audit,
     summarize_ocr_queue,
+)
+from app.visibility import (
+    effective_user_action_level,
+    should_show_document,
+    visibility_bucket,
 )
 
 NOISY_PAGE_TYPES = {
@@ -455,6 +466,193 @@ def format_operational_truthfulness_diagnostics(*, db_path: Path | str) -> str:
     return "\n".join(lines)
 
 
+def format_requires_attention_visibility_diagnostics(
+    documents: Iterable[RawDocument],
+    *,
+    audit_period_text: str | None = None,
+    relevant_only: bool = True,
+    action_levels: list[str] | None = None,
+    include_background: bool = False,
+    include_section_pages: bool = False,
+    include_registries: bool = False,
+    include_market_background: bool = False,
+    include_full_background: bool = False,
+    max_items: int | None = None,
+) -> str:
+    document_list = list(documents)
+    report_action_levels = list(action_levels or ["requires_attention", "watchlist"])
+    report_view = build_report_view(
+        document_list,
+        relevant_only=relevant_only,
+        max_items=max_items,
+        action_levels=report_action_levels,
+        include_background=include_background,
+        include_section_pages=include_section_pages,
+        include_registries=include_registries,
+        include_market_background=include_market_background,
+        include_full_background=include_full_background,
+    )
+    display_sections = _build_display_sections(report_view.flatten())
+    rendered_documents = _flatten_display_sections(display_sections)
+    rendered_requires_attention = display_sections.get("requires_attention", [])
+
+    raw_requires_attention = [
+        document for document in document_list if document.action_level == "requires_attention"
+    ]
+    rendered_requires_attention_keys = {
+        _document_diagnostic_key(document) for document in rendered_requires_attention
+    }
+    rendered_anywhere_keys = {
+        _document_diagnostic_key(document) for document in rendered_documents
+    }
+    selected_keys = {
+        _document_diagnostic_key(document)
+        for document in select_best_report_documents(document_list)
+    }
+    suppressed_requires_attention = [
+        document
+        for document in raw_requires_attention
+        if _document_diagnostic_key(document) not in rendered_requires_attention_keys
+    ]
+    rendered_anywhere_requires_attention_count = sum(
+        1
+        for document in raw_requires_attention
+        if _document_diagnostic_key(document) in rendered_anywhere_keys
+    )
+    surviving_requires_attention = report_view.total_bucket_counts.get(
+        "requires_attention", 0
+    )
+    selected_before_watchlist = len(
+        report_view.shown_buckets.get("requires_attention", [])
+    )
+    before_watchlist_status = (
+        "ok" if surviving_requires_attention == selected_before_watchlist else "mismatch"
+    )
+    included_count = len(rendered_documents)
+    rendered_cards = sum(len(items) for items in display_sections.values())
+    included_status = "ok" if included_count == rendered_cards else "mismatch"
+
+    lines = [
+        "Requires_attention visibility audit:",
+    ]
+    if audit_period_text:
+        lines.append(f"- audit_period: {audit_period_text}")
+    lines.extend(
+        [
+            f"- raw_requires_attention: {len(raw_requires_attention)}",
+            f"- rendered_requires_attention: {len(rendered_requires_attention)}",
+            f"- suppressed_requires_attention: {len(suppressed_requires_attention)}",
+            "- rendered_requires_attention_any_section: "
+            f"{rendered_anywhere_requires_attention_count}",
+            "- requires_attention_before_watchlist_cap: "
+            f"{before_watchlist_status} "
+            f"(surviving={surviving_requires_attention}; "
+            f"selected_before_watchlist={selected_before_watchlist})",
+            f"- included_count_check: {included_status} "
+            f"(included={included_count}; rendered_cards={rendered_cards})",
+        ]
+    )
+    if suppressed_requires_attention:
+        lines.append("- suppressed requires_attention items:")
+        for document in suppressed_requires_attention:
+            lines.append(
+                "  - "
+                f"title={_diagnostic_text(document.title, max_chars=160)} | "
+                f"url={_diagnostic_text(document.url, max_chars=240)} | "
+                f"source={_diagnostic_text(document.source_name, max_chars=120)} | "
+                f"action_level={document.action_level or 'n/a'} | "
+                "reason="
+                + _requires_attention_suppression_reason(
+                    document,
+                    rendered_anywhere_keys=rendered_anywhere_keys,
+                    selected_keys=selected_keys,
+                    relevant_only=relevant_only,
+                    action_levels=report_action_levels,
+                    include_section_pages=include_section_pages,
+                    include_registries=include_registries,
+                    include_market_background=include_market_background,
+                )
+            )
+    else:
+        lines.append("- suppressed requires_attention items: none")
+    return "\n".join(lines)
+
+
+def _requires_attention_suppression_reason(
+    document: RawDocument,
+    *,
+    rendered_anywhere_keys: set[str],
+    selected_keys: set[str],
+    relevant_only: bool,
+    action_levels: list[str],
+    include_section_pages: bool,
+    include_registries: bool,
+    include_market_background: bool,
+) -> str:
+    document_key = _document_diagnostic_key(document)
+    if document_key in rendered_anywhere_keys:
+        return "rendered outside urgent block after requires_attention display cap"
+    if document_key not in selected_keys:
+        return "deduplicated by report selection before rendering"
+
+    effective_action_level = effective_user_action_level(document) or "n/a"
+    bucket = visibility_bucket(document)
+    visible = should_show_document(
+        document,
+        surface="report",
+        relevant_only=False,
+        action_levels=action_levels,
+        include_section_pages=include_section_pages,
+        include_registries=include_registries,
+        include_market_background=True,
+    )
+    if effective_action_level != "requires_attention":
+        return (
+            f"effective_action_level={effective_action_level}; "
+            f"visibility_bucket={bucket}; "
+            "visibility guards downgraded raw requires_attention"
+        )
+    if not visible:
+        if bucket != "requires_attention":
+            return (
+                f"visibility_bucket={bucket}; report urgent block only shows "
+                "target/federal actionable requires_attention"
+            )
+        return (
+            f"report visibility gate suppressed item; "
+            f"effective_action_level={effective_action_level}; "
+            f"visibility_bucket={bucket}"
+        )
+    if relevant_only and effective_action_level == "irrelevant":
+        return "relevant_only report filter suppressed effective irrelevant item"
+    if action_levels and effective_action_level not in action_levels:
+        return (
+            "report action_level filter excludes "
+            f"effective_action_level={effective_action_level}"
+        )
+    if bucket == "market_background" and not include_market_background:
+        return "market background hidden by report defaults"
+    return (
+        "not present after rendered-section filtering; check display-section "
+        "deduplication or section caps"
+    )
+
+
+def _document_diagnostic_key(document: RawDocument) -> str:
+    if document.id is not None:
+        return f"id:{document.id}"
+    return f"url:{(document.url or '').strip().lower()}"
+
+
+def _diagnostic_text(value: str | None, *, max_chars: int) -> str:
+    text = " ".join((value or "").split())
+    if not text:
+        return "n/a"
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 3].rstrip() + "..."
+
+
 _SYSTEM_PROXY_ENV_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")
 
 
@@ -495,6 +693,16 @@ def run_diagnostics(
     documents = list_documents(db_path=resolved_db_path, days=days)
     snapshot = build_diagnostics_snapshot(documents, days=days)
     diagnostics_text = format_diagnostics(snapshot)
+    visibility_documents = documents
+    visibility_audit_period = (
+        f"last {days} days" if days is not None else "last 7 days (report default)"
+    )
+    if days is None:
+        visibility_documents = list_documents(db_path=resolved_db_path, days=7)
+    requires_attention_visibility_text = format_requires_attention_visibility_diagnostics(
+        visibility_documents,
+        audit_period_text=visibility_audit_period,
+    )
     sqlite_text = format_sqlite_runtime_diagnostics(db_path=resolved_db_path)
     deadline_text = format_deadline_extraction_diagnostics(db_path=resolved_db_path)
     freshness_text = format_operational_truthfulness_diagnostics(db_path=resolved_db_path)
@@ -537,6 +745,7 @@ def run_diagnostics(
             freshness_text,
             deadline_text,
             diagnostics_text,
+            requires_attention_visibility_text,
             audit_text,
             extraction_text,
             ocr_runtime_text,

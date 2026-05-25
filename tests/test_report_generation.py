@@ -7,6 +7,7 @@ from datetime import date, datetime, timezone
 from unittest.mock import patch
 
 from app.models import ActionLevel, PageType, RawDocument
+from app.pipeline.diagnostics import format_requires_attention_visibility_diagnostics
 from app.reports.markdown_report import (
     _sanitize_report_display_text,
     build_report_view,
@@ -331,6 +332,39 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertIn("- Включено в сводку: 2", markdown)
         self.assertNotIn("https://www.zol.ru/n/included-background", markdown)
         self.assertNotIn("https://www.zol.ru/n/included-irrelevant", markdown)
+
+    def test_requires_attention_visibility_diagnostics_explain_suppressed_items(self) -> None:
+        visible = self._doc(
+            doc_id=54,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Пошлины на экспорт пшеницы из РФ останутся нулевыми",
+            url="https://www.zol.ru/n/diagnostic-visible-urgent",
+            action_level="requires_attention",
+            page_type="news_background",
+            summary="Федеральный сигнал по экспортным пошлинам на зерно.",
+        )
+        suppressed = self._doc(
+            doc_id=55,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="В Томской области изменили порядок субсидий АПК",
+            url="https://www.zol.ru/n/diagnostic-suppressed-urgent",
+            action_level="requires_attention",
+            page_type="news_background",
+            summary="Регион обновил порядок предоставления субсидий.",
+        )
+
+        output = format_requires_attention_visibility_diagnostics([visible, suppressed])
+
+        self.assertIn("Requires_attention visibility audit:", output)
+        self.assertIn("- raw_requires_attention: 2", output)
+        self.assertIn("- rendered_requires_attention: 1", output)
+        self.assertIn("- suppressed_requires_attention: 1", output)
+        self.assertIn("requires_attention_before_watchlist_cap: ok", output)
+        self.assertIn("included_count_check: ok", output)
+        self.assertIn("diagnostic-suppressed-urgent", output)
+        self.assertIn("visibility_bucket=non_target_background", output)
 
     def test_argentina_market_news_uses_external_market_applicability(self) -> None:
         db_path = self._db_path("argentina_market_context.db")
