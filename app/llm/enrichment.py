@@ -62,6 +62,20 @@ LLM_RATE_LIMIT_TEXT_MARKERS = (
     "requests per minute",
     "rpm",
 )
+LLM_TRANSIENT_PROVIDER_TEXT_MARKERS = (
+    "internal server error",
+    "bad gateway",
+    "service unavailable",
+    "gateway timeout",
+    "provider unavailable",
+    "provider-unavailable",
+    "temporarily unavailable",
+    "upstream error",
+)
+LLM_RETRYABLE_HTTP_STATUS_TEXT_RE = re.compile(
+    r"\b(?:http\s+)?(?:429|500|502|503|504)\b",
+    re.IGNORECASE,
+)
 LLM_RESPONSE_FORMAT_DISABLED_VALUES = {"", "none", "off", "false", "disabled", "omit"}
 LLM_RESPONSE_FORMAT_JSON_OBJECT_VALUES = {"auto", "json", "json_object", "true", "1"}
 LLM_PROXY_SCHEMES = {"http", "https", "socks5", "socks5h"}
@@ -320,6 +334,7 @@ class DocumentCardFacts(BaseModel):
 class EnrichmentResult(BaseModel):
     prompt_version: str = DOCUMENT_CARD_PROMPT_VERSION
     status: str = "success"
+    model_name: str | None = None
     facts: DocumentCardFacts | None = None
     facts_json: dict[str, Any] | None = None
     source_hash: str | None = None
@@ -826,7 +841,9 @@ class OpenAICompatibleEnrichmentProvider(BaseEnrichmentProvider):
                     f"invalid JSON from LLM provider: {repair_exc.msg}"
                 ) from exc
         facts = DocumentCardFacts.model_validate(parsed)
-        return EnrichmentResult.from_facts(facts, source_hash=source_hash)
+        result = EnrichmentResult.from_facts(facts, source_hash=source_hash)
+        result.model_name = self.model
+        return result
 
     def _build_payload(
         self,
@@ -1075,7 +1092,7 @@ class OpenAICompatibleEnrichmentProvider(BaseEnrichmentProvider):
 
 
 class AllLLMModelsFailedError(RuntimeError):
-    """Raised when every configured LLM model failed on a retryable limit error."""
+    """Raised when every configured LLM model failed on a transient provider error."""
 
 
 class ModelFallbackEnrichmentProvider(BaseEnrichmentProvider):
@@ -1087,16 +1104,25 @@ class ModelFallbackEnrichmentProvider(BaseEnrichmentProvider):
             raise AllLLMModelsFailedError("no LLM models configured")
         failures: list[str] = []
         for index, provider in enumerate(self.providers):
+            provider_model = _provider_model_name(provider)
             try:
                 return provider.enrich_document(**kwargs)
             except Exception as exc:
                 safe_error = _safe_llm_provider_error_snippet(
                     f"{type(exc).__name__}: {exc}",
-                    secrets=(provider.api_key, provider.proxy_url),
+                    secrets=(
+                        str(getattr(provider, "api_key", "") or ""),
+                        str(getattr(provider, "proxy_url", "") or ""),
+                    ),
                 )
-                if not _is_rate_limit_error(exc):
+                if not _is_transient_provider_error(exc):
                     raise
-                failures.append(f"{provider.model}: {safe_error}")
+                LOGGER.warning(
+                    "LLM provider transient failure for model=%s after exhausted retries: %s",
+                    provider_model,
+                    safe_error,
+                )
+                failures.append(f"{provider_model}: {safe_error}")
                 next_provider = (
                     self.providers[index + 1]
                     if index + 1 < len(self.providers)
@@ -1104,14 +1130,14 @@ class ModelFallbackEnrichmentProvider(BaseEnrichmentProvider):
                 )
                 if next_provider is not None:
                     LOGGER.warning(
-                        "LLM rate limit/quota failure for model=%s; switching to fallback model=%s",
-                        provider.model or "<unset>",
-                        next_provider.model or "<unset>",
+                        "LLM switching to fallback model=%s after exhausted retries for model=%s",
+                        _provider_model_name(next_provider),
+                        provider_model,
                     )
                     continue
                 LOGGER.warning(
-                    "LLM enrichment failed after all configured models. Last model=%s error=%s",
-                    provider.model or "<unset>",
+                    "LLM enrichment all models failed. Last model=%s error=%s",
+                    provider_model,
                     safe_error,
                 )
                 raise AllLLMModelsFailedError("; ".join(failures)) from exc
@@ -1127,12 +1153,27 @@ class DocumentEnricher:
         provider_error: str | None = None,
         provider_name: str = "",
         model_name: str = "",
+        model_names: tuple[str, ...] | None = None,
     ) -> None:
         self.enabled = enabled
         self.provider = provider
         self.provider_error = provider_error
         self.provider_name = provider_name
         self.model_name = model_name
+        normalized_model_names = tuple(
+            model
+            for model in (str(value or "").strip() for value in (model_names or ()))
+            if model
+        )
+        self.model_names = normalized_model_names or (
+            (model_name.strip(),) if model_name.strip() else ()
+        )
+
+    def cache_model_names(self) -> tuple[str, ...]:
+        return self.model_names or ((self.model_name.strip(),) if self.model_name.strip() else ("",))
+
+    def model_name_for_result(self, result: EnrichmentResult) -> str:
+        return (result.model_name or self.model_name or "").strip()
 
     def maybe_enrich_document(
         self,
@@ -1303,6 +1344,7 @@ class DocumentEnricher:
             prompt_version=result.prompt_version,
             source_hash=result.source_hash or source_hash,
         )
+        finalized.model_name = result.model_name
         if result.status == "fallback":
             finalized.status = "fallback"
             finalized.error = result.error
@@ -1424,6 +1466,22 @@ def _build_openai_compatible_provider(model: str) -> OpenAICompatibleEnrichmentP
     )
 
 
+def _configured_llm_model_names() -> tuple[str, ...]:
+    values = (config.LLM_MODEL, *getattr(config, "LLM_MODEL_FALLBACKS", ()))
+    models: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        model = str(value or "").strip()
+        if not model:
+            continue
+        key = model.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        models.append(model)
+    return tuple(models)
+
+
 def build_document_enricher() -> DocumentEnricher:
     enabled = bool(
         getattr(config, "LLM_DOCUMENT_ENRICHMENT_ENABLED", False)
@@ -1440,13 +1498,9 @@ def build_document_enricher() -> DocumentEnricher:
             model_name=config.LLM_MODEL or "mock-enrichment",
         )
     if provider_name in {"openai", "openai-compatible", "openai_compatible", "lmstudio", "ollama"}:
-        configured_models = [
-            model
-            for model in (config.LLM_MODEL, *getattr(config, "LLM_MODEL_FALLBACKS", ()))
-            if str(model or "").strip()
-        ]
+        configured_models = _configured_llm_model_names()
         providers = [
-            _build_openai_compatible_provider(str(model).strip())
+            _build_openai_compatible_provider(model)
             for model in configured_models
         ]
         provider: BaseEnrichmentProvider | None
@@ -1461,6 +1515,7 @@ def build_document_enricher() -> DocumentEnricher:
             provider=provider,
             provider_name=provider_name,
             model_name=config.LLM_MODEL or "",
+            model_names=configured_models,
         )
     return DocumentEnricher(
         enabled=True,
@@ -1647,6 +1702,13 @@ def _contains_rate_limit_text(value: object) -> bool:
     return any(marker in lowered for marker in LLM_RATE_LIMIT_TEXT_MARKERS)
 
 
+def _contains_transient_provider_text(value: object) -> bool:
+    lowered = _normalize_text(value).lower()
+    return bool(LLM_RETRYABLE_HTTP_STATUS_TEXT_RE.search(lowered)) or any(
+        marker in lowered for marker in LLM_TRANSIENT_PROVIDER_TEXT_MARKERS
+    )
+
+
 def _is_rate_limit_response(response: requests.Response | Any) -> bool:
     status_code = getattr(response, "status_code", None)
     if status_code == 429:
@@ -1664,6 +1726,33 @@ def _is_rate_limit_error(exc: BaseException) -> bool:
             return True
         current = current.__cause__ if isinstance(current.__cause__, BaseException) else None
     return False
+
+
+def _is_transient_provider_response(response: requests.Response | Any) -> bool:
+    status_code = getattr(response, "status_code", None)
+    if status_code in LLM_RETRYABLE_HTTP_STATUS_CODES:
+        return True
+    return _is_rate_limit_response(response) or _contains_transient_provider_text(
+        getattr(response, "text", "")
+    )
+
+
+def _is_transient_provider_error(exc: BaseException) -> bool:
+    current: BaseException | None = exc
+    while current is not None:
+        if isinstance(current, LLM_RETRYABLE_REQUEST_EXCEPTIONS):
+            return True
+        response = getattr(current, "response", None)
+        if response is not None and _is_transient_provider_response(response):
+            return True
+        if _is_rate_limit_error(current) or _contains_transient_provider_text(current):
+            return True
+        current = current.__cause__ if isinstance(current.__cause__, BaseException) else None
+    return False
+
+
+def _provider_model_name(provider: object) -> str:
+    return str(getattr(provider, "model", "") or "<unset>").strip() or "<unset>"
 
 
 def _build_llm_proxy_config(proxy_url: str | None) -> dict[str, str] | None:

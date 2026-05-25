@@ -93,6 +93,46 @@ def _analyzed_raw_document(*, doc_id: int = 1, url: str = "https://example.test/
     return document
 
 
+def _llm_success_response() -> mock.Mock:
+    facts = {
+        "document_type": "отбор",
+        "region": "РФ",
+        "authority": "Минсельхоз России",
+        "status": "прием открыт",
+        "deadline": "2026-06-01",
+        "effective_date": None,
+        "support_type": "субсидия",
+        "target_recipients": ["сельхозтоваропроизводители"],
+        "what_changed": "Открыт прием заявок на предоставление субсидии.",
+        "why_matters": "Нужно проверить условия участия в мере поддержки.",
+        "what_to_check": "Проверить критерии получателя и срок подачи заявки.",
+        "applicability_note": "Нужна проверка применимости к AHSTEP.",
+        "short_summary": "Открыт прием заявок на субсидию для АПК.",
+        "confidence": "high",
+        "source_quotes": ["Открыт прием заявок"],
+    }
+    response = mock.Mock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {
+        "choices": [
+            {"message": {"content": json.dumps(facts, ensure_ascii=False)}}
+        ]
+    }
+    return response
+
+
+def _llm_http_error_response(status_code: int, reason: str) -> mock.Mock:
+    response = mock.Mock()
+    response.status_code = status_code
+    response.reason = reason
+    response.text = f'{{"error":"HTTP {status_code} {reason}"}}'
+    response.raise_for_status.side_effect = requests.HTTPError(
+        f"{status_code} Provider Error",
+        response=response,
+    )
+    return response
+
+
 class _SpyProvider(MockEnrichmentProvider):
     def __init__(self) -> None:
         self.calls = 0
@@ -108,7 +148,14 @@ class _FailingProvider(MockEnrichmentProvider):
 
 
 class _BadRequestProvider(MockEnrichmentProvider):
+    def __init__(self, model: str = "bad-request-model") -> None:
+        self.model = model
+        self.api_key = ""
+        self.proxy_url = ""
+        self.calls = 0
+
     def enrich_document(self, **kwargs) -> EnrichmentResult:
+        self.calls += 1
         raise RuntimeError(
             "LLM provider request failed: HTTP 400 Bad Request; "
             "body='Invalid response_format [REDACTED]'; "
@@ -137,7 +184,9 @@ class _FallbackSuccessProvider(MockEnrichmentProvider):
 
     def enrich_document(self, **kwargs) -> EnrichmentResult:
         self.calls += 1
-        return super().enrich_document(**kwargs)
+        result = super().enrich_document(**kwargs)
+        result.model_name = self.model
+        return result
 
 
 class _CountingProvider(MockEnrichmentProvider):
@@ -269,6 +318,27 @@ class LLMEnrichmentTest(unittest.TestCase):
         self.assertIsNotNone(result)
         assert result is not None
         self.assertIsNone(result.error)
+
+    def test_build_document_enricher_orders_primary_and_deduped_fallback_models(self) -> None:
+        with mock.patch("app.config.LLM_DOCUMENT_ENRICHMENT_ENABLED", True), \
+             mock.patch("app.config.LLM_PROVIDER", "openai_compatible"), \
+             mock.patch("app.config.LLM_MODEL", "gemma-4-31b-it"), \
+             mock.patch(
+                 "app.config.LLM_MODEL_FALLBACKS",
+                 ("gemma-4-26b-it", "gemma-4-31b-it", "gemini-2.5-flash"),
+             ):
+            enricher = build_document_enricher()
+
+        self.assertEqual(
+            enricher.model_names,
+            ("gemma-4-31b-it", "gemma-4-26b-it", "gemini-2.5-flash"),
+        )
+        self.assertIsInstance(enricher.provider, ModelFallbackEnrichmentProvider)
+        assert isinstance(enricher.provider, ModelFallbackEnrichmentProvider)
+        self.assertEqual(
+            [provider.model for provider in enricher.provider.providers],
+            ["gemma-4-31b-it", "gemma-4-26b-it", "gemini-2.5-flash"],
+        )
 
     def test_mock_enrichment_returns_structured_object(self) -> None:
         enricher = DocumentEnricher(enabled=True, provider=MockEnrichmentProvider())
@@ -434,6 +504,141 @@ class LLMEnrichmentTest(unittest.TestCase):
         self.assertIsNone(result.error)
         self.assertEqual(primary.calls, 1)
         self.assertEqual(fallback.calls, 1)
+        self.assertEqual(result.model_name, "fallback-model")
+
+    def test_model_fallback_provider_tries_primary_model_first(self) -> None:
+        primary = _FallbackSuccessProvider("primary-model")
+        fallback = _FallbackSuccessProvider("fallback-model")
+        provider = ModelFallbackEnrichmentProvider([primary, fallback])
+
+        result = provider.enrich_document(
+            title="Тест",
+            raw_text="Открыт прием заявок на субсидию.",
+            analysis=_analysis_result("requires_attention"),
+            source_name="Источник",
+        )
+
+        self.assertEqual(result.model_name, "primary-model")
+        self.assertEqual(primary.calls, 1)
+        self.assertEqual(fallback.calls, 0)
+
+    def test_http_500_after_retries_switches_to_first_fallback_model(self) -> None:
+        primary = OpenAICompatibleEnrichmentProvider(
+            base_url="https://api.example.test/v1",
+            api_key="",
+            model="primary-model",
+            timeout_seconds=5,
+            max_retries=1,
+            retry_backoff_seconds=0,
+        )
+        fallback = OpenAICompatibleEnrichmentProvider(
+            base_url="https://api.example.test/v1",
+            api_key="",
+            model="fallback-model",
+            timeout_seconds=5,
+            max_retries=1,
+            retry_backoff_seconds=0,
+        )
+        provider = ModelFallbackEnrichmentProvider([primary, fallback])
+
+        with mock.patch(
+            "app.llm.enrichment.requests.post",
+            side_effect=[
+                _llm_http_error_response(500, "Internal Server Error"),
+                _llm_http_error_response(500, "Internal Server Error"),
+                _llm_success_response(),
+            ],
+        ) as post_mock:
+            result = provider.enrich_document(
+                title="Тест",
+                raw_text="Открыт прием заявок на субсидию.",
+                analysis=_analysis_result("requires_attention"),
+                source_name="Источник",
+            )
+
+        requested_models = [
+            json.loads(call.kwargs["data"].decode("utf-8"))["model"]
+            for call in post_mock.call_args_list
+        ]
+        self.assertEqual(requested_models, ["primary-model", "primary-model", "fallback-model"])
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.model_name, "fallback-model")
+
+    def test_http_503_switches_to_fallback_model(self) -> None:
+        primary = OpenAICompatibleEnrichmentProvider(
+            base_url="https://api.example.test/v1",
+            api_key="",
+            model="primary-model",
+            timeout_seconds=5,
+            max_retries=0,
+        )
+        fallback = OpenAICompatibleEnrichmentProvider(
+            base_url="https://api.example.test/v1",
+            api_key="",
+            model="fallback-model",
+            timeout_seconds=5,
+            max_retries=0,
+        )
+        provider = ModelFallbackEnrichmentProvider([primary, fallback])
+
+        with mock.patch(
+            "app.llm.enrichment.requests.post",
+            side_effect=[
+                _llm_http_error_response(503, "Service Unavailable"),
+                _llm_success_response(),
+            ],
+        ) as post_mock:
+            result = provider.enrich_document(
+                title="Тест",
+                raw_text="Открыт прием заявок на субсидию.",
+                analysis=_analysis_result("requires_attention"),
+                source_name="Источник",
+            )
+
+        requested_models = [
+            json.loads(call.kwargs["data"].decode("utf-8"))["model"]
+            for call in post_mock.call_args_list
+        ]
+        self.assertEqual(requested_models, ["primary-model", "fallback-model"])
+        self.assertEqual(result.model_name, "fallback-model")
+
+    def test_http_429_switches_to_fallback_model(self) -> None:
+        primary = OpenAICompatibleEnrichmentProvider(
+            base_url="https://api.example.test/v1",
+            api_key="",
+            model="primary-model",
+            timeout_seconds=5,
+            max_retries=0,
+        )
+        fallback = OpenAICompatibleEnrichmentProvider(
+            base_url="https://api.example.test/v1",
+            api_key="",
+            model="fallback-model",
+            timeout_seconds=5,
+            max_retries=0,
+        )
+        provider = ModelFallbackEnrichmentProvider([primary, fallback])
+
+        with mock.patch(
+            "app.llm.enrichment.requests.post",
+            side_effect=[
+                _llm_http_error_response(429, "Too Many Requests"),
+                _llm_success_response(),
+            ],
+        ) as post_mock:
+            result = provider.enrich_document(
+                title="Тест",
+                raw_text="Открыт прием заявок на субсидию.",
+                analysis=_analysis_result("requires_attention"),
+                source_name="Источник",
+            )
+
+        requested_models = [
+            json.loads(call.kwargs["data"].decode("utf-8"))["model"]
+            for call in post_mock.call_args_list
+        ]
+        self.assertEqual(requested_models, ["primary-model", "fallback-model"])
+        self.assertEqual(result.model_name, "fallback-model")
 
     def test_all_model_rate_limit_failures_return_failed_enrichment(self) -> None:
         primary = _RateLimitProvider("primary-model")
@@ -458,6 +663,30 @@ class LLMEnrichmentTest(unittest.TestCase):
         self.assertIn("LLM enrichment failed for all models", result.error or "")
         self.assertEqual(primary.calls, 1)
         self.assertEqual(fallback.calls, 1)
+
+    def test_http_400_does_not_fallback_to_next_model(self) -> None:
+        primary = _BadRequestProvider("primary-model")
+        fallback = _FallbackSuccessProvider("fallback-model")
+        enricher = DocumentEnricher(
+            enabled=True,
+            provider=ModelFallbackEnrichmentProvider([primary, fallback]),
+            provider_name="openai-compatible",
+            model_name="primary-model",
+        )
+
+        result = enricher.maybe_enrich_document(
+            title="Тест",
+            raw_text="Открыт прием заявок на субсидию.",
+            analysis=_analysis_result("requires_attention"),
+            source_name="Источник",
+        )
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.status, "fallback")
+        self.assertIn("HTTP 400 Bad Request", result.error or "")
+        self.assertEqual(primary.calls, 1)
+        self.assertEqual(fallback.calls, 0)
 
     def test_display_enrichment_ignores_error_rows(self) -> None:
         display = get_display_enrichment(
@@ -1052,6 +1281,44 @@ class LLMEnrichmentTest(unittest.TestCase):
         self.assertEqual(enrichment["status"], "failed")
         self.assertIn("LLM enrichment failed for all models", enrichment["error"] or "")
 
+    def test_analyze_time_enrichment_saves_success_with_fallback_model(self) -> None:
+        db_path = self._db_path("llm_enrichment_analyze_fallback_success.db")
+        init_db(db_path)
+        document = _raw_document()
+        analysis = _analysis_result("requires_attention")
+        client = mock.Mock()
+        client.analyze_document.return_value = analysis
+        primary = _RateLimitProvider("primary-model")
+        fallback = _FallbackSuccessProvider("fallback-model")
+        enricher = DocumentEnricher(
+            enabled=True,
+            provider=ModelFallbackEnrichmentProvider([primary, fallback]),
+            provider_name="openai-compatible",
+            model_name="primary-model",
+            model_names=("primary-model", "fallback-model"),
+        )
+
+        with mock.patch("app.pipeline.analyze.get_document_enricher", return_value=enricher):
+            with mock.patch("app.pipeline.analyze.update_analysis"):
+                processed = analyze_pipeline._analyze_documents(
+                    [document],
+                    client=client,
+                    db_path=db_path,
+                )
+
+        self.assertEqual(processed, 1)
+        self.assertEqual(primary.calls, 1)
+        self.assertEqual(fallback.calls, 1)
+        enrichment = get_document_enrichment(
+            document.url,
+            provider="openai-compatible",
+            model="fallback-model",
+            db_path=db_path,
+        )
+        self.assertIsNotNone(enrichment)
+        assert enrichment is not None
+        self.assertEqual(enrichment["status"], "success")
+
     def test_analyze_pipeline_caps_llm_enrichment_calls_per_batch(self) -> None:
         db_path = self._db_path("llm_enrichment_batch_limit.db")
         init_db(db_path)
@@ -1082,6 +1349,41 @@ class LLMEnrichmentTest(unittest.TestCase):
         self.assertEqual(processed, 3)
         self.assertEqual(client.analyze_document.call_count, 3)
         self.assertEqual(provider.calls, 1)
+        self.assertEqual(count_document_enrichments(db_path=db_path), 1)
+
+    def test_batch_limit_counts_documents_not_fallback_attempts(self) -> None:
+        db_path = self._db_path("llm_enrichment_batch_limit_fallback_attempts.db")
+        init_db(db_path)
+        documents = [
+            _raw_document().model_copy(update={"id": index, "url": f"https://example.test/fallback-{index}"})
+            for index in range(1, 4)
+        ]
+        analysis = _analysis_result("requires_attention")
+        client = mock.Mock()
+        client.analyze_document.return_value = analysis
+        primary = _RateLimitProvider("primary-model")
+        fallback = _FallbackSuccessProvider("fallback-model")
+        enricher = DocumentEnricher(
+            enabled=True,
+            provider=ModelFallbackEnrichmentProvider([primary, fallback]),
+            provider_name="openai-compatible",
+            model_name="primary-model",
+            model_names=("primary-model", "fallback-model"),
+        )
+
+        with mock.patch("app.pipeline.analyze.get_document_enricher", return_value=enricher):
+            with mock.patch("app.pipeline.analyze.update_analysis"):
+                with mock.patch("app.config.LLM_MAX_DOCS_PER_BATCH", 1):
+                    processed = analyze_pipeline._analyze_documents(
+                        documents,
+                        client=client,
+                        db_path=db_path,
+                    )
+
+        self.assertEqual(processed, 3)
+        self.assertEqual(client.analyze_document.call_count, 3)
+        self.assertEqual(primary.calls, 1)
+        self.assertEqual(fallback.calls, 1)
         self.assertEqual(count_document_enrichments(db_path=db_path), 1)
 
     def test_disabled_enrichment_does_not_write_rows(self) -> None:
@@ -1518,6 +1820,45 @@ class LLMEnrichmentTest(unittest.TestCase):
         self.assertEqual(result.enriched, 1)
         self.assertEqual(provider.calls, 1)
         self.assertEqual(count_document_enrichments(db_path=db_path), 1)
+
+    def test_standalone_enrich_path_saves_success_with_fallback_model(self) -> None:
+        db_path = self._db_path("llm_enrichment_command_fallback_success.db")
+        init_db(db_path)
+        document = _analyzed_raw_document(url="https://example.test/standalone-fallback")
+        save_document(document, db_path=db_path)
+        primary = _RateLimitProvider("primary-model")
+        fallback = _FallbackSuccessProvider("fallback-model")
+        enricher = DocumentEnricher(
+            enabled=True,
+            provider=ModelFallbackEnrichmentProvider([primary, fallback]),
+            provider_name="openai-compatible",
+            model_name="primary-model",
+            model_names=("primary-model", "fallback-model"),
+        )
+
+        with mock.patch("app.pipeline.enrich.get_document_enricher", return_value=enricher):
+            result = run_enrich_docs(days=7, limit=5, db_path=db_path)
+
+        self.assertEqual(result.selected, 1)
+        self.assertEqual(result.enriched, 1)
+        self.assertEqual(primary.calls, 1)
+        self.assertEqual(fallback.calls, 1)
+        primary_enrichment = get_document_enrichment(
+            document.url,
+            provider="openai-compatible",
+            model="primary-model",
+            db_path=db_path,
+        )
+        fallback_enrichment = get_document_enrichment(
+            document.url,
+            provider="openai-compatible",
+            model="fallback-model",
+            db_path=db_path,
+        )
+        self.assertIsNone(primary_enrichment)
+        self.assertIsNotNone(fallback_enrichment)
+        assert fallback_enrichment is not None
+        self.assertEqual(fallback_enrichment["status"], "success")
 
     def test_action_level_is_not_changed_by_enrichment_command(self) -> None:
         db_path = self._db_path("llm_enrichment_action_level_unchanged.db")

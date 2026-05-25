@@ -79,13 +79,19 @@ def run_enrich_docs(
         )
         source_hash = compute_document_card_source_hash(prepared)
         if not force:
-            cached = get_document_enrichment(
-                document.url,
-                provider=enricher.provider_name,
-                model=enricher.model_name,
-                prompt_version=DOCUMENT_CARD_PROMPT_VERSION,
-                source_hash=source_hash,
-                db_path=db_path,
+            cached = next(
+                (
+                    get_document_enrichment(
+                        document.url,
+                        provider=enricher.provider_name,
+                        model=model_name,
+                        prompt_version=DOCUMENT_CARD_PROMPT_VERSION,
+                        source_hash=source_hash,
+                        db_path=db_path,
+                    )
+                    for model_name in enricher.cache_model_names()
+                ),
+                None,
             )
             if cached is not None:
                 result.skipped_cached += 1
@@ -112,7 +118,7 @@ def run_enrich_docs(
             document_id=document.id,
             document_url=document.url,
             provider=enricher.provider_name,
-            model=enricher.model_name,
+            model=enricher.model_name_for_result(enrichment),
             enrichment=enrichment,
             prompt_version=enrichment.prompt_version,
             source_hash=enrichment.source_hash,
