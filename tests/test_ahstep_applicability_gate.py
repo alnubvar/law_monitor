@@ -84,6 +84,39 @@ class AhstepApplicabilityGateTest(unittest.TestCase):
             keyword_groups=load_keyword_groups(),
         )
 
+    def _manual_news_document(
+        self,
+        *,
+        doc_id: int,
+        title: str,
+        raw_text: str,
+        url: str,
+        relevance_reason: str = "Регион вне фокуса AHSTEP; документ сохранён справочно.",
+    ) -> RawDocument:
+        now = datetime(2026, 5, 22, 9, 0, tzinfo=timezone.utc)
+        return RawDocument(
+            id=doc_id,
+            source_name="ZOL.ru - зерновые новости",
+            source_url="https://www.zol.ru/news/grain/",
+            level="news",
+            region="federal",
+            title=title,
+            url=url,
+            published_at=now,
+            collected_at=now,
+            content_hash=f"manual-news-{doc_id}",
+            raw_text=raw_text,
+            is_relevant=True,
+            relevance_reason=relevance_reason,
+            topic="АПК",
+            importance="medium",
+            action_level="watchlist",
+            page_type="news_background",
+            summary=raw_text,
+            impact="Региональный фон вне целевой географии AHSTEP.",
+            business_signal="Регион вне фокуса AHSTEP; документ сохранён справочно.",
+        )
+
     def test_promote_budget_target_region_gate_controls_report_visibility(self) -> None:
         documents: list[RawDocument] = []
         for index, fixture_id in enumerate(sorted(PROMOTE_FIXTURE_IDS), start=1):
@@ -289,6 +322,74 @@ class AhstepApplicabilityGateTest(unittest.TestCase):
             action_levels=["requires_attention", "watchlist"],
         )
         self.assertEqual(visible, [])
+
+    def test_reference_only_non_target_weather_agroinsurance_story_is_hidden(self) -> None:
+        document = self._manual_news_document(
+            doc_id=331,
+            title="НСА: после весенней непогоды в ЦФО и Поволжье аграрии уточняют страховые выплаты",
+            raw_text=(
+                "Национальный союз агростраховщиков сообщил о последствиях весенней "
+                "непогоды в Центральном федеральном округе и Поволжье. Материал носит "
+                "региональный справочный характер."
+            ),
+            url="https://www.zol.ru/n/non-target-weather-insurance-test",
+        )
+
+        self.assertEqual(effective_user_action_level(document), "background")
+        self.assertFalse(
+            should_show_document(
+                document,
+                surface="report",
+                relevant_only=False,
+                action_levels=["requires_attention", "watchlist"],
+            )
+        )
+        self.assertFalse(should_show_document(document, surface="telegram_digest", relevant_only=False))
+
+    def test_reference_only_primorye_rice_story_is_hidden(self) -> None:
+        document = self._manual_news_document(
+            doc_id=332,
+            title="Аграрии Приморья сеют рис",
+            raw_text=(
+                "В Приморье сельхозпроизводители приступили к севу риса. "
+                "Новость относится к региональной посевной кампании вне целевых регионов AHSTEP."
+            ),
+            url="https://www.zol.ru/n/primorye-rice-test",
+        )
+
+        self.assertEqual(effective_user_action_level(document), "background")
+        self.assertFalse(
+            should_show_document(
+                document,
+                surface="report",
+                relevant_only=False,
+                action_levels=["requires_attention", "watchlist"],
+            )
+        )
+        self.assertFalse(should_show_document(document, surface="telegram_digest", relevant_only=False))
+
+    def test_reference_only_altai_agriculture_lending_story_is_hidden(self) -> None:
+        document = self._manual_news_document(
+            doc_id=333,
+            title="Аграрная отрасль Алтайского края устойчиво развивается благодаря кредитованию",
+            raw_text=(
+                "В Алтайском крае подвели итоги развития сельского хозяйства и "
+                "регионального кредитования аграриев. Федеральных решений или мер "
+                "для целевых регионов AHSTEP не заявлено."
+            ),
+            url="https://www.zol.ru/n/altai-agro-lending-test",
+        )
+
+        self.assertEqual(effective_user_action_level(document), "background")
+        self.assertFalse(
+            should_show_document(
+                document,
+                surface="report",
+                relevant_only=False,
+                action_levels=["requires_attention", "watchlist"],
+            )
+        )
+        self.assertFalse(should_show_document(document, surface="telegram_digest", relevant_only=False))
 
     def test_non_target_support_can_be_enabled_by_target_region_config(self) -> None:
         import app.config as config_module

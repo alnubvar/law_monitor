@@ -108,6 +108,11 @@ PRACTICAL_NEWS_SIGNAL_RE = re.compile(
     r"требован|порядок\s+предоставлен|компенсац|возмещен",
     re.IGNORECASE,
 )
+REFERENCE_ONLY_NON_TARGET_RE = re.compile(
+    r"регион\s+вне\s+фокуса\s+ahstep|вне\s+целев\w+\s+географ|"
+    r"сохран[её]н[ао]?\s+справочно|оставлен[ао]?\s+для\s+справк",
+    re.IGNORECASE,
+)
 
 VisibilitySurface = Literal["report", "telegram_digest", "telegram_list"]
 
@@ -129,6 +134,11 @@ def effective_user_action_level(document: RawDocument) -> str | None:
     if guarded_action_level in {"requires_attention", "watchlist"} and (
         _is_low_value_statistical_repeal(document)
         or _is_weak_digital_selection_news(document)
+    ):
+        return "background"
+    if (
+        guarded_action_level in {"requires_attention", "watchlist"}
+        and _is_reference_only_non_target_region(document)
     ):
         return "background"
     applicability = _support_measure_applicability(document)
@@ -309,6 +319,16 @@ def _is_weak_digital_selection_news(document: RawDocument) -> bool:
     if not WEAK_DIGITAL_SELECTION_RE.search(text):
         return False
     return not PRACTICAL_NEWS_SIGNAL_RE.search(text)
+
+
+def _is_reference_only_non_target_region(document: RawDocument) -> bool:
+    text = _visibility_text(document)
+    if not REFERENCE_ONLY_NON_TARGET_RE.search(text):
+        return False
+    applicability = _support_measure_applicability(document)
+    if applicability.is_non_target_region and not applicability.has_federal_scope:
+        return True
+    return _detect_geo_scope(document) == "non_target_rf"
 
 
 def _visibility_text(document: RawDocument) -> str:
