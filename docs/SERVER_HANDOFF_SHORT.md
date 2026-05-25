@@ -20,7 +20,7 @@ AHSTEP `law_monitor` — backend-система GR-мониторинга для
 - хранит историю в локальной SQLite БД.
 
 Классификация документов выполняется детерминированными правилами.
-LLM (Google Gemma через OpenAI-совместимый endpoint) опционально обогащает
+LLM (Google Gemini через OpenAI-совместимый endpoint) опционально обогащает
 карточки документов краткими бизнес-выводами. LLM не управляет
 классификацией: если он недоступен, отчёт всё равно строится.
 
@@ -67,7 +67,7 @@ LLM (Google Gemma через OpenAI-совместимый endpoint) опцио�
   Если прямой доступ закрыт — через `TELEGRAM_PROXY_URL` (http / https /
   socks5 / socks5h). Telegram-прокси предназначен только для Telegram Bot API.
 - **LLM provider** (если включён enrichment): по умолчанию
-  `generativelanguage.googleapis.com` (Google Gemma через
+  `generativelanguage.googleapis.com` (Google Gemini через
   OpenAI-совместимый endpoint). На российском сервере доступ требует
   отдельного маршрута через `LLM_PROXY_URL` (отдельный от Telegram-прокси).
 
@@ -129,9 +129,12 @@ LLM_PROVIDER=mock
 LLM_BASE_URL=
 LLM_API_KEY=
 LLM_MODEL=
+LLM_MODEL_FALLBACKS=
 LLM_TIMEOUT_SECONDS=60
 LLM_PROXY_URL=
 LLM_RESPONSE_FORMAT=auto
+LLM_MAX_DOCS_PER_BATCH=20
+LLM_REQUEST_DELAY_SECONDS=0
 LLM_MAX_RETRIES=2
 LLM_RETRY_BACKOFF_SECONDS=2
 LLM_RETRY_MAX_BACKOFF_SECONDS=10
@@ -159,7 +162,7 @@ IT меняет в env с перезапуском `ahstep-telegram-bot.service`
 каждом цикле. `LAW_MONITOR_HOURLY_INTERVAL_MINUTES` остается fallback, если
 `LAW_MONITOR_COLLECTION_TIMES` пустой.
 
-## 7. Рекомендованные production-значения для LLM (Google/Gemma)
+## 7. Рекомендованные production-значения для LLM (Google Gemini)
 
 Включать только после согласования с владельцем и IT. Сетевой маршрут до
 `generativelanguage.googleapis.com` — отдельный, через `LLM_PROXY_URL`.
@@ -169,15 +172,18 @@ LLM_ENRICHMENT_ENABLED=true
 LLM_DOCUMENT_ENRICHMENT_ENABLED=true
 LLM_PROVIDER=openai_compatible
 LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
-LLM_MODEL=gemma-4-31b-it
+LLM_MODEL=gemini-3.1-flash-lite
+LLM_MODEL_FALLBACKS=gemini-2.5-flash,gemini-2.0-flash
 LLM_RESPONSE_FORMAT=none
 LLM_PROXY_URL=socks5h://USER:PASSWORD@HOST:PORT
-LLM_MAX_DOCUMENT_CHARS=1000
+LLM_MAX_DOCUMENT_CHARS=2000
 LLM_TIMEOUT_SECONDS=300
 LLM_ENRICHMENT_LIMIT=3
+LLM_MAX_DOCS_PER_BATCH=10
+LLM_REQUEST_DELAY_SECONDS=5
 LLM_MAX_RETRIES=2
-LLM_RETRY_BACKOFF_SECONDS=2
-LLM_RETRY_MAX_BACKOFF_SECONDS=10
+LLM_RETRY_BACKOFF_SECONDS=3
+LLM_RETRY_MAX_BACKOFF_SECONDS=20
 ```
 
 `TELEGRAM_PROXY_URL` и `LLM_PROXY_URL` — независимые переменные. Telegram
@@ -309,7 +315,7 @@ Token в логах редактируется автоматически — с
 1. Проверить `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`.
 2. Проверить `LLM_PROXY_URL` (доступ до `generativelanguage.googleapis.com`).
    `TELEGRAM_PROXY_URL` для LLM не используется.
-3. Для Google/Gemma поставить `LLM_RESPONSE_FORMAT=none`, если provider
+3. Для Gemini поставить `LLM_RESPONSE_FORMAT=none`, если provider
    возвращает 400 на `response_format`.
 4. Снизить `LLM_ENRICHMENT_LIMIT=1` или временно `LLM_ENRICHMENT_ENABLED=false`.
 5. Отчёт всё равно будет выходить: LLM-сбой деградирует только детализацию

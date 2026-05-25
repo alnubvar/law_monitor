@@ -89,7 +89,7 @@ proxy URLs, если SOCKS extras доступны через `requests[socks]`.
 
 Telegram proxy и LLM proxy разделены намеренно: `TELEGRAM_PROXY_URL` помогает
 только Telegram Bot API и не обеспечивает доступ к Google/Gemini. Для
-Google/Gemma OpenAI-compatible endpoint через корпоративную сеть используйте
+Gemini OpenAI-compatible endpoint через корпоративную сеть используйте
 отдельный `LLM_PROXY_URL` и храните его только в production env-файле.
 
 Не логируйте полный `LLM_PROXY_URL`. Если proxy URL содержит credentials, они

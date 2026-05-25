@@ -322,22 +322,22 @@ class LLMEnrichmentTest(unittest.TestCase):
     def test_build_document_enricher_orders_primary_and_deduped_fallback_models(self) -> None:
         with mock.patch("app.config.LLM_DOCUMENT_ENRICHMENT_ENABLED", True), \
              mock.patch("app.config.LLM_PROVIDER", "openai_compatible"), \
-             mock.patch("app.config.LLM_MODEL", "gemma-4-31b-it"), \
+             mock.patch("app.config.LLM_MODEL", "gemini-3.1-flash-lite"), \
              mock.patch(
                  "app.config.LLM_MODEL_FALLBACKS",
-                 ("gemma-4-26b-it", "gemma-4-31b-it", "gemini-2.5-flash"),
+                 ("gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-2.0-flash"),
              ):
             enricher = build_document_enricher()
 
         self.assertEqual(
             enricher.model_names,
-            ("gemma-4-31b-it", "gemma-4-26b-it", "gemini-2.5-flash"),
+            ("gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash"),
         )
         self.assertIsInstance(enricher.provider, ModelFallbackEnrichmentProvider)
         assert isinstance(enricher.provider, ModelFallbackEnrichmentProvider)
         self.assertEqual(
             [provider.model for provider in enricher.provider.providers],
-            ["gemma-4-31b-it", "gemma-4-26b-it", "gemini-2.5-flash"],
+            ["gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash"],
         )
 
     def test_mock_enrichment_returns_structured_object(self) -> None:

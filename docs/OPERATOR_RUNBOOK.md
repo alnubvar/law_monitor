@@ -27,8 +27,9 @@ sudo tail -n 100 /var/log/ahstep-law-monitor/app.log
 Бизнес-проверки:
 
 - Убедиться, что daily digest пришел approved пользователям в личные Telegram-чаты.
+- Убедиться, что daily digest содержит DOCX-вложение.
 - Убедиться, что актуальный отчет есть в `/var/lib/ahstep-law-monitor/reports`.
-- Проверить Telegram `/status` и `/sources`, если bot включен.
+- Проверить ручной `/report` в личном чате администратора, если bot включен и согласован ручной smoke.
 - Проверить, показывает ли diagnostics stale key sources или recent source errors.
 
 Безопасная read-only diagnostics:
@@ -59,7 +60,6 @@ df -h /var/lib/ahstep-law-monitor /var/log/ahstep-law-monitor
 Симптомы:
 
 - `diagnostics --days 7` показывает recent source errors.
-- Telegram `/sources` показывает сбои источников.
 - В отчетах меньше ожидаемых материалов.
 - В логах есть timeout, connection, proxy, HTTP или extraction errors.
 
@@ -219,7 +219,7 @@ LLM_DOCUMENT_ENRICHMENT_ENABLED=false
   либо временно поставить `LLM_RESPONSE_FORMAT=none`, если provider возвращает
   400 на `response_format`.
 - Проверить retry-параметры: `LLM_MAX_RETRIES=2`,
-  `LLM_RETRY_BACKOFF_SECONDS=2`, `LLM_RETRY_MAX_BACKOFF_SECONDS=10`.
+  `LLM_RETRY_BACKOFF_SECONDS=3`, `LLM_RETRY_MAX_BACKOFF_SECONDS=20`.
 - Убедиться, что сервер может открыть approved provider endpoint.
 - Проверить provider quota и rate limits.
 - Если provider нестабилен, снизить `LLM_ENRICHMENT_LIMIT` до `1`-`2` или
@@ -231,7 +231,7 @@ LLM_DOCUMENT_ENRICHMENT_ENABLED=false
 Ошибки provider path должны сохранять API key и proxy credentials в redacted
 виде.
 
-Для первого корпоративного запуска с Google/Gemma через proxy используйте
+Для первого корпоративного запуска с Google Gemini через proxy используйте
 малый лимит enrichment (`2` или `3`) и повышайте его только после 2-3 стабильных
 дней:
 
@@ -240,15 +240,18 @@ LLM_ENRICHMENT_ENABLED=true
 LLM_DOCUMENT_ENRICHMENT_ENABLED=true
 LLM_PROVIDER=openai_compatible
 LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
-LLM_MODEL=gemma-4-31b-it
+LLM_MODEL=gemini-3.1-flash-lite
+LLM_MODEL_FALLBACKS=gemini-2.5-flash,gemini-2.0-flash
 LLM_RESPONSE_FORMAT=none
 LLM_PROXY_URL=socks5h://USER:PASSWORD@HOST:PORT
-LLM_MAX_DOCUMENT_CHARS=1000
+LLM_MAX_DOCUMENT_CHARS=2000
 LLM_TIMEOUT_SECONDS=300
 LLM_ENRICHMENT_LIMIT=3
+LLM_MAX_DOCS_PER_BATCH=10
+LLM_REQUEST_DELAY_SECONDS=5
 LLM_MAX_RETRIES=2
-LLM_RETRY_BACKOFF_SECONDS=2
-LLM_RETRY_MAX_BACKOFF_SECONDS=10
+LLM_RETRY_BACKOFF_SECONDS=3
+LLM_RETRY_MAX_BACKOFF_SECONDS=20
 ```
 
 LLM failures должны деградировать только детализацию отчета. Collection,

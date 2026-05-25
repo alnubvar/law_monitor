@@ -1,2 +1,1 @@
-"""Tests package placeholder for the MVP project."""
-
+"""Tests package placeholder for the law_monitor project."""

@@ -282,7 +282,7 @@ class ConfigSmokeTest(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "LLM_MODEL_FALLBACKS": "gemma-4-26b-it, gemini-2.5-flash, gemma-4-26b-it",
+                "LLM_MODEL_FALLBACKS": "gemini-2.5-flash, gemini-2.0-flash, gemini-2.5-flash",
                 "LLM_MAX_DOCS_PER_BATCH": "5",
                 "LLM_REQUEST_DELAY_SECONDS": "3.5",
             },
@@ -291,7 +291,7 @@ class ConfigSmokeTest(unittest.TestCase):
             reloaded = importlib.reload(config_module)
             self.assertEqual(
                 reloaded.LLM_MODEL_FALLBACKS,
-                ("gemma-4-26b-it", "gemini-2.5-flash"),
+                ("gemini-2.5-flash", "gemini-2.0-flash"),
             )
             self.assertEqual(reloaded.LLM_MAX_DOCS_PER_BATCH, 5)
             self.assertEqual(reloaded.LLM_REQUEST_DELAY_SECONDS, 3.5)
