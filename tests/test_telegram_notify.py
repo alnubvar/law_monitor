@@ -200,6 +200,20 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         self.assertNotIn("2002", recipients)
         self.assertNotIn("9999", recipients)
 
+    def test_daily_report_digest_recipients_work_without_legacy_chat(self) -> None:
+        db_path = self._db_path("daily_digest_private_recipients.db")
+        init_db(db_path)
+        upsert_telegram_allowed_user(2001, db_path=db_path)
+
+        with patch.multiple(
+            telegram.config,
+            TELEGRAM_ADMIN_USER_IDS=frozenset({1001}),
+            TELEGRAM_CHAT_ID="",
+        ):
+            recipients = telegram.get_daily_digest_recipients(db_path=db_path)
+
+        self.assertEqual(recipients, ["1001", "2001"])
+
     def test_daily_report_digest_deduplicates_admin_and_legacy_chat_numerically(self) -> None:
         with patch.multiple(
             telegram.config,

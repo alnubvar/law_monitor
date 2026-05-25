@@ -148,10 +148,9 @@ def run_polling_listener(
     max_cycles: int | None = None,
     sleep_fn: Callable[[float], None] = time.sleep,
 ) -> None:
-    if not _is_bot_configured():
-        raise RuntimeError(
-            "Telegram bot is not configured. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID."
-        )
+    configuration_error = _bot_configuration_error(db_path=db_path)
+    if configuration_error:
+        raise RuntimeError(configuration_error)
 
     proxies = _build_proxies()
     _configure_bot_commands(proxies=proxies)
@@ -1158,8 +1157,35 @@ def _offset_store_path() -> Path:
     return config.DATA_DIR / "telegram_bot_offset.txt"
 
 
-def _is_bot_configured() -> bool:
-    return bool(config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID)
+def _is_bot_configured(db_path: Path | str | None = None) -> bool:
+    return _bot_configuration_error(db_path=db_path) is None
+
+
+def _bot_configuration_error(db_path: Path | str | None = None) -> str | None:
+    if not config.TELEGRAM_BOT_TOKEN:
+        return "Telegram bot is not configured. Set TELEGRAM_BOT_TOKEN."
+    if _has_configured_access_anchor(db_path=db_path):
+        return None
+    return (
+        "Telegram bot private access is not configured. Set TELEGRAM_ADMIN_USER_IDS "
+        "or TELEGRAM_ALLOWED_USER_IDS, add active allowed users, or set optional "
+        "legacy TELEGRAM_CHAT_ID."
+    )
+
+
+def _has_configured_access_anchor(db_path: Path | str | None = None) -> bool:
+    if config.TELEGRAM_CHAT_ID:
+        return True
+    if config.TELEGRAM_ADMIN_USER_IDS or config.TELEGRAM_ALLOWED_USER_IDS:
+        return True
+    if db_path is None:
+        return False
+    try:
+        init_db(db_path)
+        return bool(list_active_telegram_allowed_users(db_path=db_path, limit=1))
+    except Exception:
+        logger.exception("Could not check Telegram allowed users during bot startup.")
+        return False
 
 
 def _build_proxies() -> dict[str, str] | None:

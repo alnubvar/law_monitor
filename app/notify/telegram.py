@@ -94,7 +94,14 @@ PUBLISHED_AT_FUTURE_TOLERANCE = timedelta(days=2)
 
 
 def is_configured() -> bool:
-    return bool(config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID)
+    return bool(
+        config.TELEGRAM_BOT_TOKEN
+        and (
+            config.TELEGRAM_CHAT_ID
+            or config.TELEGRAM_ADMIN_USER_IDS
+            or config.TELEGRAM_ALLOWED_USER_IDS
+        )
+    )
 
 
 def is_proxy_configured() -> bool:

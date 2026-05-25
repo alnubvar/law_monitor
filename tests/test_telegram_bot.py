@@ -48,15 +48,15 @@ class TelegramBotTest(unittest.TestCase):
         def build_proxies_noop():
             return None
 
-        def is_configured_stub():
-            return True
+        def configuration_error_stub(*_args, **_kwargs):
+            return None
 
         def offset_store_path_stub():
             return offset_path
 
         replacements = {
             "_offset_store_path": offset_store_path_stub,
-            "_is_bot_configured": is_configured_stub,
+            "_bot_configuration_error": configuration_error_stub,
             "_build_proxies": build_proxies_noop,
             "_configure_bot_commands": configure_commands_noop,
             "_bootstrap_offset": bootstrap_offset,
@@ -209,6 +209,82 @@ class TelegramBotTest(unittest.TestCase):
 
         self.assertIsNone(result.command)
         self.assertEqual(result.response_text, telegram_bot.UNKNOWN_COMMAND_MESSAGE)
+
+    def test_bot_startup_readiness_allows_private_admin_without_legacy_chat(self) -> None:
+        offset_path = self._offset_path("telegram_private_admin_offset.txt")
+
+        def configure_commands_noop(*, proxies):
+            return None
+
+        def get_updates_empty(*, offset, proxies):
+            return []
+
+        with patch.multiple(
+            telegram_bot.config,
+            TELEGRAM_BOT_TOKEN="token",
+            TELEGRAM_CHAT_ID="",
+            TELEGRAM_ADMIN_USER_IDS=frozenset({1001}),
+            TELEGRAM_ALLOWED_USER_IDS=frozenset(),
+        ):
+            self.assertTrue(telegram_bot._is_bot_configured(db_path=None))
+            with patch("app.notify.telegram_bot._offset_store_path", return_value=offset_path):
+                with patch("app.notify.telegram_bot._build_proxies", return_value=None):
+                    with patch("app.notify.telegram_bot._configure_bot_commands", side_effect=configure_commands_noop):
+                        with patch("app.notify.telegram_bot._bootstrap_offset", return_value=None):
+                            with patch("app.notify.telegram_bot._get_updates", side_effect=get_updates_empty):
+                                telegram_bot.run_polling_listener(max_cycles=1, sleep_fn=lambda _seconds: None)
+
+    def test_bot_startup_readiness_allows_legacy_chat_only(self) -> None:
+        with patch.multiple(
+            telegram_bot.config,
+            TELEGRAM_BOT_TOKEN="token",
+            TELEGRAM_CHAT_ID="-100",
+            TELEGRAM_ADMIN_USER_IDS=frozenset(),
+            TELEGRAM_ALLOWED_USER_IDS=frozenset(),
+        ):
+            self.assertTrue(telegram_bot._is_bot_configured(db_path=None))
+
+    def test_bot_startup_fails_closed_without_access_anchor(self) -> None:
+        db_path = self._offset_path("telegram_no_access_anchor.db")
+        with patch.multiple(
+            telegram_bot.config,
+            TELEGRAM_BOT_TOKEN="token",
+            TELEGRAM_CHAT_ID="",
+            TELEGRAM_ADMIN_USER_IDS=frozenset(),
+            TELEGRAM_ALLOWED_USER_IDS=frozenset(),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "private access is not configured"):
+                telegram_bot.run_polling_listener(
+                    db_path=str(db_path),
+                    max_cycles=1,
+                    sleep_fn=lambda _seconds: None,
+                )
+
+    def test_unknown_private_user_without_legacy_chat_receives_id_only(self) -> None:
+        update = {
+            "update_id": 1,
+            "message": {
+                "from": {"id": 2001, "username": "unknown"},
+                "chat": {"id": 2001, "type": "private"},
+                "text": "/report",
+            },
+        }
+        db_path = self._offset_path("telegram_access_unknown_private_only.db")
+        with patch.multiple(
+            telegram_bot.config,
+            TELEGRAM_CHAT_ID="",
+            TELEGRAM_ADMIN_USER_IDS=frozenset(),
+            TELEGRAM_ALLOWED_USER_IDS=frozenset(),
+        ):
+            with patch("app.notify.telegram_bot.build_command_response") as build:
+                with patch("app.notify.telegram_bot._send_response", return_value=True) as send_response:
+                    telegram_bot._process_update(update, db_path=str(db_path), proxies=None)
+
+        build.assert_not_called()
+        text = send_response.call_args.kwargs["text"]
+        self.assertIn("Доступ к AHSTEP GR Monitor пока не выдан", text)
+        self.assertIn("Ваш Telegram ID: 2001", text)
+        self.assertFalse(send_response.call_args.kwargs["include_default_keyboard"])
 
     def test_ignore_unauthorized_chat_id(self) -> None:
         update = {
