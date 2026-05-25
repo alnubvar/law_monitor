@@ -27,6 +27,12 @@ FEDERAL_SCOPE_MARKERS = (
     "на территории российской федерации",
 )
 NON_TARGET_REGION_MARKERS = (
+    "республика крым",
+    "республики крым",
+    "крым",
+    "крыму",
+    "крыма",
+    "крымск",
     "ненецкий автономный округ",
     "ненецкого автономного округа",
     "нао",
@@ -66,6 +72,63 @@ EXCLUDED_TOPIC_ALIASES = {
     "коренные малочисленные народы": ("коренных малочисленных народ", "малочисленн народ"),
     "родовые общины": ("родовых общин", "родовые общин", "родовым общин"),
 }
+AHSTEP_HARD_EXCLUDED_TOPIC_MARKERS = (
+    "пробирная палата",
+    "пробирной палаты",
+    "пробирное клеймо",
+    "пробирного клейма",
+    "государственное пробирное клеймо",
+    "государственного пробирного клейма",
+    "драгоценные металлы",
+    "драгоценных металлов",
+    "ювелирные изделия",
+    "ювелирных изделий",
+    "ювелирный рынок",
+    "ювелирного рынка",
+    "клеймение изделий",
+    "клеймения изделий",
+)
+NON_TARGET_MARKET_CONTEXT_MARKERS = (
+    "экспорт",
+    "пошлин",
+    "квот",
+    "вывоз",
+    "логист",
+    "порт",
+    "перевалк",
+    "транспортиров",
+    "отгруз",
+)
+NON_TARGET_MARKET_COMMODITY_MARKERS = (
+    "зерн",
+    "пшениц",
+    "ячмен",
+    "кукуруз",
+    "горох",
+    "подсолнеч",
+    "рапс",
+    "маслич",
+    "сахарн свекл",
+)
+MOSCOW_URGENT_CONTEXT_MARKERS = (
+    "федеральн",
+    "рф",
+    "российск",
+    "корпоратив",
+    "головн",
+    "офис",
+    "холдинг",
+    "логист",
+    "транспорт",
+    "грузоперевоз",
+    "финанс",
+    "кредит",
+    "банк",
+    "инвестиц",
+    "экспорт",
+    "трейдинг",
+    "торгов",
+)
 REGIONAL_AUTHORITY_RE = re.compile(
     r"\b(?:министерство|департамент|комитет|управление|администрация)\b.{0,260}?"
     r"\b(?:области|края|республики|автономного округа)\b",
@@ -137,7 +200,56 @@ def evaluate_support_measure_applicability(
             if part
         )
     )
-    excluded_topic = _detect_excluded_topic(combined)
+    hard_excluded_topic = _detect_hard_excluded_topic(combined)
+    if hard_excluded_topic:
+        return ApplicabilityDecision(
+            is_applicable=False,
+            recommended_action_level="irrelevant",
+            reason="Непрофильная для AHSTEP тема; документ сохранён только для архива.",
+            detected_region="",
+            is_non_target_region=False,
+            has_low_relevance_signal=True,
+            has_excluded_topic=True,
+        )
+
+    non_target_region = _detect_non_target_region(combined)
+    target_match = _target_region_match(combined, region=region)
+    if non_target_region and _is_federal_target_match(target_match):
+        target_match = ""
+    federal_scope = _has_federal_scope(combined, region=region)
+    has_low_signal = any(marker in combined for marker in _excluded_topic_markers())
+
+    is_support_surface = is_support_measure_surface(
+        source_name=source_name,
+        url=url,
+        level=level,
+        source_role=source_role,
+        page_type=page_type,
+        combined_text=combined,
+    )
+    if not is_support_surface:
+        if non_target_region and not target_match:
+            recommended_level = _non_target_recommended_action_level(
+                combined,
+                has_low_signal=has_low_signal,
+            )
+            if source_role == "news_signals":
+                recommended_level = _non_target_news_recommended_action_level(
+                    combined,
+                    has_low_signal=has_low_signal,
+                )
+            return ApplicabilityDecision(
+                is_applicable=False,
+                recommended_action_level=recommended_level,
+                reason="Регион вне фокуса AHSTEP; документ сохранён справочно.",
+                detected_region=non_target_region,
+                is_non_target_region=True,
+                has_low_relevance_signal=has_low_signal,
+                has_federal_scope=federal_scope,
+            )
+        return ApplicabilityDecision(is_applicable=True)
+
+    excluded_topic = _detect_config_excluded_topic(combined)
     if excluded_topic:
         return ApplicabilityDecision(
             is_applicable=False,
@@ -149,28 +261,26 @@ def evaluate_support_measure_applicability(
             has_excluded_topic=True,
         )
 
-    if not is_support_measure_surface(
-        source_name=source_name,
-        url=url,
-        level=level,
-        source_role=source_role,
-        page_type=page_type,
-        combined_text=combined,
-    ):
-        return ApplicabilityDecision(is_applicable=True)
-
-    non_target_region = _detect_non_target_region(combined)
-    target_match = _target_region_match(combined, region=region)
-    if non_target_region and target_match == "federal":
-        target_match = ""
-    federal_scope = _has_federal_scope(combined, region=region)
-    has_low_signal = any(marker in combined for marker in _excluded_topic_markers())
+    if target_match == "moscow_oblast" or target_match in TARGET_REGION_CODES["moscow_oblast"]:
+        if not federal_scope and not _has_moscow_urgent_context(combined):
+            return ApplicabilityDecision(
+                is_applicable=False,
+                recommended_action_level="background",
+                reason="Локальная мера Московской области без федеральной, корпоративной, логистической или финансовой привязки; документ сохранён справочно.",
+                detected_region=target_match,
+                is_non_target_region=True,
+                has_low_relevance_signal=False,
+                has_federal_scope=federal_scope,
+            )
 
     if non_target_region and not target_match:
         return ApplicabilityDecision(
             is_applicable=False,
-            recommended_action_level="irrelevant" if has_low_signal else "background",
-            reason="Регион вне фокуса AHSTEP; документ сохранён справочно.",
+            recommended_action_level=_non_target_recommended_action_level(
+                combined,
+                has_low_signal=has_low_signal,
+            ),
+            reason="Активная мера поддержки вне целевой географии; оставлена для справки.",
             detected_region=non_target_region,
             is_non_target_region=True,
             has_low_relevance_signal=has_low_signal,
@@ -298,6 +408,12 @@ def _looks_like_regional_authority(combined: str) -> bool:
 
 
 def _excluded_topic_markers() -> frozenset[str]:
+    markers: set[str] = set(AHSTEP_HARD_EXCLUDED_TOPIC_MARKERS)
+    markers.update(_config_excluded_topic_markers())
+    return frozenset(markers)
+
+
+def _config_excluded_topic_markers() -> frozenset[str]:
     markers: set[str] = set()
     for value in config.AHSTEP_EXCLUDED_TOPICS:
         normalized = normalize_region_text(value)
@@ -314,6 +430,86 @@ def _detect_excluded_topic(combined: str) -> str:
     return ""
 
 
+def _detect_hard_excluded_topic(combined: str) -> str:
+    for marker in sorted(AHSTEP_HARD_EXCLUDED_TOPIC_MARKERS, key=len, reverse=True):
+        if marker and marker in combined:
+            return marker
+    return ""
+
+
+def _detect_config_excluded_topic(combined: str) -> str:
+    for marker in sorted(_config_excluded_topic_markers(), key=len, reverse=True):
+        if marker and marker in combined:
+            return marker
+    return ""
+
+
+def _non_target_recommended_action_level(
+    combined: str,
+    *,
+    has_low_signal: bool,
+) -> str:
+    if has_low_signal:
+        return "irrelevant"
+    if _has_non_target_market_context(combined):
+        return "watchlist"
+    return "background"
+
+
+def _non_target_news_recommended_action_level(
+    combined: str,
+    *,
+    has_low_signal: bool,
+) -> str:
+    if has_low_signal:
+        return "irrelevant"
+    if _has_national_market_or_policy_context(combined):
+        return "watchlist"
+    return "background"
+
+
+def _has_non_target_market_context(combined: str) -> bool:
+    return (
+        any(marker in combined for marker in NON_TARGET_MARKET_CONTEXT_MARKERS)
+        and any(marker in combined for marker in NON_TARGET_MARKET_COMMODITY_MARKERS)
+    )
+
+
+def _has_national_market_or_policy_context(combined: str) -> bool:
+    national_scope_markers = (
+        "по всей россии",
+        "на территории российской федерации",
+        "из рф",
+        "из россии",
+        "для российских экспортер",
+        "для российских экспортёр",
+        "российские экспортер",
+        "российские экспортёр",
+        "федеральная квота",
+        "федеральные квоты",
+        "национальн",
+        "общероссийск",
+    )
+    policy_markers = (
+        "пошлин",
+        "квот",
+        "ограничен",
+        "запрет",
+        "субсид",
+        "господдерж",
+        "льготн кредит",
+        "компенсац",
+        "федеральн",
+    )
+    return any(marker in combined for marker in national_scope_markers) and any(
+        marker in combined for marker in policy_markers
+    )
+
+
+def _has_moscow_urgent_context(combined: str) -> bool:
+    return any(marker in combined for marker in MOSCOW_URGENT_CONTEXT_MARKERS)
+
+
 def _detected_region_phrases(combined: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(match.group(0).strip() for match in REGION_PHRASE_RE.finditer(combined)))
 
@@ -323,6 +519,10 @@ def _is_federal_region_phrase(marker: str) -> bool:
         "российская федерация",
         "российской федерации",
     }
+
+
+def _is_federal_target_match(marker: str) -> bool:
+    return marker == "federal" or marker in TARGET_REGION_CODES["federal"]
 
 
 def _region_aliases(normalized: str) -> set[str]:

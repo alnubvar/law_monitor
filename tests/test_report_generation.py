@@ -106,7 +106,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
         self.assertEqual(len(report_view.shown_buckets["industry_background"]), 5)
         self.assertEqual(report_view.hidden_background_overflow_count, 2)
 
-    def test_full_background_appears_only_with_flag(self) -> None:
+    def test_non_target_regional_zol_news_stays_hidden_even_with_full_background(self) -> None:
         documents = [
             self._doc(
                 doc_id=index,
@@ -131,8 +131,307 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             action_levels=["requires_attention", "watchlist"],
             include_full_background=True,
         )
-        self.assertEqual(len(limited_view.shown_buckets["non_target_background"]), 5)
-        self.assertEqual(len(full_view.shown_buckets["non_target_background"]), 7)
+        self.assertEqual(len(limited_view.shown_buckets["non_target_background"]), 0)
+        self.assertEqual(len(full_view.shown_buckets["non_target_background"]), 0)
+
+    def test_max_items_keeps_all_requires_attention_before_watchlist(self) -> None:
+        urgent = [
+            self._doc(
+                doc_id=10 + index,
+                source_name="ZOL.ru - зерновые новости",
+                region="federal",
+                title=f"Пошлины на экспорт зерна изменены {index}",
+                url=f"https://www.zol.ru/n/urgent-{index}",
+                action_level="requires_attention",
+                page_type="news_background",
+                summary="Федеральный сигнал по экспортным пошлинам на зерно.",
+            )
+            for index in range(3)
+        ]
+        watchlist = [
+            self._doc(
+                doc_id=20 + index,
+                source_name="ZOL.ru - зерновые новости",
+                region="federal",
+                title=f"Отраслевой фон по зерновому рынку {index}",
+                url=f"https://www.zol.ru/n/watch-{index}",
+                action_level="watchlist",
+                page_type="news_background",
+                summary="Федеральный фон по АПК.",
+            )
+            for index in range(5)
+        ]
+
+        report_view = build_report_view(
+            [*urgent, *watchlist],
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+            max_items=2,
+        )
+
+        self.assertEqual(len(report_view.shown_buckets["requires_attention"]), 3)
+        self.assertEqual(report_view.total_visible, 3)
+        self.assertEqual(report_view.hidden_due_to_max_items_count, 5)
+        self.assertEqual(report_view.hidden_watchlist_due_to_max_items_count, 5)
+
+    def test_watchlist_cap_never_hides_requires_attention_overflow(self) -> None:
+        urgent = [
+            self._doc(
+                doc_id=30 + index,
+                source_name="Нормативные акты Краснодарского края",
+                region="krasnodar",
+                title=f"О внесении изменений в порядок предоставления субсидий в АПК {index}",
+                url=f"https://admkrai.krasnodar.ru/upload/iblock/urgent-overflow-{index}.pdf",
+                action_level="requires_attention",
+                page_type="new_rule",
+                summary="Изменены условия предоставления субсидии в АПК.",
+            )
+            for index in range(7)
+        ]
+        watchlist = [
+            self._doc(
+                doc_id=40 + index,
+                source_name="Нормативные акты Краснодарского края",
+                region="krasnodar",
+                title=f"Профильный НПА Краснодарского края на наблюдении {index}",
+                url=f"https://admkrai.krasnodar.ru/upload/iblock/watch-overflow-{index}.pdf",
+                action_level="watchlist",
+                page_type="new_rule",
+                summary="Региональный НПА по профильной теме.",
+            )
+            for index in range(4)
+        ]
+
+        db_path = self._db_path("watchlist_cap_keeps_urgent.db")
+        init_db(db_path)
+        markdown = generate_markdown_report(
+            [*urgent, *watchlist],
+            report_date="2026-05-25",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+            max_items=5,
+            db_path=db_path,
+        )
+
+        for document in urgent:
+            self.assertIn(document.url, markdown)
+        shown_watchlist = sum(1 for document in watchlist if document.url in markdown)
+        self.assertEqual(shown_watchlist, 0)
+
+    def test_watchlist_cap_still_works_without_requires_attention(self) -> None:
+        watchlist = [
+            self._doc(
+                doc_id=45 + index,
+                source_name="ZOL.ru - зерновые новости",
+                region="federal",
+                title=f"Отраслевой фон по экспорту зерна {index}",
+                url=f"https://www.zol.ru/n/watch-only-{index}",
+                action_level="watchlist",
+                page_type="news_background",
+                summary="Федеральный отраслевой фон по экспорту зерна.",
+            )
+            for index in range(5)
+        ]
+
+        markdown = generate_markdown_report(
+            watchlist,
+            report_date="2026-05-25",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+            max_items=3,
+        )
+
+        rendered_item_count = sum(1 for line in markdown.splitlines() if line.startswith("### "))
+        self.assertEqual(rendered_item_count, 3)
+        self.assertIn("- Включено в сводку: 3", markdown)
+        self.assertEqual(sum(1 for document in watchlist if document.url in markdown), 3)
+
+    def test_report_logs_hidden_watchlist_candidates_when_max_items_caps_them(self) -> None:
+        documents = [
+            self._doc(
+                doc_id=47 + index,
+                source_name="ZOL.ru - зерновые новости",
+                region="federal",
+                title=f"Отраслевой фон по экспортным рынкам {index}",
+                url=f"https://www.zol.ru/n/log-hidden-watch-{index}",
+                action_level="watchlist",
+                page_type="news_background",
+                summary="Федеральный отраслевой фон по экспорту зерна.",
+            )
+            for index in range(4)
+        ]
+
+        with self.assertLogs("app.reports.markdown_report", level="INFO") as logs:
+            report_view = build_report_view(
+                documents,
+                relevant_only=True,
+                action_levels=["requires_attention", "watchlist"],
+                max_items=2,
+            )
+
+        self.assertEqual(report_view.hidden_watchlist_due_to_max_items_count, 2)
+        self.assertIn("hid 2 watchlist candidate", "\n".join(logs.output))
+
+    def test_included_count_matches_rendered_visible_items(self) -> None:
+        documents = [
+            self._doc(
+                doc_id=50,
+                source_name="ZOL.ru - зерновые новости",
+                region="federal",
+                title="Пошлины на экспорт пшеницы из РФ останутся нулевыми",
+                url="https://www.zol.ru/n/included-urgent",
+                action_level="requires_attention",
+                page_type="news_background",
+                summary="Федеральный сигнал по экспортным пошлинам на зерно.",
+            ),
+            self._doc(
+                doc_id=51,
+                source_name="ZOL.ru - зерновые новости",
+                region="federal",
+                title="Отраслевой фон по логистике экспорта зерна",
+                url="https://www.zol.ru/n/included-watch",
+                action_level="watchlist",
+                page_type="news_background",
+                summary="Федеральный отраслевой фон по экспорту зерна и логистике.",
+            ),
+            self._doc(
+                doc_id=52,
+                source_name="ZOL.ru - зерновые новости",
+                region="federal",
+                title="Фоновая справка по рынку зерна",
+                url="https://www.zol.ru/n/included-background",
+                action_level="background",
+                page_type="news_background",
+                summary="Фоновая справка без действия.",
+            ),
+            self._doc(
+                doc_id=53,
+                source_name="ZOL.ru - зерновые новости",
+                region="federal",
+                title="Нерелевантная отрасль без связи с АПК",
+                url="https://www.zol.ru/n/included-irrelevant",
+                action_level="irrelevant",
+                page_type="news_background",
+                summary="Нерелевантный фон.",
+            ),
+        ]
+
+        db_path = self._db_path("included_count_matches.db")
+        init_db(db_path)
+        markdown = generate_markdown_report(
+            documents,
+            report_date="2026-05-25",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+            db_path=db_path,
+        )
+
+        rendered_item_count = sum(1 for line in markdown.splitlines() if line.startswith("### "))
+        self.assertEqual(rendered_item_count, 2)
+        self.assertIn("- Включено в сводку: 2", markdown)
+        self.assertNotIn("https://www.zol.ru/n/included-background", markdown)
+        self.assertNotIn("https://www.zol.ru/n/included-irrelevant", markdown)
+
+    def test_argentina_market_news_uses_external_market_applicability(self) -> None:
+        db_path = self._db_path("argentina_market_context.db")
+        init_db(db_path)
+        document = self._doc(
+            doc_id=52,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Аргентина снижает экспортную пошлину на пшеницу",
+            url="https://www.zol.ru/n/argentina-duty-test",
+            action_level="watchlist",
+            page_type="news_background",
+            summary="Аргентина снижает экспортную пошлину на пшеницу, что может повлиять на глобальные цены зерна.",
+        )
+        document.raw_text = (
+            "Аргентина объявила о снижении экспортной пошлины на пшеницу. "
+            "Это может усилить конкуренцию на экспортных рынках зерна."
+        )
+        save_document_enrichment(
+            document_id=document.id,
+            document_url=document.url,
+            provider="mock",
+            model="mock-enrichment",
+            enrichment=EnrichmentResult.from_facts(
+                DocumentCardFacts(
+                    document_type="новость",
+                    region="РФ",
+                    status="неизвестно",
+                    short_summary="Аргентина снижает экспортную пошлину на пшеницу.",
+                    why_matters="Может повлиять на мировые цены и конкуренцию на рынке пшеницы.",
+                    what_to_check="Оценить влияние на экспортные цены.",
+                    applicability_note="Косвенный рыночный контекст для экспортного направления AHSTEP.",
+                    confidence="high",
+                )
+            ),
+            db_path=db_path,
+        )
+
+        markdown = generate_markdown_report(
+            [document],
+            report_date="2026-05-25",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+            db_path=db_path,
+        )
+
+        self.assertIn("Аргентина снижает экспортную пошлину на пшеницу", markdown)
+        self.assertIn("География: Аргентина / мировой рынок", markdown)
+        self.assertIn("Косвенный рыночный контекст", markdown)
+        self.assertNotIn("Регион: РФ", markdown)
+
+    def test_grain_forum_livestream_announcement_is_hidden_without_outcome(self) -> None:
+        announcement = self._doc(
+            doc_id=53,
+            source_name="Минсельхоз России - новости",
+            region="federal",
+            title="Прямая трансляция пленарной сессии Всероссийского зернового форума",
+            url="https://mcx.gov.ru/press-service/news/grain-forum-livestream-test/",
+            action_level="watchlist",
+            page_type="news_background",
+            summary="Состоится прямая трансляция сессии по цепочкам поставок зерна и экспорту.",
+        )
+        announcement.raw_text = (
+            "Прямая трансляция пленарной сессии Всероссийского зернового форума. "
+            "Участники обсудят прогнозы сезона, экспорт зерна и логистику."
+        )
+
+        markdown = generate_markdown_report(
+            [announcement],
+            report_date="2026-05-25",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertNotIn("Прямая трансляция пленарной сессии", markdown)
+        self.assertIn("Новых отраслевых сигналов не найдено.", markdown)
+
+    def test_grain_forum_policy_outcome_remains_visible(self) -> None:
+        outcome = self._doc(
+            doc_id=54,
+            source_name="Минсельхоз России - новости",
+            region="federal",
+            title="На зерновом форуме объявили новые правила экспортной логистики",
+            url="https://mcx.gov.ru/press-service/news/grain-forum-outcome-test/",
+            action_level="watchlist",
+            page_type="news_background",
+            summary="Минсельхоз объявил новые правила экспортной логистики зерна.",
+        )
+        outcome.raw_text = (
+            "На зерновом форуме Минсельхоз объявил новые правила экспортной "
+            "логистики зерна и порядок взаимодействия участников рынка."
+        )
+
+        markdown = generate_markdown_report(
+            [outcome],
+            report_date="2026-05-25",
+            relevant_only=True,
+            action_levels=["requires_attention", "watchlist"],
+        )
+
+        self.assertIn("На зерновом форуме объявили новые правила экспортной логистики", markdown)
 
     def test_bucket_rules_for_target_and_non_target_background(self) -> None:
         target_document = self._doc(

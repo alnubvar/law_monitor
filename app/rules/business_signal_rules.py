@@ -307,6 +307,18 @@ def detect_action_level(
     lead_text = body_text[:1500]
     domain_gate_applies = should_apply_ahstep_domain_gate(source_role)
     has_ahstep_domain_context = has_ahstep_domain_relevance(title_text, body_text[:5000])
+    initial_applicability = evaluate_support_measure_applicability(
+        title=title,
+        raw_text=raw_text,
+        source_name=source_name,
+        url=url,
+        level=level,
+        region=region,
+        source_role=source_role,
+        page_type=page_type,
+    )
+    if initial_applicability.has_excluded_topic:
+        return initial_applicability.recommended_action_level or "irrelevant"
     # regulation.gov.ru subsidy procedure docs without discussion deadline: bypass domain gate.
     # Checked early so it also exempts the broad actionable-page gate below.
     _has_regulation_subsidy_title_bypass = domain == "regulation.gov.ru" and any(
@@ -413,16 +425,7 @@ def detect_action_level(
     is_important_permanent_measure = any(
         marker in title_text for marker in IMPORTANT_FEDERAL_PERMANENT_MEASURE_MARKERS
     )
-    support_applicability = evaluate_support_measure_applicability(
-        title=title,
-        raw_text=raw_text,
-        source_name=source_name,
-        url=url,
-        level=level,
-        region=region,
-        source_role=source_role,
-        page_type=page_type,
-    )
+    support_applicability = initial_applicability
     if not support_applicability.is_applicable:
         return support_applicability.recommended_action_level or "background"
     has_project_discussion_signal = any(

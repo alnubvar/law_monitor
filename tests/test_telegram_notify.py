@@ -332,6 +332,45 @@ class TelegramNotifySmokeTest(unittest.TestCase):
         self.assertIn("Ежедневная GR-сводка", message_text)
         self.assertNotIn("Новые документы, требующие внимания", message_text)
 
+    def test_daily_report_digest_attachment_uses_generated_full_report_file(self) -> None:
+        report_path = Path("data/test_artifacts/gr_monitoring_full_attachment.md")
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(
+            "# GR-дайджест\n\n"
+            "## 🚨 Требует внимания\n"
+            "### Полный срочный пункт из markdown-отчета\n"
+            "- Источник: https://example.com/full-urgent\n",
+            encoding="utf-8",
+        )
+        docx_path = report_path.with_suffix(".docx")
+        docx_path.unlink(missing_ok=True)
+        truncated_message_document = self._doc(
+            doc_id=901,
+            source_name="ZOL.ru - зерновые новости",
+            region="federal",
+            title="Краткая Telegram-подборка без полного срочного пункта",
+            url="https://example.com/truncated-message-only",
+            action_level="watchlist",
+            page_type="news_background",
+        )
+
+        with patch("app.notify.telegram.collect_operational_notices", return_value=[]):
+            with patch("app.notify.telegram.get_daily_digest_recipients", return_value=["chat-id"]):
+                with patch("app.notify.telegram.send_message_to_chat", return_value=True):
+                    with patch("app.notify.telegram.send_document_to_chat", return_value=True) as send_document:
+                        sent = telegram.send_daily_report_digest(
+                            [truncated_message_document],
+                            report_path=report_path,
+                        )
+
+        self.assertTrue(sent)
+        send_document.assert_called_once_with(chat_id="chat-id", path=docx_path)
+        docx_text = "\n".join(paragraph.text for paragraph in DocxDocument(docx_path).paragraphs)
+        self.assertIn("Полный срочный пункт из markdown-отчета", docx_text)
+        self.assertIn("https://example.com/full-urgent", docx_text)
+        self.assertNotIn("truncated-message-only", docx_text)
+        docx_path.unlink(missing_ok=True)
+
     def test_help_command_lists_supported_commands(self) -> None:
         text = telegram.build_command_response("/help")
 

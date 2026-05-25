@@ -34,7 +34,6 @@ VISIBLE_FIXTURE_IDS = {
     "promote_krasnodar_subsidy",
     "promote_rostov_support",
     "promote_stavropol_support",
-    "promote_moscow_region_support",
     "federal_export_grain_support",
 }
 
@@ -389,6 +388,297 @@ class AhstepApplicabilityGateTest(unittest.TestCase):
         self.assertTrue(
             should_show_document(
                 federal_document,
+                surface="report",
+                relevant_only=False,
+                action_levels=["requires_attention", "watchlist"],
+            )
+        )
+
+    def test_crimea_grain_export_quota_is_background_not_visible(self) -> None:
+        result = self.client.analyze_document(
+            "Квота для экспорта зерна из Крыма увеличена до 1 млн тонн",
+            (
+                "Правительство РФ увеличило квоту на экспорт зерновых культур для Республики Крым "
+                "с 400 тыс. тонн до 1 млн тонн. Власти региона работают над снижением "
+                "логистических тарифов на вывоз зерна через крымские порты."
+            ),
+            source_name="ZOL.ru - зерновые новости",
+            url="https://www.zol.ru/n/crimea-quota-test",
+            level="news",
+            region="federal",
+        )
+        document = _analyzed_document(
+            {
+                "id": "crimea_grain_quota",
+                "source_name": "ZOL.ru - зерновые новости",
+                "url": "https://www.zol.ru/n/crimea-quota-test",
+                "level": "news",
+                "region": "federal",
+                "title": "Квота для экспорта зерна из Крыма увеличена до 1 млн тонн",
+                "raw_text": (
+                    "Правительство РФ увеличило квоту на экспорт зерновых культур для Республики Крым "
+                    "с 400 тыс. тонн до 1 млн тонн. Власти региона работают над снижением "
+                    "логистических тарифов на вывоз зерна через крымские порты."
+                ),
+            },
+            result,
+            doc_id=451,
+        )
+
+        self.assertNotEqual(result.action_level, "requires_attention")
+        self.assertEqual(effective_user_action_level(document), "background")
+        self.assertFalse(
+            should_show_document(
+                document,
+                surface="report",
+                relevant_only=False,
+                action_levels=["requires_attention", "watchlist"],
+            )
+        )
+
+    def test_kuzbass_oat_export_regional_news_is_background_not_visible(self) -> None:
+        result = self.client.analyze_document(
+            "Экспорт овса из Кузбасса в Китай вырос в 13 раз",
+            (
+                "Экспорт овса из Кемеровской области в Китай вырос до 10,7 тыс. тонн. "
+                "Россельхознадзор оформил фитосанитарные сертификаты на партию овса "
+                "из Чебулинского муниципального округа."
+            ),
+            source_name="ZOL.ru - зерновые новости",
+            url="https://www.zol.ru/n/kuzbass-oat-export-test",
+            level="news",
+            region="federal",
+        )
+        document = _analyzed_document(
+            {
+                "id": "kuzbass_oat_export",
+                "source_name": "ZOL.ru - зерновые новости",
+                "url": "https://www.zol.ru/n/kuzbass-oat-export-test",
+                "level": "news",
+                "region": "federal",
+                "title": "Экспорт овса из Кузбасса в Китай вырос в 13 раз",
+                "raw_text": (
+                    "Экспорт овса из Кемеровской области в Китай вырос до 10,7 тыс. тонн. "
+                    "Россельхознадзор оформил фитосанитарные сертификаты на партию овса "
+                    "из Чебулинского муниципального округа."
+                ),
+            },
+            result,
+            doc_id=454,
+        )
+
+        self.assertNotEqual(result.action_level, "requires_attention")
+        self.assertEqual(effective_user_action_level(document), "background")
+        self.assertFalse(
+            should_show_document(
+                document,
+                surface="report",
+                relevant_only=False,
+                action_levels=["requires_attention", "watchlist"],
+            )
+        )
+
+    def test_federal_grain_export_duties_remain_visible(self) -> None:
+        result = self.client.analyze_document(
+            "Пошлины на экспорт пшеницы, ячменя и кукурузы из РФ останутся нулевыми",
+            (
+                "Минсельхоз России установил нулевые ставки экспортных пошлин на пшеницу, "
+                "ячмень и кукурузу на период с 27 мая по 2 июня. Решение действует для РФ."
+            ),
+            source_name="ZOL.ru - зерновые новости",
+            url="https://www.zol.ru/n/federal-duty-test",
+            level="news",
+            region="federal",
+        )
+        document = _analyzed_document(
+            {
+                "id": "federal_grain_duty",
+                "source_name": "ZOL.ru - зерновые новости",
+                "url": "https://www.zol.ru/n/federal-duty-test",
+                "level": "news",
+                "region": "federal",
+                "title": "Пошлины на экспорт пшеницы, ячменя и кукурузы из РФ останутся нулевыми",
+                "raw_text": (
+                    "Минсельхоз России установил нулевые ставки экспортных пошлин на пшеницу, "
+                    "ячмень и кукурузу на период с 27 мая по 2 июня. Решение действует для РФ."
+                ),
+            },
+            result,
+            doc_id=452,
+        )
+
+        self.assertIn(effective_user_action_level(document), {"requires_attention", "watchlist"})
+        self.assertTrue(
+            should_show_document(
+                document,
+                surface="report",
+                relevant_only=False,
+                action_levels=["requires_attention", "watchlist"],
+            )
+        )
+
+    def test_federal_export_duty_discount_proposal_remains_visible(self) -> None:
+        result = self.client.analyze_document(
+            "Минсельхоз рассматривает скидку на экспортную пошлину для участников торгов зерном",
+            (
+                "Минсельхоз России прорабатывает механизм скидки на экспортную пошлину "
+                "для участников биржевых торгов зерном. Мера обсуждается для стимулирования "
+                "организованной торговли зерном."
+            ),
+            source_name="ZOL.ru - зерновые новости",
+            url="https://www.zol.ru/n/federal-duty-discount-test",
+            level="news",
+            region="federal",
+        )
+        document = _analyzed_document(
+            {
+                "id": "federal_duty_discount",
+                "source_name": "ZOL.ru - зерновые новости",
+                "url": "https://www.zol.ru/n/federal-duty-discount-test",
+                "level": "news",
+                "region": "federal",
+                "title": "Минсельхоз рассматривает скидку на экспортную пошлину для участников торгов зерном",
+                "raw_text": (
+                    "Минсельхоз России прорабатывает механизм скидки на экспортную пошлину "
+                    "для участников биржевых торгов зерном. Мера обсуждается для стимулирования "
+                    "организованной торговли зерном."
+                ),
+            },
+            result,
+            doc_id=453,
+        )
+
+        self.assertIn(effective_user_action_level(document), {"requires_attention", "watchlist"})
+        self.assertTrue(should_show_document(document, surface="report", relevant_only=False))
+
+    def test_transport_subsidy_export_apk_news_remains_visible(self) -> None:
+        result = self.client.analyze_document(
+            "Минсельхоз РФ ожидает снижения транспортной субсидии на экспорт продукции АПК",
+            (
+                "Минсельхоз России прогнозирует сокращение финансирования транспортных "
+                "субсидий на экспорт продукции АПК, при этом дополнительные средства "
+                "направляются на механизм льготного кредитования."
+            ),
+            source_name="ZOL.ru - зерновые новости",
+            url="https://www.zol.ru/n/transport-subsidy-test",
+            level="news",
+            region="federal",
+        )
+        document = _analyzed_document(
+            {
+                "id": "transport_subsidy_export_apk",
+                "source_name": "ZOL.ru - зерновые новости",
+                "url": "https://www.zol.ru/n/transport-subsidy-test",
+                "level": "news",
+                "region": "federal",
+                "title": "Минсельхоз РФ ожидает снижения транспортной субсидии на экспорт продукции АПК",
+                "raw_text": (
+                    "Минсельхоз России прогнозирует сокращение финансирования транспортных "
+                    "субсидий на экспорт продукции АПК, при этом дополнительные средства "
+                    "направляются на механизм льготного кредитования."
+                ),
+            },
+            result,
+            doc_id=455,
+        )
+
+        self.assertIn(effective_user_action_level(document), {"requires_attention", "watchlist"})
+        self.assertTrue(should_show_document(document, surface="report", relevant_only=False))
+
+    def test_target_region_support_remains_visible_for_krasnodar_rostov_stavropol(self) -> None:
+        cases = [
+            (
+                "krasnodar",
+                "Минсельхоз Краснодарского края - субсидирование и финансирование",
+                "Субсидии на агрохимическое обследование земель",
+                "Министерство сельского хозяйства Краснодарского края утвердило порядок предоставления субсидий сельхозтоваропроизводителям.",
+                "https://npa.krasnodar.ru/rest/files/1233909",
+            ),
+            (
+                "rostov",
+                "Право Ростовской области",
+                "Изменены правила субсидий на овощи защищенного грунта",
+                "Правительство Ростовской области внесло изменения в порядок предоставления субсидий сельхозтоваропроизводителям.",
+                "https://pravo.donland.ru/doc/view/id/target-region-rostov/",
+            ),
+            (
+                "stavropol",
+                "Минсельхоз Ставропольского края - господдержка",
+                "Объявление об отборе на субсидии для АПК",
+                "Министерство сельского хозяйства Ставропольского края объявило прием заявок на субсидии сельхозтоваропроизводителям.",
+                "https://mshsk.ru/gospodderzhka/target-region-stavropol.php",
+            ),
+        ]
+        for index, (region, source_name, title, raw_text, url) in enumerate(cases, start=1):
+            with self.subTest(region=region):
+                now = datetime(2026, 5, 22, 9, 0, tzinfo=timezone.utc)
+                document = RawDocument(
+                    id=460 + index,
+                    source_name=source_name,
+                    source_url=url,
+                    level="regional",
+                    region=region,
+                    title=title,
+                    url=url,
+                    published_at=now,
+                    collected_at=now,
+                    content_hash=f"target-{region}",
+                    raw_text=raw_text,
+                    is_relevant=True,
+                    relevance_reason="target region support",
+                    topic="субсидии",
+                    importance="medium",
+                    action_level="watchlist",
+                    page_type="new_rule",
+                    summary=raw_text,
+                    impact="target region support",
+                )
+                self.assertIn(effective_user_action_level(document), {"requires_attention", "watchlist"})
+                self.assertTrue(
+                    should_show_document(
+                        document,
+                        surface="report",
+                        relevant_only=False,
+                        action_levels=["requires_attention", "watchlist"],
+                    )
+                )
+
+    def test_assay_chamber_precious_metals_project_is_irrelevant_and_hidden(self) -> None:
+        result = self.client.analyze_document(
+            "Об утверждении состава и элементов государственного пробирного клейма",
+            (
+                "Федеральная пробирная палата подготовила проект НПА о государственных "
+                "пробирных клеймах. Документ касается драгоценных металлов, ювелирных изделий "
+                "и участников ювелирного рынка."
+            ),
+            source_name="Regulation.gov.ru",
+            url="https://regulation.gov.ru/projects/168126",
+            level="federal",
+            region="federal",
+        )
+        document = _analyzed_document(
+            {
+                "id": "assay_chamber",
+                "source_name": "Regulation.gov.ru",
+                "url": "https://regulation.gov.ru/projects/168126",
+                "level": "federal",
+                "region": "federal",
+                "title": "Об утверждении состава и элементов государственного пробирного клейма",
+                "raw_text": (
+                    "Федеральная пробирная палата подготовила проект НПА о государственных "
+                    "пробирных клеймах. Документ касается драгоценных металлов, ювелирных изделий "
+                    "и участников ювелирного рынка."
+                ),
+            },
+            result,
+            doc_id=470,
+        )
+
+        self.assertIn(result.action_level, {"irrelevant", "background"})
+        self.assertEqual(effective_user_action_level(document), "irrelevant")
+        self.assertFalse(
+            should_show_document(
+                document,
                 surface="report",
                 relevant_only=False,
                 action_levels=["requires_attention", "watchlist"],

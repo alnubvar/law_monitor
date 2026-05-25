@@ -5,6 +5,7 @@ from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
 from collections import Counter
+import logging
 import re
 from typing import Iterable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -45,6 +46,8 @@ from app.visibility import (
     should_show_document,
     visibility_bucket,
 )
+
+logger = logging.getLogger(__name__)
 
 SHORT_SUMMARY_MAX_CHARS = 140
 DETAIL_SUMMARY_MAX_CHARS = 520
@@ -245,6 +248,7 @@ class ReportView:
     hidden_service_count: int
     hidden_market_count: int
     hidden_due_to_max_items_count: int
+    hidden_watchlist_due_to_max_items_count: int
     hidden_background_overflow_count: int
 
     @property
@@ -450,31 +454,51 @@ def build_report_view(
         bucket: [] for bucket in REPORT_BUCKET_ORDER
     }
     hidden_due_to_max_items_count = 0
+    hidden_watchlist_due_to_max_items_count = 0
     remaining_items = max_items
     for bucket in REPORT_BUCKET_ORDER:
         bucket_documents = raw_buckets[bucket]
+        if bucket == "requires_attention":
+            shown_buckets[bucket] = bucket_documents
+            if remaining_items is not None:
+                remaining_items = max(remaining_items - len(bucket_documents), 0)
+            continue
         if remaining_items is None:
             shown_buckets[bucket] = bucket_documents
             continue
         if remaining_items <= 0:
             hidden_due_to_max_items_count += len(bucket_documents)
+            hidden_watchlist_due_to_max_items_count += sum(
+                1
+                for document in bucket_documents
+                if user_facing_action_level(document) == "watchlist"
+            )
             continue
         shown_buckets[bucket] = bucket_documents[:remaining_items]
-        hidden_due_to_max_items_count += max(
-            len(bucket_documents) - len(shown_buckets[bucket]),
-            0,
+        hidden_documents = bucket_documents[len(shown_buckets[bucket]) :]
+        hidden_due_to_max_items_count += len(hidden_documents)
+        hidden_watchlist_due_to_max_items_count += sum(
+            1
+            for document in hidden_documents
+            if user_facing_action_level(document) == "watchlist"
         )
         remaining_items -= len(shown_buckets[bucket])
 
     total_bucket_counts = {
         bucket: len(raw_buckets[bucket]) for bucket in REPORT_BUCKET_ORDER
     }
+    if hidden_watchlist_due_to_max_items_count:
+        logger.info(
+            "Report max_items cap hid %s watchlist candidate(s).",
+            hidden_watchlist_due_to_max_items_count,
+        )
     return ReportView(
         shown_buckets=shown_buckets,
         total_bucket_counts=total_bucket_counts,
         hidden_service_count=hidden_service_count,
         hidden_market_count=hidden_market_count,
         hidden_due_to_max_items_count=hidden_due_to_max_items_count,
+        hidden_watchlist_due_to_max_items_count=hidden_watchlist_due_to_max_items_count,
         hidden_background_overflow_count=hidden_background_overflow_count,
     )
 
@@ -744,7 +768,21 @@ def _build_display_sections(
     )
     measures = _limit_expired_selection_documents(measures)
     if len(measures) > MEASURES_SECTION_DISPLAY_MAX:
-        sections["measures_and_selections"] = measures[:MEASURES_SECTION_DISPLAY_MAX]
+        urgent_measures = [
+            document
+            for document in measures
+            if user_facing_action_level(document) == "requires_attention"
+        ]
+        watchlist_measures = [
+            document
+            for document in measures
+            if user_facing_action_level(document) != "requires_attention"
+        ]
+        watchlist_limit = max(MEASURES_SECTION_DISPLAY_MAX - len(urgent_measures), 0)
+        sections["measures_and_selections"] = [
+            *urgent_measures,
+            *watchlist_measures[:watchlist_limit],
+        ]
     else:
         sections["measures_and_selections"] = measures
     return sections
@@ -811,6 +849,9 @@ def _limit_expired_selection_documents(
     visible: list[RawDocument] = []
     expired_seen = 0
     for document in documents:
+        if user_facing_action_level(document) == "requires_attention":
+            visible.append(document)
+            continue
         if _is_expired_selection_document(document):
             expired_seen += 1
             if expired_seen > max_expired:
@@ -1536,35 +1577,89 @@ def _build_document_card_applicability_text(
     enrichment: dict[str, str],
 ) -> str:
     parts: list[str] = []
-    region = _region_display_label(enrichment.get("region")) or (
-        _region_display_label(item.region)
-        if item.region and item.region != "federal"
-        else ""
-    )
-    if region:
-        parts.append(f"Регион: {region}")
+    external_market_label = _external_market_geography_label(item, enrichment=enrichment)
+    if external_market_label:
+        parts.append(f"География: {external_market_label}")
+    else:
+        region = _region_display_label(enrichment.get("region")) or (
+            _region_display_label(item.region)
+            if item.region and item.region != "federal"
+            else ""
+        )
+        if region:
+            parts.append(f"Регион: {region}")
     recipients = _sanitize_report_display_text(
         enrichment.get("target_recipients"),
         dedupe_sentences=False,
     )
-    if recipients:
+    if recipients and not external_market_label:
         parts.append(f"Получатели: {recipients}")
     support_type = _sanitize_report_display_text(
         enrichment.get("support_type"),
         dedupe_sentences=False,
     )
-    if support_type:
+    if support_type and not external_market_label:
         label = "Тип поддержки" if support_type != "другое" else "Тип меры"
         parts.append(f"{label}: {support_type}")
     applicability_note = _sanitize_report_display_text(enrichment.get("applicability_note"))
     if applicability_note:
         parts.append(applicability_note)
+    elif external_market_label:
+        parts.append(
+            "Косвенный рыночный контекст для оценки экспортных цен, конкуренции и планирования поставок."
+        )
     if not parts:
         return ""
     return _sanitize_report_display_text(
         "; ".join(parts),
         max_chars=DETAIL_APPLICABILITY_MAX_CHARS,
     )
+
+
+def _external_market_geography_label(
+    item: DigestItem,
+    *,
+    enrichment: dict[str, str],
+) -> str:
+    text = " ".join(
+        part.lower()
+        for part in (
+            item.title,
+            item.summary,
+            item.business_signal,
+            item.impact,
+            item.relevance_reason,
+            enrichment.get("region"),
+            enrichment.get("applicability_note"),
+        )
+        if part
+    )
+    country_labels = (
+        ("аргентин", "Аргентина / мировой рынок"),
+        ("бразил", "Бразилия / мировой рынок"),
+        ("сша", "США / мировой рынок"),
+        ("америк", "США / мировой рынок"),
+        ("австрали", "Австралия / мировой рынок"),
+        ("евросоюз", "ЕС / мировой рынок"),
+    )
+    market_markers = (
+        "пшениц",
+        "зерн",
+        "маслич",
+        "экспорт",
+        "пошлин",
+        "миров",
+        "рынок",
+        "конкуренц",
+    )
+    if not any(marker in text for marker in market_markers):
+        return ""
+    for marker, label in country_labels:
+        if marker in text:
+            return label
+    if "мировой рынок" in text or "внешний рынок" in text:
+        return "Внешний рынок"
+    return ""
 
 
 def _build_document_card_action_text(

@@ -40,6 +40,46 @@ WEAK_MEETING_PATTERNS = (
     "обсуд",
     "переговор",
 )
+EVENT_ANNOUNCEMENT_PATTERNS = (
+    "прямая трансляц",
+    "трансляц",
+    "регистрац",
+    "анонс",
+    "состоится",
+    "пройдет",
+    "пройдёт",
+    "запланирован",
+    "приглаша",
+)
+CONCRETE_POLICY_OUTCOME_PATTERNS = (
+    "утверд",
+    "принял",
+    "принята",
+    "принято",
+    "внесен",
+    "внесён",
+    "внесли",
+    "изменил",
+    "изменен",
+    "изменён",
+    "запуст",
+    "поруч",
+    "решил",
+    "решени",
+    "постановлен",
+    "приказ",
+    "пошлин",
+    "квот",
+    "ограничен",
+    "запрет",
+    "субсид",
+    "господдерж",
+    "льготн",
+    "компенсац",
+    "регламент",
+    "порядок",
+    "правил",
+)
 WEAK_INFRASTRUCTURE_PATTERNS = (
     "мост",
     "путепровод",
@@ -206,6 +246,15 @@ def guard_news_signal_action_level(
 ) -> str | None:
     if source_role != "news_signals":
         return action_level
+    if action_level in {"requires_attention", "watchlist"} and _should_downgrade_event_announcement(
+        title=title,
+        summary=summary,
+        raw_text=raw_text,
+        reason=reason,
+        impact=impact,
+        signal=signal,
+    ):
+        return "background"
     if action_level == "requires_attention" and _should_downgrade_foreign_trade_signal(
         title=title,
         summary=summary,
@@ -266,6 +315,8 @@ def _should_downgrade_watchlist_noise(
     )
     if not noise_text:
         return False
+    if _looks_event_announcement_without_outcome(signal_text):
+        return True
     if any(re.search(pattern, signal_text) for pattern in NEGATED_GR_SIGNAL_PATTERNS):
         return any(pattern in noise_text for pattern in WATCHLIST_NOISE_PATTERNS)
     if _has_explicit_visible_gr_signal(signal_text):
@@ -277,6 +328,27 @@ def _should_downgrade_watchlist_noise(
     if any(pattern in signal_text for pattern in WATCHLIST_GR_SIGNAL_PATTERNS):
         return False
     return any(pattern in noise_text for pattern in WATCHLIST_NOISE_PATTERNS)
+
+
+def _should_downgrade_event_announcement(
+    *,
+    title: str | None,
+    summary: str | None,
+    raw_text: str | None,
+    reason: str | None,
+    impact: str | None,
+    signal: str | None,
+) -> bool:
+    text = " ".join(
+        part.lower()
+        for part in (
+            title,
+            summary,
+            (raw_text or "")[:2000],
+        )
+        if part
+    )
+    return _looks_event_announcement_without_outcome(text)
 
 
 def _should_downgrade_foreign_trade_signal(
@@ -337,6 +409,12 @@ def _looks_weak_meeting_or_infrastructure_story(text: str) -> bool:
     if any(pattern in text for pattern in WATCHLIST_GR_SIGNAL_PATTERNS):
         return False
     return True
+
+
+def _looks_event_announcement_without_outcome(text: str) -> bool:
+    if not any(pattern in text for pattern in EVENT_ANNOUNCEMENT_PATTERNS):
+        return False
+    return not any(pattern in text for pattern in CONCRETE_POLICY_OUTCOME_PATTERNS)
 
 
 def _has_strong_watchlist_gr_signal(text: str) -> bool:

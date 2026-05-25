@@ -54,7 +54,7 @@ class SchedulerAutonomyTest(unittest.TestCase):
 
         with patch.object(scheduler, "DB_PATH", db_path):
             with patch.object(scheduler, "writer_lock", return_value=nullcontext()):
-                with patch.object(scheduler, "run_digest", return_value=report_path):
+                with patch.object(scheduler, "run_digest", return_value=report_path) as run_digest:
                     with patch.object(scheduler, "_build_visible_digest_documents", return_value=[document]):
                         with patch.object(scheduler, "send_daily_report_digest", return_value=True) as send_daily:
                             result = scheduler.run_daily_report_cycle(
@@ -62,6 +62,7 @@ class SchedulerAutonomyTest(unittest.TestCase):
                             )
 
         self.assertEqual(result, str(report_path))
+        run_digest.assert_called_once_with(days=7)
         send_daily.assert_called_once_with([document], report_path=str(report_path), db_path=db_path)
 
     def test_daily_digest_sends_even_with_no_visible_documents(self) -> None:
