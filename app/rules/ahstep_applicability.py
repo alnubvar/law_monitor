@@ -35,7 +35,6 @@ NON_TARGET_REGION_MARKERS = (
     "крымск",
     "ненецкий автономный округ",
     "ненецкого автономного округа",
-    "нао",
     "республика бурятия",
     "республики бурятия",
     "бурятия",
@@ -147,6 +146,7 @@ REGION_PHRASE_RE = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+NAO_ABBREVIATION_RE = re.compile(r"(?<![а-яa-z0-9])нао(?![а-яa-z0-9])", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -393,6 +393,8 @@ def _detect_non_target_region(combined: str) -> str:
     for marker in NON_TARGET_REGION_MARKERS:
         if marker in combined:
             return marker
+    if NAO_ABBREVIATION_RE.search(combined):
+        return "нао"
     for marker in _detected_region_phrases(combined):
         if marker not in _target_region_marker_set() and not _is_federal_region_phrase(marker):
             return marker

@@ -2507,6 +2507,30 @@ class MockAnalyzeSmokeTest(unittest.TestCase):
         self.assertNotEqual(result.action_level, "requires_attention")
         self.assertIn(result.action_level, {"background", "watchlist"})
 
+    def test_preliminary_federal_export_duty_discount_news_is_watchlist(self) -> None:
+        client = MockLLMClient(["экспорт зерна", "экспортная пошлина"])
+
+        result = client.analyze_document(
+            (
+                "Минсельхоз рассматривает скидку на экспортную пошлину как инструмент "
+                "стимулирования биржевой торговли зерном"
+            ),
+            (
+                "Минсельхоз прорабатывает возможность предоставления скидки на экспортную "
+                "пошлину для участников биржевых торгов зерном. Это должно стать одним "
+                "из ключевых стимулов для выхода производителей и экспортеров на "
+                "организованные торги, заявил заместитель министра сельского хозяйства РФ. "
+                "Не надо заставлять, надо формировать условия, при которых, наоборот, "
+                "будет инициатива поддерживаться самими сельскохозяйственными производителями."
+            ),
+            source_name="ZOL.ru - зерновые новости",
+            url="https://www.zol.ru/n/federal-duty-discount-test",
+            level="news",
+            region="federal",
+        )
+
+        self.assertEqual(result.action_level, "watchlist")
+
     def test_expired_selection_no_longer_requires_attention(self) -> None:
         # Same Stavropol selection text as the live-deadline case above, but the
         # window already expired. It must drop out of requires_attention.

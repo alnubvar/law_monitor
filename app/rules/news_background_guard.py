@@ -225,6 +225,33 @@ RF_RELEVANCE_MARKERS = (
     "российских компани",
     "российские компании",
 )
+PRELIMINARY_POLICY_VERB_MARKERS = (
+    "рассматривает",
+    "рассматривают",
+    "рассматривается",
+    "прорабатывает",
+    "прорабатывают",
+    "прорабатывается",
+    "планирует",
+    "планируют",
+    "планируется",
+    "обсуждает",
+    "обсуждают",
+    "обсуждается",
+)
+BINDING_POLICY_OUTCOME_MARKERS = (
+    "утвердил",
+    "утвердили",
+    "утвержден",
+    "утверждён",
+    "принял",
+    "приняли",
+    "принято",
+    "вступает в силу",
+    "вступил в силу",
+    "постановление",
+    "приказ",
+)
 
 
 def contains_market_background_signal(values: Iterable[str | None]) -> bool:
@@ -255,6 +282,15 @@ def guard_news_signal_action_level(
         signal=signal,
     ):
         return "background"
+    if action_level == "requires_attention" and _should_cap_preliminary_federal_export_duty_signal(
+        title=title,
+        summary=summary,
+        raw_text=raw_text,
+        reason=reason,
+        impact=impact,
+        signal=signal,
+    ):
+        return "watchlist"
     if action_level == "requires_attention" and _should_downgrade_foreign_trade_signal(
         title=title,
         summary=summary,
@@ -381,6 +417,54 @@ def _should_downgrade_foreign_trade_signal(
     if any(marker in combined_text for marker in RF_RELEVANCE_MARKERS):
         return False
     return True
+
+
+def _should_cap_preliminary_federal_export_duty_signal(
+    *,
+    title: str | None,
+    summary: str | None,
+    raw_text: str | None,
+    reason: str | None,
+    impact: str | None,
+    signal: str | None,
+) -> bool:
+    text = " ".join(
+        part.lower()
+        for part in (
+            title,
+            summary,
+            reason,
+            impact,
+            signal,
+            (raw_text or "")[:3000],
+        )
+        if part
+    )
+    if not text:
+        return False
+    if any(marker in text for marker in BINDING_POLICY_OUTCOME_MARKERS):
+        return False
+    if not any(marker in text for marker in PRELIMINARY_POLICY_VERB_MARKERS):
+        return False
+    has_federal_context = (
+        "минсельхоз" in text
+        or "сельского хозяйства рф" in text
+        or "российской федерации" in text
+        or " рф " in f" {text} "
+        or "россии" in text
+        or "российск" in text
+    )
+    if not has_federal_context:
+        return False
+    return all(
+        any(marker in text for marker in marker_group)
+        for marker_group in (
+            ("экспортн", "экспорт"),
+            ("пошлин",),
+            ("зерн", "пшениц", "ячмен", "кукуруз"),
+            ("скидк", "биржев", "организованн", "торг"),
+        )
+    )
 
 
 def _has_explicit_visible_gr_signal(text: str) -> bool:

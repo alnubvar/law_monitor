@@ -3312,7 +3312,7 @@ class ReportGenerationSmokeTest(unittest.TestCase):
             "и стимулирование биржевых торгов."
         )
 
-        self.assertEqual(effective_user_action_level(document), "requires_attention")
+        self.assertEqual(effective_user_action_level(document), "watchlist")
         self.assertTrue(
             should_show_document(
                 document,

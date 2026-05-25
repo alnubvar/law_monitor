@@ -518,13 +518,40 @@ class AhstepApplicabilityGateTest(unittest.TestCase):
         )
 
     def test_federal_export_duty_discount_proposal_remains_visible(self) -> None:
+        title = (
+            "Минсельхоз рассматривает скидку на экспортную пошлину как инструмент "
+            "стимулирования биржевой торговли зерном. Конечная цель — наращивание "
+            "поставок на внешние рынки"
+        )
+        raw_text = (
+            "Минсельхоз прорабатывает возможность предоставления скидки на экспортную "
+            "пошлину для участников биржевых торгов зерном. Это должно стать одним "
+            "из ключевых стимулов для выхода производителей и экспортеров на "
+            "организованные торги, заявил в ходе Всероссийского зернового форума "
+            "в Сочи заместитель министра сельского хозяйства РФ Максим Боровой. "
+            "Мы были против этой инициативы, мы говорили о том, что не надо "
+            "заставлять, надо формировать условия, при которых, наоборот, будет "
+            "инициатива поддерживаться самими сельскохозяйственными производителями, "
+            "чтобы они инициативно выходили на биржу. В текущих условиях пошлина "
+            "находится в около нулевых отметках, поэтому сейчас данная мера может "
+            "быть невостребована, однако в будущем ее роль возрастет."
+        )
+        applicability = evaluate_support_measure_applicability(
+            title=title,
+            raw_text=raw_text,
+            source_name="ZOL.ru - зерновые новости",
+            url="https://www.zol.ru/n/federal-duty-discount-test",
+            level="news",
+            region="federal",
+            source_role="news_signals",
+            page_type="news_background",
+        )
+        self.assertNotEqual(applicability.detected_region, "нао")
+        self.assertTrue(applicability.is_applicable)
+
         result = self.client.analyze_document(
-            "Минсельхоз рассматривает скидку на экспортную пошлину для участников торгов зерном",
-            (
-                "Минсельхоз России прорабатывает механизм скидки на экспортную пошлину "
-                "для участников биржевых торгов зерном. Мера обсуждается для стимулирования "
-                "организованной торговли зерном."
-            ),
+            title,
+            raw_text,
             source_name="ZOL.ru - зерновые новости",
             url="https://www.zol.ru/n/federal-duty-discount-test",
             level="news",
@@ -537,19 +564,73 @@ class AhstepApplicabilityGateTest(unittest.TestCase):
                 "url": "https://www.zol.ru/n/federal-duty-discount-test",
                 "level": "news",
                 "region": "federal",
-                "title": "Минсельхоз рассматривает скидку на экспортную пошлину для участников торгов зерном",
-                "raw_text": (
-                    "Минсельхоз России прорабатывает механизм скидки на экспортную пошлину "
-                    "для участников биржевых торгов зерном. Мера обсуждается для стимулирования "
-                    "организованной торговли зерном."
-                ),
+                "title": title,
+                "raw_text": raw_text,
             },
             result,
             doc_id=453,
         )
 
-        self.assertIn(effective_user_action_level(document), {"requires_attention", "watchlist"})
+        self.assertEqual(result.action_level, "watchlist")
+        self.assertEqual(effective_user_action_level(document), "watchlist")
         self.assertTrue(should_show_document(document, surface="report", relevant_only=False))
+        stale_raw_urgent_document = document.model_copy(
+            update={"action_level": "requires_attention", "importance": "high"}
+        )
+        self.assertEqual(effective_user_action_level(stale_raw_urgent_document), "watchlist")
+        self.assertTrue(
+            should_show_document(
+                stale_raw_urgent_document,
+                surface="report",
+                relevant_only=False,
+                action_levels=["requires_attention", "watchlist"],
+            )
+        )
+
+    def test_argentina_export_duty_news_is_background_not_visible(self) -> None:
+        result = self.client.analyze_document(
+            "Правительство Аргентины с июня поэтапно снизит экспортные пошлины на зерновые культуры",
+            (
+                "Правительство Аргентины с текущего июня поэтапно снизит экспортные "
+                "пошлины на зерновые культуры и промышленную продукцию. Пошлины "
+                "на пшеницу снижаются с 7,5% до 5,5%, то же самое касается ячменя. "
+                "Мера направлена на поддержку посевной кампании и повышение "
+                "конкурентоспособности сельхозпроизводителей Аргентины."
+            ),
+            source_name="ZOL.ru - зерновые новости",
+            url="https://www.zol.ru/n/argentina-duty-test",
+            level="news",
+            region="federal",
+        )
+        document = _analyzed_document(
+            {
+                "id": "argentina_export_duty",
+                "source_name": "ZOL.ru - зерновые новости",
+                "url": "https://www.zol.ru/n/argentina-duty-test",
+                "level": "news",
+                "region": "federal",
+                "title": "Правительство Аргентины с июня поэтапно снизит экспортные пошлины на зерновые культуры",
+                "raw_text": (
+                    "Правительство Аргентины с текущего июня поэтапно снизит экспортные "
+                    "пошлины на зерновые культуры и промышленную продукцию. Пошлины "
+                    "на пшеницу снижаются с 7,5% до 5,5%, то же самое касается ячменя. "
+                    "Мера направлена на поддержку посевной кампании и повышение "
+                    "конкурентоспособности сельхозпроизводителей Аргентины."
+                ),
+            },
+            result,
+            doc_id=456,
+        )
+
+        self.assertEqual(effective_user_action_level(document), "background")
+        self.assertFalse(
+            should_show_document(
+                document,
+                surface="report",
+                relevant_only=False,
+                action_levels=["requires_attention", "watchlist"],
+            )
+        )
 
     def test_transport_subsidy_export_apk_news_remains_visible(self) -> None:
         result = self.client.analyze_document(

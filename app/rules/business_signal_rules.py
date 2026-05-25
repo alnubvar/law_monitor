@@ -199,6 +199,33 @@ KRASNODAR_SUPPORT_ORDER_MARKERS = (
     "овощ",
     "мелиорац",
 )
+PRELIMINARY_POLICY_VERB_MARKERS = (
+    "рассматривает",
+    "рассматривают",
+    "рассматривается",
+    "прорабатывает",
+    "прорабатывают",
+    "прорабатывается",
+    "планирует",
+    "планируют",
+    "планируется",
+    "обсуждает",
+    "обсуждают",
+    "обсуждается",
+)
+BINDING_POLICY_OUTCOME_MARKERS = (
+    "утвердил",
+    "утвердили",
+    "утвержден",
+    "утверждён",
+    "принял",
+    "приняли",
+    "принято",
+    "вступает в силу",
+    "вступил в силу",
+    "постановление",
+    "приказ",
+)
 
 
 def detect_importance(action_level: str) -> str:
@@ -687,6 +714,20 @@ def detect_action_level(
     if (
         source_role == "news_signals"
         and has_news_signal_value
+        and _is_preliminary_federal_export_duty_policy_signal(
+            source_role=source_role,
+            source_name=source_name,
+            level=level,
+            region=region,
+            title_text=title_text,
+            lead_text=lead_text,
+            facts=facts,
+        )
+    ):
+        return "watchlist"
+    if (
+        source_role == "news_signals"
+        and has_news_signal_value
         and _has_strong_news_action_signal(title_text=title_text, lead_text=lead_text)
     ):
         return "requires_attention"
@@ -792,6 +833,55 @@ def _has_strong_news_action_signal(*, title_text: str, lead_text: str) -> bool:
     ):
         return True
     return False
+
+
+def _is_preliminary_federal_export_duty_policy_signal(
+    *,
+    source_role: SourceRole | None,
+    source_name: str | None,
+    level: str | None,
+    region: str | None,
+    title_text: str,
+    lead_text: str,
+    facts: DocumentFacts,
+) -> bool:
+    if source_role != "news_signals":
+        return False
+    if facts.application_status == "open":
+        return False
+    if facts.deadline_text and not is_deadline_expired(facts.deadline_text):
+        return False
+
+    text = f"{title_text} {lead_text}"
+    if any(marker in text for marker in BINDING_POLICY_OUTCOME_MARKERS):
+        return False
+    if not any(marker in text for marker in PRELIMINARY_POLICY_VERB_MARKERS):
+        return False
+
+    has_federal_context = (
+        (level or "").lower() == "federal"
+        or (region or "").lower() == "federal"
+        or "минсельхоз росс" in text
+        or "министерство сельского хозяйства рф" in text
+        or "сельского хозяйства рф" in text
+        or "российской федерации" in text
+        or " рф " in f" {text} "
+        or "россии" in text
+        or "российск" in text
+        or "минсельхоз" in (source_name or "").lower()
+    )
+    if not has_federal_context:
+        return False
+
+    return all(
+        any(marker in text for marker in marker_group)
+        for marker_group in (
+            ("экспортн", "экспорт"),
+            ("пошлин",),
+            ("зерн", "пшениц", "ячмен", "кукуруз"),
+            ("скидк", "биржев", "организованн", "торг"),
+        )
+    )
 
 
 def _has_mcx_official_news_watchlist_signal(
